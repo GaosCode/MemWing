@@ -1,0 +1,30 @@
+{
+  "judge": {
+    "provider": "volcengine_ark",
+    "api_key": "填火山方舟 API Key",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "model": "ep-20260423222531-dnqtj",
+    "temperature": 0
+  },
+  "paths": {
+    "openclaw_repo_dir": "/Users/mrbrain/code/openclaw",
+    "memwing_repo_dir": "/Users/mrbrain/code/MemWing",
+    "runs_dir": "/Users/mrbrain/code/MemWing/benchmark/runs"
+  },
+  "feishu": {
+    "cli_bin": "lark-cli",
+    "bot_app_id": "cli_xxx",
+    "bot_open_id": "ou_0453b2b52a68cf17905458ba4a215a0f",
+    "bot_name": "飞书用户5924KW的智能助手",
+    "mention_text": "<at user_id=\"ou_0453b2b52a68cf17905458ba4a215a0f\">飞书用户5924KW的智能助手</at>",
+    "chat_id": "",
+    "create_chat_if_missing": true,
+    "chat_name_prefix": "MemWing Bench"
+  },
+  "openclaw": {
+    "agent_id": "main",
+    "trajectory_dir": "",
+    "configure_allowlist": true,
+    "restart_gateway": true
+  }
+}

@@ -1,0 +1,1383 @@
+[
+  {
+    "case_id": "bs001",
+    "category": "basic_sanity",
+    "difficulty": "easy",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [
+      {
+        "id": "bs001_s1",
+        "time": "2026-04-25T09:00:00+08:00",
+        "sender": "周明",
+        "message_type": "text",
+        "content": "[MSG:bs001_s1] 2026-04-25 09:00 项目晨会结论：云帆看板改造项目负责人确定为沈南，负责需求收口和跨部门协调。",
+        "evidence_id": "bs001_s1",
+        "should_write_memory": true
+      },
+      {
+        "id": "bs001_s2",
+        "time": "2026-04-25T09:18:00+08:00",
+        "sender": "沈南",
+        "message_type": "text",
+        "content": "[MSG:bs001_s2] 2026-04-25 09:18 云帆看板改造的交付范围只包含移动端筛选器、导出入口和权限提示文案，不包含桌面端新图表。",
+        "evidence_id": "bs001_s2",
+        "should_write_memory": true
+      },
+      {
+        "id": "bs001_s3",
+        "time": "2026-04-25T09:40:00+08:00",
+        "sender": "林珂",
+        "message_type": "text",
+        "content": "[MSG:bs001_s3] 2026-04-25 09:40 云帆看板改造的验收人是韩悦，最终验收截止时间为 2026-04-30 18:00。",
+        "evidence_id": "bs001_s3",
+        "should_write_memory": true
+      }
+    ],
+    "preseed_memories": [],
+    "probes": [
+      {
+        "id": "bs001_p1",
+        "question": "云帆看板改造项目现在的负责人是谁？",
+        "gold_answer": "云帆看板改造项目负责人是沈南。",
+        "must_include": [
+          "沈南"
+        ],
+        "must_include_aliases": {
+          "沈南": [
+            "负责人沈南",
+            "由沈南负责"
+          ]
+        },
+        "must_not_include": [
+          "周明",
+          "林珂"
+        ],
+        "gold_evidence_ids": [
+          "bs001_s1"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确回答负责人是沈南，并未误把其他人说成负责人；1 分：提到沈南但表述含糊或夹带不确定性；0 分：负责人错误、未回答或把周明/林珂说成负责人。"
+      },
+      {
+        "id": "bs001_p2",
+        "question": "云帆看板改造的最终验收截止时间是什么时候？",
+        "gold_answer": "最终验收截止时间是 2026-04-30 18:00。",
+        "must_include": [
+          "2026-04-30",
+          "18:00"
+        ],
+        "must_include_aliases": {
+          "2026-04-30": [
+            "4月30日",
+            "四月三十日"
+          ],
+          "18:00": [
+            "下午6点",
+            "晚6点"
+          ]
+        },
+        "must_not_include": [
+          "2026-04-25",
+          "2026-05-01"
+        ],
+        "gold_evidence_ids": [
+          "bs001_s3"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确回答 2026-04-30 18:00；1 分：日期或时间只答对一部分；0 分：日期时间均错误、未回答或使用无依据时间。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "bs001_m1",
+        "fact": "云帆看板改造项目负责人是沈南。",
+        "gold_evidence_ids": [
+          "bs001_s1"
+        ],
+        "memory_scope": "task",
+        "importance": "medium"
+      },
+      {
+        "id": "bs001_m2",
+        "fact": "云帆看板改造的交付范围包含移动端筛选器、导出入口和权限提示文案。",
+        "gold_evidence_ids": [
+          "bs001_s2"
+        ],
+        "memory_scope": "task",
+        "importance": "medium"
+      },
+      {
+        "id": "bs001_m3",
+        "fact": "云帆看板改造的验收人是韩悦。",
+        "gold_evidence_ids": [
+          "bs001_s3"
+        ],
+        "memory_scope": "task",
+        "importance": "medium"
+      },
+      {
+        "id": "bs001_m4",
+        "fact": "云帆看板改造的最终验收截止时间是 2026-04-30 18:00。",
+        "gold_evidence_ids": [
+          "bs001_s3"
+        ],
+        "memory_scope": "task",
+        "importance": "medium"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "fu001",
+    "category": "fact_update",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [
+      {
+        "id": "fu001_s1",
+        "time": "2026-04-10T10:00:00+08:00",
+        "sender": "赵谨",
+        "message_type": "text",
+        "content": "[MSG:fu001_s1] 2026-04-10 10:00 会议纪要：青芒支付对账项目负责人暂定为陈泽，陈泽负责排期、验收沟通和风险同步。",
+        "evidence_id": "fu001_s1",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu001_s2",
+        "time": "2026-04-12T15:20:00+08:00",
+        "sender": "陈泽",
+        "message_type": "text",
+        "content": "[MSG:fu001_s2] 2026-04-12 15:20 青芒支付对账的初版接口联调由平台组支持，数据回放脚本由我先代管。",
+        "evidence_id": "fu001_s2",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu001_s3",
+        "time": "2026-04-18T16:30:00+08:00",
+        "sender": "赵谨",
+        "message_type": "text",
+        "content": "[MSG:fu001_s3] 2026-04-18 16:30 最新同步：青芒支付对账项目负责人从陈泽调整为罗晴，陈泽只保留技术顾问角色，不再负责排期和验收沟通。",
+        "evidence_id": "fu001_s3",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu001_s4",
+        "time": "2026-04-19T11:10:00+08:00",
+        "sender": "罗晴",
+        "message_type": "text",
+        "content": "[MSG:fu001_s4] 2026-04-19 11:10 我会接手青芒支付对账的排期确认和验收沟通，陈泽继续帮忙看接口兼容风险。",
+        "evidence_id": "fu001_s4",
+        "should_write_memory": true
+      }
+    ],
+    "preseed_memories": [],
+    "probes": [
+      {
+        "id": "fu001_p1",
+        "question": "青芒支付对账现在这个项目的负责人是谁？陈泽现在还负责排期吗？",
+        "gold_answer": "当前有效负责人是罗晴。陈泽不再负责排期，只保留技术顾问角色。",
+        "must_include": [
+          "罗晴",
+          "技术顾问"
+        ],
+        "must_include_aliases": {
+          "罗晴": [
+            "负责人罗晴",
+            "由罗晴负责"
+          ],
+          "技术顾问": [
+            "顾问角色",
+            "只做技术顾问"
+          ]
+        },
+        "must_not_include": [
+          "陈泽负责排期",
+          "陈泽是负责人"
+        ],
+        "gold_evidence_ids": [
+          "fu001_s3"
+        ],
+        "old_evidence_ids": [
+          "fu001_s1"
+        ],
+        "evidence_match": "all",
+        "temporal_expectation": "use_latest_fact",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：明确当前负责人是罗晴，并说明陈泽不再负责排期、只保留技术顾问角色；1 分：答出罗晴但未说明陈泽当前角色，或陈泽角色表述不完整；0 分：仍把陈泽说成当前负责人或当前排期负责人。"
+      },
+      {
+        "id": "fu001_p2",
+        "question": "如果要确认青芒支付对账的验收沟通，现在应该找谁？",
+        "gold_answer": "现在应找罗晴确认验收沟通。",
+        "must_include": [
+          "罗晴",
+          "验收沟通"
+        ],
+        "must_include_aliases": {
+          "罗晴": [
+            "找罗晴",
+            "由罗晴确认"
+          ],
+          "验收沟通": [
+            "验收对接",
+            "验收确认"
+          ]
+        },
+        "must_not_include": [
+          "找陈泽",
+          "陈泽负责验收"
+        ],
+        "gold_evidence_ids": [
+          "fu001_s3",
+          "fu001_s4"
+        ],
+        "old_evidence_ids": [
+          "fu001_s1"
+        ],
+        "evidence_match": "any",
+        "temporal_expectation": "use_latest_fact",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：明确现在找罗晴进行验收沟通；1 分：提到罗晴但没有清楚绑定验收沟通；0 分：回答找陈泽、无法判断或引用旧负责人作为当前事实。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "fu001_m1",
+        "fact": "青芒支付对账项目当前负责人是罗晴。",
+        "gold_evidence_ids": [
+          "fu001_s3"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "fu001_m2",
+        "fact": "陈泽在青芒支付对账项目中当前只保留技术顾问角色。",
+        "gold_evidence_ids": [
+          "fu001_s3"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "fu001_m3",
+        "fact": "罗晴当前负责青芒支付对账项目的排期确认。",
+        "gold_evidence_ids": [
+          "fu001_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "fu001_m4",
+        "fact": "罗晴当前负责青芒支付对账项目的验收沟通。",
+        "gold_evidence_ids": [
+          "fu001_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "fu002",
+    "category": "fact_update",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [
+      {
+        "id": "fu002_s1",
+        "time": "2026-04-11T09:30:00+08:00",
+        "sender": "何砚",
+        "message_type": "text",
+        "content": "[MSG:fu002_s1] 2026-04-11 09:30 松果订阅中心改版初始计划：上线时间暂定为 2026-04-24 20:00，交付范围包含订阅入口、短信提醒和旧版配置迁移。",
+        "evidence_id": "fu002_s1",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu002_s2",
+        "time": "2026-04-14T14:00:00+08:00",
+        "sender": "许苒",
+        "message_type": "text",
+        "content": "[MSG:fu002_s2] 2026-04-14 14:00 松果订阅中心改版的短信提醒模块还在等合规评审，2026-04-16 18:00 前给出是否保留的结论。",
+        "evidence_id": "fu002_s2",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu002_s3",
+        "time": "2026-04-17T10:15:00+08:00",
+        "sender": "何砚",
+        "message_type": "text",
+        "content": "[MSG:fu002_s3] 2026-04-17 10:15 最新版本：松果订阅中心改版上线时间改为 2026-04-29 21:30；本次交付范围删除短信提醒，只保留订阅入口和旧版配置迁移。",
+        "evidence_id": "fu002_s3",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu002_s4",
+        "time": "2026-04-17T11:05:00+08:00",
+        "sender": "许苒",
+        "message_type": "text",
+        "content": "[MSG:fu002_s4] 2026-04-17 11:05 我已经同步合规侧：短信提醒不进 2026-04-29 21:30 这次上线，后续另立迭代。",
+        "evidence_id": "fu002_s4",
+        "should_write_memory": true
+      },
+      {
+        "id": "fu002_s5",
+        "time": "2026-04-20T17:45:00+08:00",
+        "sender": "唐越",
+        "message_type": "text",
+        "content": "[MSG:fu002_s5] 2026-04-20 17:45 松果订阅中心改版的发布演练按 2026-04-29 21:30 的新时间准备，演练清单不要再写短信提醒。",
+        "evidence_id": "fu002_s5",
+        "should_write_memory": true
+      }
+    ],
+    "preseed_memories": [],
+    "probes": [
+      {
+        "id": "fu002_p1",
+        "question": "松果订阅中心改版当前有效上线时间是什么？2026-04-24 20:00 还有效吗？",
+        "gold_answer": "当前有效上线时间是 2026-04-29 21:30。2026-04-24 20:00 是旧计划，已经不再有效。",
+        "must_include": [
+          "2026-04-29",
+          "21:30"
+        ],
+        "must_include_aliases": {
+          "2026-04-29": [
+            "4月29日",
+            "四月二十九日"
+          ],
+          "21:30": [
+            "晚上9点半",
+            "晚9:30"
+          ]
+        },
+        "must_not_include": [
+          "2026-04-24 20:00 仍有效",
+          "4月24日有效"
+        ],
+        "gold_evidence_ids": [
+          "fu002_s3"
+        ],
+        "old_evidence_ids": [
+          "fu002_s1"
+        ],
+        "evidence_match": "all",
+        "temporal_expectation": "use_latest_fact",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：准确回答当前时间为 2026-04-29 21:30，并明确 2026-04-24 20:00 已失效；1 分：答出新时间但未说明旧时间失效；0 分：仍使用旧时间或无法判断。"
+      },
+      {
+        "id": "fu002_p2",
+        "question": "松果订阅中心改版本次交付范围现在还包括短信提醒吗？",
+        "gold_answer": "不包括。当前交付范围只保留订阅入口和旧版配置迁移，短信提醒已删除并后续另立迭代。",
+        "must_include": [
+          "不包括",
+          "订阅入口",
+          "旧版配置迁移"
+        ],
+        "must_include_aliases": {
+          "不包括": [
+            "删除短信提醒",
+            "短信提醒不进本次上线"
+          ],
+          "订阅入口": [
+            "订阅入口模块"
+          ],
+          "旧版配置迁移": [
+            "旧配置迁移",
+            "配置迁移"
+          ]
+        },
+        "must_not_include": [
+          "包括短信提醒",
+          "短信提醒本次上线"
+        ],
+        "gold_evidence_ids": [
+          "fu002_s3",
+          "fu002_s4"
+        ],
+        "old_evidence_ids": [
+          "fu002_s1"
+        ],
+        "evidence_match": "any",
+        "temporal_expectation": "use_latest_fact",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：明确短信提醒不在本次交付，并说出当前范围是订阅入口和旧版配置迁移；1 分：只说明短信提醒不交付但未列当前范围；0 分：说短信提醒仍在本次交付或混用旧范围。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "fu002_m1",
+        "fact": "松果订阅中心改版当前有效上线时间是 2026-04-29 21:30。",
+        "gold_evidence_ids": [
+          "fu002_s3"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "fu002_m2",
+        "fact": "松果订阅中心改版当前交付范围包含订阅入口。",
+        "gold_evidence_ids": [
+          "fu002_s3"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "fu002_m3",
+        "fact": "松果订阅中心改版当前交付范围包含旧版配置迁移。",
+        "gold_evidence_ids": [
+          "fu002_s3"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "fu002_m4",
+        "fact": "短信提醒不进入松果订阅中心改版 2026-04-29 21:30 这次上线。",
+        "gold_evidence_ids": [
+          "fu002_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "tc001",
+    "category": "temporal_conflict",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [
+      {
+        "id": "tc001_s1",
+        "time": "2026-04-05T10:00:00+08:00",
+        "sender": "顾言",
+        "message_type": "text",
+        "content": "[MSG:tc001_s1] 2026-04-05 10:00 星河审批流改造第一次评审：当时决定采用方案甲，即保留旧审批表单，只新增字段校验。",
+        "evidence_id": "tc001_s1",
+        "should_write_memory": true
+      },
+      {
+        "id": "tc001_s2",
+        "time": "2026-04-09T16:20:00+08:00",
+        "sender": "魏澜",
+        "message_type": "text",
+        "content": "[MSG:tc001_s2] 2026-04-09 16:20 星河审批流改造中间讨论过方案乙：新建统一审批页，但需要额外两周联调。",
+        "evidence_id": "tc001_s2",
+        "should_write_memory": true
+      },
+      {
+        "id": "tc001_s3",
+        "time": "2026-04-13T11:30:00+08:00",
+        "sender": "邵宁",
+        "message_type": "text",
+        "content": "[MSG:tc001_s3] 2026-04-13 11:30 方案乙的联调成本确认偏高，暂时不建议作为星河审批流改造的正式方案。",
+        "evidence_id": "tc001_s3",
+        "should_write_memory": true
+      },
+      {
+        "id": "tc001_s4",
+        "time": "2026-04-21T18:00:00+08:00",
+        "sender": "顾言",
+        "message_type": "text",
+        "content": "[MSG:tc001_s4] 2026-04-21 18:00 最新公告：星河审批流改造最终采用方案丙，即拆分审批入口和配置中心，方案甲与方案乙都不再作为当前方案。",
+        "evidence_id": "tc001_s4",
+        "should_write_memory": true
+      },
+      {
+        "id": "tc001_s5",
+        "time": "2026-04-22T09:15:00+08:00",
+        "sender": "魏澜",
+        "message_type": "text",
+        "content": "[MSG:tc001_s5] 2026-04-22 09:15 星河审批流改造后续设计稿、测试用例和发布计划都按方案丙推进。",
+        "evidence_id": "tc001_s5",
+        "should_write_memory": true
+      }
+    ],
+    "preseed_memories": [],
+    "probes": [
+      {
+        "id": "tc001_p1",
+        "question": "星河审批流改造当前最终采用哪个方案？方案甲还是当前有效方案吗？",
+        "gold_answer": "当前最终采用方案丙。方案甲只是 2026-04-05 的历史决定，已经不再作为当前有效方案。",
+        "must_include": [
+          "方案丙",
+          "方案甲",
+          "不再"
+        ],
+        "must_include_aliases": {
+          "方案丙": [
+            "最终方案丙",
+            "当前采用丙"
+          ],
+          "方案甲": [
+            "甲方案"
+          ],
+          "不再": [
+            "已失效",
+            "不是当前方案"
+          ]
+        },
+        "must_not_include": [
+          "方案甲是当前方案",
+          "方案乙是当前方案"
+        ],
+        "gold_evidence_ids": [
+          "tc001_s4"
+        ],
+        "evidence_match": "all",
+        "temporal_expectation": "distinguish_historical_and_current",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：明确当前为方案丙，并区分方案甲是历史决定且不再有效；1 分：答出方案丙但未清楚说明方案甲历史状态；0 分：把方案甲或方案乙说成当前方案。"
+      },
+      {
+        "id": "tc001_p2",
+        "question": "星河审批流改造是否曾经讨论过方案乙？它现在是不是正式推进方案？",
+        "gold_answer": "曾经在 2026-04-09 讨论过方案乙，但现在不是正式推进方案；当前按方案丙推进。",
+        "must_include": [
+          "讨论过",
+          "方案乙",
+          "方案丙"
+        ],
+        "must_include_aliases": {
+          "讨论过": [
+            "曾经讨论",
+            "历史上讨论"
+          ],
+          "方案乙": [
+            "乙方案"
+          ],
+          "方案丙": [
+            "当前按丙",
+            "正式推进丙"
+          ]
+        },
+        "must_not_include": [
+          "方案乙是当前方案",
+          "方案乙正式推进"
+        ],
+        "gold_evidence_ids": [
+          "tc001_s2",
+          "tc001_s4",
+          "tc001_s5"
+        ],
+        "evidence_match": "all",
+        "temporal_expectation": "distinguish_historical_and_current",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：同时说明方案乙曾被讨论且当前不正式推进，并指出当前按方案丙推进；1 分：只答出方案乙历史存在或只答出当前方案丙；0 分：否认方案乙曾被讨论或把方案乙说成当前正式方案。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "tc001_m1",
+        "fact": "星河审批流改造在 2026-04-05 曾决定采用方案甲。",
+        "gold_evidence_ids": [
+          "tc001_s1"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "tc001_m2",
+        "fact": "星河审批流改造在 2026-04-09 曾讨论过方案乙。",
+        "gold_evidence_ids": [
+          "tc001_s2"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "tc001_m3",
+        "fact": "星河审批流改造当前最终采用方案丙。",
+        "gold_evidence_ids": [
+          "tc001_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "tc001_m4",
+        "fact": "方案甲不再作为星河审批流改造的当前方案。",
+        "gold_evidence_ids": [
+          "tc001_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "tc001_m5",
+        "fact": "方案乙不再作为星河审批流改造的当前方案。",
+        "gold_evidence_ids": [
+          "tc001_s4"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt001",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-001",
+        "memory_time": "2026-03-18T15:30:00+08:00",
+        "title": "星瀚数据迁移历史决策",
+        "content": "[MEM:LT-001] 2026-03-18 15:30 历史会议纪要确认：星瀚数据迁移窗口定在 2026-04-28 22:00-24:00。负责人是林舟。约束：如果灰度名单未确认，迁移不得开始。证据编号：LT-001",
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt001_p1",
+        "question": "星瀚的数据迁移窗口是什么时候？什么情况下不能开始？",
+        "gold_answer": "星瀚数据迁移窗口是 2026-04-28 22:00-24:00；如果灰度名单未确认，迁移不得开始。",
+        "must_include": [
+          "2026-04-28",
+          "22:00-24:00",
+          "灰度名单"
+        ],
+        "must_include_aliases": {
+          "2026-04-28": [
+            "4月28日",
+            "四月二十八日"
+          ],
+          "22:00-24:00": [
+            "22点到24点",
+            "晚上10点到24点"
+          ],
+          "灰度名单": [
+            "灰度用户名单",
+            "灰度清单"
+          ]
+        },
+        "must_not_include": [
+          "2026-04-29",
+          "立即开始",
+          "名单未确认也可以"
+        ],
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：准确回答迁移窗口和灰度名单未确认不得开始两个事实；1 分：只答对窗口或只答对约束；0 分：窗口错误、约束错误或编造条件。"
+      },
+      {
+        "id": "lt001_p2",
+        "question": "星瀚迁移的负责人是谁？",
+        "gold_answer": "星瀚数据迁移负责人是林舟。",
+        "must_include": [
+          "林舟"
+        ],
+        "must_include_aliases": {
+          "林舟": [
+            "负责人林舟",
+            "由林舟负责"
+          ]
+        },
+        "must_not_include": [
+          "沈南",
+          "罗晴"
+        ],
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确回答负责人是林舟；1 分：提到林舟但负责人关系不明确；0 分：负责人错误或未回答。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt001_m1",
+        "fact": "星瀚数据迁移窗口是 2026-04-28 22:00-24:00。",
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt001_m2",
+        "fact": "星瀚数据迁移负责人是林舟。",
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt001_m3",
+        "fact": "星瀚数据迁移在灰度名单未确认时不得开始。",
+        "gold_evidence_ids": [
+          "LT-001"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt002",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-002",
+        "memory_time": "2026-03-22T10:10:00+08:00",
+        "title": "墨竹工单项目负责人变更",
+        "content": "[MEM:LT-002] 2026-03-22 10:10 历史项目同步：墨竹工单项目旧负责人是苏彦；从 2026-03-25 09:00 起，当前负责人调整为陆遥。苏彦转为需求顾问，不再负责里程碑推进。证据编号：LT-002",
+        "gold_evidence_ids": [
+          "LT-002"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt002_p1",
+        "question": "墨竹工单项目现在负责人是谁？苏彦现在还负责里程碑推进吗？",
+        "gold_answer": "墨竹工单项目当前负责人是陆遥。苏彦已转为需求顾问，不再负责里程碑推进。",
+        "must_include": [
+          "陆遥",
+          "需求顾问",
+          "不再"
+        ],
+        "must_include_aliases": {
+          "陆遥": [
+            "负责人陆遥",
+            "由陆遥负责"
+          ],
+          "需求顾问": [
+            "顾问角色",
+            "需求侧顾问"
+          ],
+          "不再": [
+            "不负责",
+            "已不负责"
+          ]
+        },
+        "must_not_include": [
+          "苏彦是当前负责人",
+          "苏彦负责里程碑"
+        ],
+        "gold_evidence_ids": [
+          "LT-002"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：准确回答当前负责人陆遥，并说明苏彦已转为需求顾问且不再推进里程碑；1 分：答出陆遥但未完整说明苏彦当前角色；0 分：仍把苏彦说成当前负责人或里程碑负责人。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt002_m1",
+        "fact": "墨竹工单项目当前负责人是陆遥。",
+        "gold_evidence_ids": [
+          "LT-002"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt002_m2",
+        "fact": "苏彦在墨竹工单项目中当前是需求顾问。",
+        "gold_evidence_ids": [
+          "LT-002"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "lt002_m3",
+        "fact": "苏彦不再负责墨竹工单项目的里程碑推进。",
+        "gold_evidence_ids": [
+          "LT-002"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt003",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-003",
+        "memory_time": "2026-03-29T17:45:00+08:00",
+        "title": "白鹭网关发布风险约束",
+        "content": "[MEM:LT-003] 2026-03-29 17:45 风险复盘结论：白鹭网关发布前必须满足两个约束：接口错误率连续 30 分钟低于 0.2%，并且回滚脚本通过演练。如果任一条件未满足，不得发布。证据编号：LT-003",
+        "gold_evidence_ids": [
+          "LT-003"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt003_p1",
+        "question": "白鹭网关发布前有哪些长期有效的风险约束？什么情况下不得发布？",
+        "gold_answer": "白鹭网关发布前必须满足接口错误率连续 30 分钟低于 0.2%，并且回滚脚本通过演练；任一条件未满足都不得发布。",
+        "must_include": [
+          "30 分钟",
+          "0.2%",
+          "回滚脚本"
+        ],
+        "must_include_aliases": {
+          "30 分钟": [
+            "连续三十分钟",
+            "连续30分钟"
+          ],
+          "0.2%": [
+            "低于百分之0.2",
+            "小于0.2%"
+          ],
+          "回滚脚本": [
+            "回滚演练",
+            "脚本演练"
+          ]
+        },
+        "must_not_include": [
+          "可以发布",
+          "只看错误率",
+          "无需演练"
+        ],
+        "gold_evidence_ids": [
+          "LT-003"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：完整回答错误率阈值、连续时长、回滚脚本演练，并说明任一未满足不得发布；1 分：漏掉其中一个约束或未说明不得发布条件；0 分：约束错误、阈值错误或说未满足也可以发布。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt003_m1",
+        "fact": "白鹭网关发布前要求接口错误率连续 30 分钟低于 0.2%。",
+        "gold_evidence_ids": [
+          "LT-003"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt003_m2",
+        "fact": "白鹭网关发布前要求回滚脚本通过演练。",
+        "gold_evidence_ids": [
+          "LT-003"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt003_m3",
+        "fact": "白鹭网关发布前任一风险约束未满足则不得发布。",
+        "gold_evidence_ids": [
+          "LT-003"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt004",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-004",
+        "memory_time": "2026-04-02T09:20:00+08:00",
+        "title": "松鹿运营团队周报偏好",
+        "content": "[MEM:LT-004] 2026-04-02 09:20 历史协作记忆：松鹿运营团队偏好每周五 17:00 前收到项目周报。周报要用“风险与动作”两列表达，不喜欢使用“暂无风险”这种笼统说法；没有风险时写“本周未发现新增风险，已完成例行巡检”。证据编号：LT-004",
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt004_p1",
+        "question": "给松鹿运营团队发项目周报时，时间和表达偏好是什么？要避开什么说法？",
+        "gold_answer": "周报应在每周五 17:00 前发送，格式偏好使用“风险与动作”两列；要避免写“暂无风险”，没有风险时写“本周未发现新增风险，已完成例行巡检”。",
+        "must_include": [
+          "周五",
+          "17:00",
+          "风险与动作",
+          "暂无风险"
+        ],
+        "must_include_aliases": {
+          "周五": [
+            "星期五",
+            "每周五"
+          ],
+          "17:00": [
+            "下午5点",
+            "五点前"
+          ],
+          "风险与动作": [
+            "风险、动作两列",
+            "两列表达"
+          ],
+          "暂无风险": [
+            "避免暂无风险",
+            "不要写暂无风险"
+          ]
+        },
+        "must_not_include": [
+          "周一",
+          "18:00",
+          "可以写暂无风险"
+        ],
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确回答发送时间、两列格式偏好，并说明要避开“暂无风险”；1 分：答对其中两项但遗漏一项；0 分：时间、格式或禁用表达错误。"
+      },
+      {
+        "id": "lt004_p2",
+        "question": "松鹿运营团队如果本周没有新增风险，周报里应该怎么写？",
+        "gold_answer": "应写“本周未发现新增风险，已完成例行巡检”。",
+        "must_include": [
+          "本周未发现新增风险",
+          "例行巡检"
+        ],
+        "must_include_aliases": {
+          "本周未发现新增风险": [
+            "未发现新增风险",
+            "没有新增风险"
+          ],
+          "例行巡检": [
+            "已完成巡检",
+            "完成例行检查"
+          ]
+        },
+        "must_not_include": [
+          "暂无风险",
+          "没有任何问题"
+        ],
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确给出推荐表述并避免“暂无风险”；1 分：大意接近但缺少“例行巡检”或“新增风险”；0 分：仍建议写“暂无风险”或完全不符合偏好。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt004_m1",
+        "fact": "松鹿运营团队偏好每周五 17:00 前收到项目周报。",
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt004_m2",
+        "fact": "松鹿运营团队周报偏好使用“风险与动作”两列表达。",
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "memory_scope": "long_term",
+        "importance": "medium"
+      },
+      {
+        "id": "lt004_m3",
+        "fact": "给松鹿运营团队写周报时应避免使用“暂无风险”。",
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt004_m4",
+        "fact": "松鹿运营团队周报无新增风险时应写“本周未发现新增风险，已完成例行巡检”。",
+        "gold_evidence_ids": [
+          "LT-004"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt005",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-005",
+        "memory_time": "2026-04-06T13:10:00+08:00",
+        "title": "海棠账单上线窗口",
+        "content": "[MEM:LT-005] 2026-04-06 13:10 历史发布排期：海棠账单的上线窗口是 2026-05-06 20:00-22:00，当前负责人是秦榆。该项目不使用凌晨发布窗口。证据编号：LT-005",
+        "gold_evidence_ids": [
+          "LT-005"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      },
+      {
+        "memory_id": "LT-006",
+        "memory_time": "2026-04-06T13:25:00+08:00",
+        "title": "海棠结算上线窗口",
+        "content": "[MEM:LT-006] 2026-04-06 13:25 历史发布排期：海棠结算的上线窗口是 2026-05-07 01:00-03:00，当前负责人是孟棠。该项目需要凌晨低峰发布，不要与海棠账单混淆。证据编号：LT-006",
+        "gold_evidence_ids": [
+          "LT-006"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt005_p1",
+        "question": "海棠账单和海棠结算的上线窗口分别是什么？不要混淆。",
+        "gold_answer": "海棠账单上线窗口是 2026-05-06 20:00-22:00；海棠结算上线窗口是 2026-05-07 01:00-03:00。",
+        "must_include": [
+          "海棠账单",
+          "2026-05-06",
+          "20:00-22:00",
+          "海棠结算",
+          "2026-05-07",
+          "01:00-03:00"
+        ],
+        "must_include_aliases": {
+          "海棠账单": [
+            "账单项目"
+          ],
+          "2026-05-06": [
+            "5月6日",
+            "五月六日"
+          ],
+          "20:00-22:00": [
+            "晚上8点到10点",
+            "20点到22点"
+          ],
+          "海棠结算": [
+            "结算项目"
+          ],
+          "2026-05-07": [
+            "5月7日",
+            "五月七日"
+          ],
+          "01:00-03:00": [
+            "凌晨1点到3点",
+            "1点到3点"
+          ]
+        },
+        "must_not_include": [
+          "海棠账单 01:00-03:00",
+          "海棠结算 20:00-22:00"
+        ],
+        "gold_evidence_ids": [
+          "LT-005",
+          "LT-006"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：分别准确回答两个相似项目的上线窗口且未混淆；1 分：只答对一个项目或时间表述不完整；0 分：两个窗口混淆、日期错误或无法区分项目。"
+      },
+      {
+        "id": "lt005_p2",
+        "question": "海棠账单和海棠结算当前负责人分别是谁？",
+        "gold_answer": "海棠账单当前负责人是秦榆；海棠结算当前负责人是孟棠。",
+        "must_include": [
+          "秦榆",
+          "孟棠"
+        ],
+        "must_include_aliases": {
+          "秦榆": [
+            "账单负责人秦榆",
+            "海棠账单由秦榆负责"
+          ],
+          "孟棠": [
+            "结算负责人孟棠",
+            "海棠结算由孟棠负责"
+          ]
+        },
+        "must_not_include": [
+          "秦榆负责海棠结算",
+          "孟棠负责海棠账单"
+        ],
+        "gold_evidence_ids": [
+          "LT-005",
+          "LT-006"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall"
+        ],
+        "judge_rubric": "2 分：准确区分两个项目负责人；1 分：只答对一个负责人；0 分：负责人混淆或未回答。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt005_m1",
+        "fact": "海棠账单上线窗口是 2026-05-06 20:00-22:00。",
+        "gold_evidence_ids": [
+          "LT-005"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt005_m2",
+        "fact": "海棠账单当前负责人是秦榆。",
+        "gold_evidence_ids": [
+          "LT-005"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt005_m3",
+        "fact": "海棠结算上线窗口是 2026-05-07 01:00-03:00。",
+        "gold_evidence_ids": [
+          "LT-006"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt005_m4",
+        "fact": "海棠结算当前负责人是孟棠。",
+        "gold_evidence_ids": [
+          "LT-006"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  },
+  {
+    "case_id": "lt006",
+    "category": "long_term_preseed",
+    "difficulty": "medium",
+    "case_time": "2026-04-25T15:00:00+08:00",
+    "seed_messages": [],
+    "preseed_memories": [
+      {
+        "memory_id": "LT-007",
+        "memory_time": "2026-04-09T16:40:00+08:00",
+        "title": "岚桥质检验收标准",
+        "content": "[MEM:LT-007] 2026-04-09 16:40 历史验收标准确认：岚桥质检平台的长期有效验收阈值为抽检通过率不低于 98%，P95 响应时间不高于 800ms。若任一指标不达标，不得提交最终验收。证据编号：LT-007",
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high",
+        "import_target": "openclaw_memory_file"
+      }
+    ],
+    "probes": [
+      {
+        "id": "lt006_p1",
+        "question": "岚桥质检平台长期有效的验收标准是什么？",
+        "gold_answer": "岚桥质检平台长期有效验收标准是抽检通过率不低于 98%，P95 响应时间不高于 800ms。",
+        "must_include": [
+          "98%",
+          "P95",
+          "800ms"
+        ],
+        "must_include_aliases": {
+          "98%": [
+            "不低于98%",
+            "通过率98%"
+          ],
+          "P95": [
+            "95分位响应时间",
+            "P95响应"
+          ],
+          "800ms": [
+            "不高于800毫秒",
+            "800 毫秒"
+          ]
+        },
+        "must_not_include": [
+          "95%",
+          "1000ms",
+          "只看通过率"
+        ],
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：准确回答抽检通过率不低于 98% 和 P95 响应时间不高于 800ms；1 分：只答对一个指标或阈值表述不完整；0 分：指标或阈值错误、遗漏关键验收标准。"
+      },
+      {
+        "id": "lt006_p2",
+        "question": "岚桥质检平台如果 P95 响应时间超过 800ms，但抽检通过率达标，可以提交最终验收吗？",
+        "gold_answer": "不可以。P95 响应时间不高于 800ms 是长期有效验收标准之一，任一指标不达标都不得提交最终验收。",
+        "must_include": [
+          "不可以",
+          "800ms",
+          "不得提交"
+        ],
+        "must_include_aliases": {
+          "不可以": [
+            "不能",
+            "不允许"
+          ],
+          "800ms": [
+            "800 毫秒",
+            "八百毫秒"
+          ],
+          "不得提交": [
+            "不能提交最终验收",
+            "不应提交验收"
+          ]
+        },
+        "must_not_include": [
+          "可以提交",
+          "只要通过率达标即可"
+        ],
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "evidence_match": "all",
+        "metrics": [
+          "answer_accuracy",
+          "evidence_recall",
+          "temporal_correctness"
+        ],
+        "judge_rubric": "2 分：明确不能提交，并说明 P95 超过 800ms 属于任一指标不达标；1 分：判断不能提交但理由不完整；0 分：判断可以提交或忽略 P95 阈值。"
+      }
+    ],
+    "expected_memory_items": [
+      {
+        "id": "lt006_m1",
+        "fact": "岚桥质检平台长期有效验收阈值要求抽检通过率不低于 98%。",
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt006_m2",
+        "fact": "岚桥质检平台长期有效验收阈值要求 P95 响应时间不高于 800ms。",
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      },
+      {
+        "id": "lt006_m3",
+        "fact": "岚桥质检平台任一验收指标不达标时不得提交最终验收。",
+        "gold_evidence_ids": [
+          "LT-007"
+        ],
+        "memory_scope": "long_term",
+        "importance": "high"
+      }
+    ],
+    "reset_scope": "per_case"
+  }
+]
