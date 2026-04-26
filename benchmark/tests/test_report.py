@@ -17,6 +17,7 @@ def test_scores_and_report_include_missing_data() -> None:
         expected_answer="负责人是沈南。",
         gold_evidence_ids=["bs001_s1"],
         retrieved_evidence_ids=[],
+        retrieved_contexts=["项目晨会结论：云帆看板改造项目负责人确定为沈南。"],
         retrieval_recall_at_1=False,
         retrieval_recall_at_3=False,
         retrieval_recall_at_5=False,
@@ -41,3 +42,5 @@ def test_scores_and_report_include_missing_data() -> None:
     assert scores["answer_accuracy"] == 1.0
     assert "provider did not expose usage" in report
     assert "OpenClaw trajectory not found" in report
+    assert "OpenClaw Retrieved Contexts" in report
+    assert "云帆看板改造项目负责人确定为沈南" in report

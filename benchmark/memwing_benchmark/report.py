@@ -65,6 +65,12 @@ def collect_missing_data(results: list[NormalizedResult]) -> list[str]:
         missing.append("OpenClaw trajectory not found")
     if any(result.latency_ms is None for result in results):
         missing.append("answer latency unavailable")
+    if any(result.retrieval_recall_at_5 is None for result in results):
+        missing.append("retrieval judge unavailable")
+    if any(result.answer and result.answer_score is None for result in results):
+        missing.append("answer judge unavailable")
+    if any(result.raw.get("memory_search_error") for result in results):
+        missing.append("OpenClaw memory search failed")
     return sorted(set(missing))
 
 
@@ -107,6 +113,29 @@ def render_report(
             f"| {result.case_id} | {result.probe_id} | {result.answer_score} | "
             f"{result.answer_correct} | {result.evidence_correct} | {result.retrieval_recall_at_5} |"
         )
+    lines.extend(["", "## OpenClaw Retrieved Contexts", ""])
+    if any(result.retrieved_contexts for result in results):
+        lines.append(
+            "这些片段是 OpenClaw `memory search` 返回给 retrieval judge 的 top context，"
+            "用于观察 seed 记忆被索引后实际可检索到的内容。"
+        )
+        for result in results:
+            if not result.retrieved_contexts:
+                continue
+            lines.extend(["", f"### {result.case_id} / {result.probe_id}", ""])
+            for index, context in enumerate(result.retrieved_contexts[:3], start=1):
+                lines.extend(
+                    [
+                        f"**Top {index}**",
+                        "",
+                        "```text",
+                        _truncate_context(context),
+                        "```",
+                        "",
+                    ]
+                )
+    else:
+        lines.append("- none")
     lines.extend(["", "## Failures", ""])
     failures = [result for result in results if result.answer_correct is False]
     if failures:
@@ -123,7 +152,16 @@ def render_report(
             lines.append(f"- {item}")
     else:
         lines.append("- none")
-    lines.extend(["", "## Notes", "", "- v1 openclaw-native benchmark harness output."])
+    lines.extend(
+        [
+            "",
+            "## Notes",
+            "",
+            "- v1 openclaw-native benchmark harness output.",
+            "- 本轮 benchmark 不评测实时飞书消息写入长期记忆的延迟与成功率。",
+            "- 本轮评测的是历史协作记忆已经沉淀后，OpenClaw native memory 是否能正确检索并用于回答。",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -172,3 +210,10 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.4f}"
     return str(value)
+
+
+def _truncate_context(value: str, limit: int = 1200) -> str:
+    normalized = value.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + "\n...[truncated]"
