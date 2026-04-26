@@ -33,6 +33,8 @@ class FeishuConfig(BaseModel):
     bot_name: str = ""
     mention_text: str = ""
     chat_id: str = ""
+    seed_chat_id: str = ""
+    probe_chat_id: str = ""
     create_chat_if_missing: bool = False
     chat_name_prefix: str = "MemWing Bench"
 

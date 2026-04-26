@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.json_utils import dumps_json, loads_json, walk_values
-from memwing_benchmark.metrics.retrieval import extract_evidence_ids, unique_preserve_order
+from memwing_benchmark.metrics.retrieval import unique_preserve_order
 from memwing_benchmark.schema import BenchmarkCase, CommandRecord
+
+
+class CommandResult(NamedTuple):
+    record: CommandRecord
+    stdout: str
+    stderr: str
 
 
 class OpenClawNativeAdapter:
@@ -18,7 +25,7 @@ class OpenClawNativeAdapter:
         self.commands: list[CommandRecord] = []
 
     def memory_search(self, query: str, *, max_results: int = 5) -> list[str]:
-        result = self._run(
+        result = self._run_full(
             [
                 "pnpm",
                 "openclaw",
@@ -36,10 +43,10 @@ class OpenClawNativeAdapter:
             ]
         )
         try:
-            parsed = loads_json(result.stdout)
+            parsed = _parse_stdout_json_object(result.stdout)
         except Exception:
-            return extract_evidence_ids(result.stdout)
-        return unique_preserve_order(_extract_evidence_from_json(parsed))
+            return [result.stdout.strip()] if result.stdout.strip() else []
+        return unique_preserve_order(_extract_contexts_from_json(parsed))
 
     def configure_feishu_group(self, chat_id: str) -> None:
         current = self._read_group_allow_from()
@@ -73,26 +80,38 @@ class OpenClawNativeAdapter:
         self._run(["pnpm", "openclaw", "gateway", "restart"])
 
     def preseed_long_term_memories(self, *, cases: list[BenchmarkCase], run_id: str) -> Path | None:
-        memories = [memory for case in cases for memory in case.preseed_memories]
-        if not memories:
+        del run_id
+        records = [
+            (case, message)
+            for case in cases
+            for message in case.seed_messages
+            if message.should_write_memory
+        ]
+        if not records:
             return None
         workspace = self.resolve_workspace()
         memory_dir = workspace / "memory"
         memory_dir.mkdir(parents=True, exist_ok=True)
-        output_path = memory_dir / f"memwing-benchmark-{run_id}.md"
+        output_path = memory_dir / "memwing-benchmark-preseed.md"
         blocks: list[str] = []
-        for memory in memories:
-            title = memory.title or memory.memory_id
-            evidence = ", ".join(memory.gold_evidence_ids or [memory.memory_id])
+        for _case, message in records:
+            metadata = {
+                "time": message.time,
+                "sender": message.sender,
+                "message_type": message.message_type,
+                "source": message.source or "historical_feishu_record",
+            }
+            metadata = {key: value for key, value in metadata.items() if value}
             blocks.append(
                 "\n".join(
                     [
-                        f"## [MEM:{memory.memory_id}] {title}",
+                        "## Historical collaboration record",
                         "",
-                        f"- 时间：{memory.memory_time or 'unknown'}",
-                        "- 来源：MemWing benchmark v1 preseed",
-                        f"- 内容：{memory.content}",
-                        f"- 证据编号：{evidence}",
+                        "```json",
+                        dumps_json(metadata),
+                        "```",
+                        "",
+                        message.content,
                     ]
                 )
             )
@@ -140,6 +159,9 @@ class OpenClawNativeAdapter:
         return []
 
     def _run(self, args: list[str]) -> CommandRecord:
+        return self._run_full(args).record
+
+    def _run_full(self, args: list[str]) -> CommandResult:
         completed = subprocess.run(
             args,
             cwd=self.repo_dir,
@@ -158,15 +180,39 @@ class OpenClawNativeAdapter:
         self.commands.append(record)
         if completed.returncode != 0:
             raise BenchmarkError(f"OpenClaw command failed: {' '.join(args)}\n{record.stderr}")
-        return record
+        return CommandResult(record=record, stdout=completed.stdout, stderr=completed.stderr)
 
 
-def _extract_evidence_from_json(value: Any) -> list[str]:
+def _extract_contexts_from_json(value: Any) -> list[str]:
     out: list[str] = []
     for child in walk_values(value):
-        if isinstance(child, str):
-            out.extend(extract_evidence_ids(child))
+        if not isinstance(child, dict):
+            continue
+        for key in ("text", "content", "markdown", "snippet", "body"):
+            text = child.get(key)
+            if isinstance(text, str) and text.strip():
+                out.append(text.strip())
+                break
+    if out:
+        return out
+    for child in walk_values(value):
+        if isinstance(child, str) and child.strip():
+            out.append(child.strip())
+    if out:
+        return out
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
     return out
+
+
+def _parse_stdout_json_object(stdout: str) -> dict[str, Any]:
+    start = stdout.find("{")
+    if start < 0:
+        raise ValueError("stdout does not contain JSON object")
+    parsed, _ = json.JSONDecoder().raw_decode(stdout[start:])
+    if not isinstance(parsed, dict):
+        raise ValueError("stdout JSON is not an object")
+    return parsed
 
 
 def _find_workspace_path(value: Any) -> str | None:

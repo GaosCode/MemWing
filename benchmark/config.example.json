@@ -18,6 +18,8 @@
     "bot_name": "飞书用户5924KW的智能助手",
     "mention_text": "<at user_id=\"ou_0453b2b52a68cf17905458ba4a215a0f\">飞书用户5924KW的智能助手</at>",
     "chat_id": "",
+    "seed_chat_id": "",
+    "probe_chat_id": "",
     "create_chat_if_missing": true,
     "chat_name_prefix": "MemWing Bench"
   },
