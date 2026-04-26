@@ -22,7 +22,7 @@ def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
             "--backend",
             "openclaw-native",
             "--cases",
-            "cases.json",
+            "datasets",
             "--case-id",
             "bs001",
             "--runs-dir",
