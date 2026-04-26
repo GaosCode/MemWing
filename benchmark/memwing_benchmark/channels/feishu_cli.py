@@ -4,7 +4,7 @@ import subprocess
 import shutil
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.json_utils import loads_json
@@ -19,6 +19,7 @@ class FeishuCli:
     def __init__(self, cli_bin: str = "lark-cli") -> None:
         self.cli_bin = cli_bin
         self.commands: list[CommandRecord] = []
+        self.app_id: str | None = None
 
     def ensure_ready(self, *, required_scopes: list[str] | None = None) -> None:
         if shutil.which(self.cli_bin) is None:
@@ -30,6 +31,7 @@ class FeishuCli:
         result = self._run_raw([self.cli_bin, "auth", "status"])
         self._record_completed([self.cli_bin, "auth", "status"], result)
         if result.returncode == 0:
+            self.app_id = _auth_status_app_id(result.stdout)
             self._ensure_scopes(result.stdout, required_scopes or [])
             return
         combined = f"{result.stdout}\n{result.stderr}".strip()
@@ -71,7 +73,25 @@ class FeishuCli:
             f"{len(missing) + 1}. {self.cli_bin} auth status"
         )
 
-    def create_chat(self, *, name: str, bot_app_id: str) -> dict[str, Any]:
+    def current_app_id(self) -> str:
+        if self.app_id:
+            return self.app_id
+        result = self._run_raw([self.cli_bin, "auth", "status"])
+        self._record_completed([self.cli_bin, "auth", "status"], result)
+        if result.returncode != 0:
+            raise BenchmarkError(
+                _format_cli_failure([self.cli_bin, "auth", "status"], result.stdout, result.stderr)
+            )
+        app_id = _auth_status_app_id(result.stdout)
+        if not app_id:
+            raise BenchmarkError("飞书 CLI auth status 未返回 appId，无法邀请 CLI bot 进测试群")
+        self.app_id = app_id
+        return app_id
+
+    def create_chat(self, *, name: str, bot_app_ids: list[str]) -> dict[str, Any]:
+        unique_bot_app_ids = _dedupe_non_empty(bot_app_ids)
+        if not unique_bot_app_ids:
+            raise BenchmarkError("create_chat requires at least one bot app id")
         result = self._run(
             [
                 self.cli_bin,
@@ -82,7 +102,7 @@ class FeishuCli:
                 "--name",
                 name,
                 "--bots",
-                bot_app_id,
+                ",".join(unique_bot_app_ids),
                 "--format",
                 "json",
             ]
@@ -118,6 +138,7 @@ class FeishuCli:
         self,
         *,
         chat_id: str,
+        as_identity: Literal["user", "bot"] = "bot",
         start: str | None = None,
         end: str | None = None,
         sort: str = "asc",
@@ -128,7 +149,7 @@ class FeishuCli:
             "im",
             "+chat-messages-list",
             "--as",
-            "user",
+            as_identity,
             "--chat-id",
             chat_id,
             "--sort",
@@ -154,7 +175,7 @@ class FeishuCli:
         *,
         chat_id: str,
         since: str,
-        bot_open_id: str,
+        bot_ids: list[str],
         timeout_seconds: float,
         poll_seconds: float = 3.0,
     ) -> dict[str, Any]:
@@ -162,7 +183,7 @@ class FeishuCli:
         while time.monotonic() < deadline:
             messages = self.list_messages(chat_id=chat_id, start=since, sort="asc")
             for message in messages:
-                if _is_bot_message(message, bot_open_id):
+                if _is_bot_message(message, bot_ids):
                     return message
             time.sleep(poll_seconds)
         raise BenchmarkError(f"Timed out waiting for bot reply after {timeout_seconds:.0f}s")
@@ -220,6 +241,31 @@ def _format_cli_failure(args: list[str], stdout: str, stderr: str) -> str:
     return f"Feishu CLI command failed: {' '.join(args)}\n{combined[-1000:]}{hint}"
 
 
+def _auth_status_app_id(auth_status_stdout: str) -> str | None:
+    try:
+        parsed = loads_json(auth_status_stdout)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    app_id = parsed.get("appId")
+    if app_id is None:
+        return None
+    return str(app_id)
+
+
+def _dedupe_non_empty(values: list[str]) -> list[str]:
+    result = []
+    seen = set()
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        result.append(normalized)
+        seen.add(normalized)
+    return result
+
+
 def _extract_data(result: dict[str, Any]) -> dict[str, Any]:
     data = result.get("data", result)
     if not isinstance(data, dict):
@@ -227,7 +273,8 @@ def _extract_data(result: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _is_bot_message(message: dict[str, Any], bot_open_id: str) -> bool:
+def _is_bot_message(message: dict[str, Any], bot_ids: list[str]) -> bool:
+    expected_ids = {bot_id for bot_id in bot_ids if bot_id}
     sender = message.get("sender")
     if isinstance(sender, dict):
         possible_ids = {
@@ -236,9 +283,9 @@ def _is_bot_message(message: dict[str, Any], bot_open_id: str) -> bool:
             str(sender.get("sender_id", "")),
             str(sender.get("user_id", "")),
         }
-        if bot_open_id in possible_ids:
+        if expected_ids.intersection(possible_ids):
             return True
         sender_type = str(sender.get("type", sender.get("sender_type", ""))).lower()
-        if sender_type in {"app", "bot"} and not bot_open_id:
+        if sender_type in {"app", "bot"} and not expected_ids:
             return True
     return False

@@ -195,9 +195,10 @@ def _prepare_live_chat(
         if not (create_chat or config.feishu.create_chat_if_missing):
             raise BenchmarkError("live run requires --chat-id or create_chat_if_missing=true")
         _confirm_side_effect("创建飞书测试群并邀请机器人", yes)
+        cli_bot_app_id = feishu.current_app_id()
         created = feishu.create_chat(
             name=f"{config.feishu.chat_name_prefix} {run_id} OpenClaw",
-            bot_app_id=config.feishu.bot_app_id,
+            bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
         )
         chat_id = str(created["chat_id"])
         raw_records["side_effects"].append({"action": "create_chat", "chat_id": chat_id})
@@ -306,7 +307,7 @@ def _run_live(
             reply = feishu.wait_for_bot_reply(
                 chat_id=chat_id,
                 since=probe_sent_at,
-                bot_open_id=config.feishu.bot_open_id,
+                bot_ids=[config.feishu.bot_open_id, config.feishu.bot_app_id],
                 timeout_seconds=reply_timeout_seconds,
             )
             reply_received_at = utc_now_iso()
@@ -502,7 +503,7 @@ def _confirm_side_effect(description: str, yes: bool) -> None:
 
 
 def _required_feishu_scopes(*, will_create_chat: bool) -> list[str]:
-    scopes = ["im:message.send_as_user", "im:message.group_msg:get_as_user"]
+    scopes = ["im:message.send_as_user"]
     if will_create_chat:
         scopes.append("im:chat:create_by_user")
     return scopes

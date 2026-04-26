@@ -30,6 +30,83 @@ def test_feishu_cli_uses_installed_lark_cli_binary(monkeypatch) -> None:
     assert kwargs["cwd"] is None
 
 
+def test_list_messages_uses_bot_identity_by_default(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return Completed(0, '{"data":{"items":[]}}')
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cli = FeishuCli("lark-cli")
+
+    cli.list_messages(chat_id="oc_1")
+
+    args, kwargs = calls[0]
+    assert args[:5] == ["lark-cli", "im", "+chat-messages-list", "--as", "bot"]
+    assert "--format" in args
+    assert kwargs["cwd"] is None
+
+
+def test_create_chat_invites_unique_bot_app_ids(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return Completed(0, '{"data":{"chat_id":"oc_1"}}')
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cli = FeishuCli("lark-cli")
+
+    cli.create_chat(name="bench", bot_app_ids=["cli_a", "cli_b", "cli_a", ""])
+
+    args, _ = calls[0]
+    assert args[:3] == ["lark-cli", "im", "+chat-create"]
+    assert args[args.index("--bots") + 1] == "cli_a,cli_b"
+
+
+def test_current_app_id_uses_cached_auth_status_from_preflight(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda _: "/opt/homebrew/bin/lark-cli")
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return Completed(0, '{"appId":"cli_reader","tokenStatus":"valid","scope":""}')
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cli = FeishuCli("lark-cli")
+
+    cli.ensure_ready()
+
+    assert cli.current_app_id() == "cli_reader"
+    assert calls == [["lark-cli", "auth", "status"]]
+
+
+def test_wait_for_bot_reply_matches_app_id_sender(monkeypatch) -> None:
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    def fake_run(args, **kwargs):
+        return Completed(
+            0,
+            (
+                '{"data":{"messages":[{"sender":{"id":"cli_bot",'
+                '"id_type":"app_id","sender_type":"app"}}]}}'
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cli = FeishuCli("lark-cli")
+
+    reply = cli.wait_for_bot_reply(
+        chat_id="oc_1",
+        since="2026-04-26T01:00:00+00:00",
+        bot_ids=["ou_wrong", "cli_bot"],
+        timeout_seconds=1,
+    )
+
+    assert reply["sender"]["id"] == "cli_bot"
+
+
 def test_preflight_reports_install_hint_when_binary_missing(monkeypatch) -> None:
     monkeypatch.setattr("shutil.which", lambda _: None)
     cli = FeishuCli("lark-cli")
