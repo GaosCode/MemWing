@@ -1,4 +1,5 @@
 from memwing_benchmark.evaluators.llm_judge import JudgeInput, LlmJudge, parse_judge_json
+from memwing_benchmark.schema import GoldMemory
 
 
 class FakeModel:
@@ -11,31 +12,43 @@ class FakeModel:
 
 def test_parse_judge_json_accepts_fenced_object() -> None:
     payload = """```json
-{"answer_score":2,"answer_correct":true,"evidence_correct":true,"temporal_correct":null,"noise_polluted":false,"reason":"命中"}
+{"judge_type":"online_answer","case_id":"bs001","probe_id":"p1","answer":{"answer_score":2,"answer_correct":true,"evidence_correct":true,"temporal_correct":null,"noise_polluted":false},"reason":"命中"}
 ```"""
 
     parsed = parse_judge_json(payload)
 
-    assert parsed["answer_score"] == 2
-    assert parsed["answer_correct"] is True
+    assert parsed["answer"]["answer_score"] == 2
+    assert parsed["answer"]["answer_correct"] is True
 
 
 def test_llm_judge_returns_typed_result() -> None:
     judge = LlmJudge(
         FakeModel(
-            '{"answer_score":1,"answer_correct":false,"evidence_correct":false,'
-            '"temporal_correct":null,"noise_polluted":false,"reason":"缺少时间"}'
+            '{"judge_type":"online_answer","case_id":"bs001","probe_id":"bs001_p2",'
+            '"retrieval":{"recall_at_1":null,"recall_at_3":null,"recall_at_5":null,'
+            '"matched_gold_memory_ids":[],"missing_gold_memory_ids":[],"used_forbidden_facts":[]},'
+            '"answer":{"answer_score":1,"answer_correct":false,"evidence_correct":false,'
+            '"temporal_correct":null,"noise_polluted":false,"matched_gold_memory_ids":[],'
+            '"missing_gold_memory_ids":["bs001_s3"],"used_forbidden_facts":[]},'
+            '"confidence":0.8,"reason":"缺少时间"}'
         )
     )
 
     result = judge.evaluate(
         JudgeInput(
+            judge_type="online_answer",
             case_id="bs001",
+            probe_id="bs001_p2",
             question="什么时候验收？",
-            expected_answer="2026-04-30 18:00",
-            gold_evidence_ids=["bs001_s3"],
+            gold_answer="2026-04-30 18:00",
+            gold_memories=[
+                GoldMemory(
+                    id="bs001_s3",
+                    time="2026-04-25T09:40:00+08:00",
+                    fact="最终验收截止时间为 2026-04-30 18:00。",
+                )
+            ],
             agent_answer="4月30日",
-            retrieved_evidence_ids=[],
         )
     )
 
