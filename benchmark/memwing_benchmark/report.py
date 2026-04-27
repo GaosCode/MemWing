@@ -44,6 +44,48 @@ def build_scores(results: list[NormalizedResult]) -> dict[str, Any]:
                 if result.retrieval_recall_at_5 is not None
             ]
         ),
+        "retrieval_empty_rate": _rate(
+            [
+                result.retrieval_result_count == 0
+                for result in results
+                if result.retrieval_result_count is not None
+            ]
+        ),
+        "avg_retrieval_result_count": _avg(
+            [
+                result.retrieval_result_count
+                for result in results
+                if result.retrieval_result_count is not None
+            ]
+        ),
+        "avg_retrieval_top_score": _avg(
+            [
+                result.retrieval_top_score
+                for result in results
+                if result.retrieval_top_score is not None
+            ]
+        ),
+        "avg_retrieval_top_vector_score": _avg(
+            [
+                result.retrieval_top_vector_score
+                for result in results
+                if result.retrieval_top_vector_score is not None
+            ]
+        ),
+        "avg_retrieval_top_text_score": _avg(
+            [
+                result.retrieval_top_text_score
+                for result in results
+                if result.retrieval_top_text_score is not None
+            ]
+        ),
+        "avg_memory_search_latency_ms": _avg(
+            [
+                result.memory_search_latency_ms
+                for result in results
+                if result.memory_search_latency_ms is not None
+            ]
+        ),
         "avg_answer_latency_ms": _avg(
             [result.latency_ms for result in results if result.latency_ms is not None]
         ),
@@ -67,10 +109,14 @@ def collect_missing_data(results: list[NormalizedResult]) -> list[str]:
         missing.append("answer latency unavailable")
     if any(result.retrieval_recall_at_5 is None for result in results):
         missing.append("retrieval judge unavailable")
+    if any(result.memory_search_latency_ms is None for result in results):
+        missing.append("memory search latency unavailable")
     if any(result.answer and result.answer_score is None for result in results):
         missing.append("answer judge unavailable")
     if any(result.raw.get("memory_search_error") for result in results):
         missing.append("OpenClaw memory search failed")
+    if any(result.extraction_timeout for result in results):
+        missing.append("durable memory extraction timed out")
     return sorted(set(missing))
 
 
@@ -100,18 +146,44 @@ def render_report(
         f"- retrieval_recall_at_1: {_fmt(scores.get('retrieval_recall_at_1'))}",
         f"- retrieval_recall_at_3: {_fmt(scores.get('retrieval_recall_at_3'))}",
         f"- retrieval_recall_at_5: {_fmt(scores.get('retrieval_recall_at_5'))}",
+        f"- retrieval_empty_rate: {_fmt(scores.get('retrieval_empty_rate'))}",
+        f"- avg_retrieval_result_count: {_fmt(scores.get('avg_retrieval_result_count'))}",
+        f"- avg_retrieval_top_score: {_fmt(scores.get('avg_retrieval_top_score'))}",
+        f"- avg_retrieval_top_vector_score: {_fmt(scores.get('avg_retrieval_top_vector_score'))}",
+        f"- avg_retrieval_top_text_score: {_fmt(scores.get('avg_retrieval_top_text_score'))}",
+        f"- avg_memory_search_latency_ms: {_fmt(scores.get('avg_memory_search_latency_ms'))}",
         f"- evidence_correct_rate: {_fmt(scores.get('evidence_correct_rate'))}",
         f"- avg_answer_latency_ms: {_fmt(scores.get('avg_answer_latency_ms'))}",
         "",
-        "## Per Case Results",
+        "## Durable Memory",
         "",
-        "| case_id | probe_id | score | correct | evidence | recall@5 |",
-        "|---|---|---:|---|---|---|",
+        "| case_id | probe_id | seed_chat_id | probe_chat_id | available | timeout | latency_ms |",
+        "|---|---|---|---|---|---|---:|",
     ]
     for result in results:
         lines.append(
+            f"| {result.case_id} | {result.probe_id} | {_fmt(result.seed_chat_id)} | "
+            f"{_fmt(result.probe_chat_id)} | {result.durable_memory_available} | "
+            f"{result.extraction_timeout} | {_fmt(result.memory_availability_latency_ms)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Per Case Results",
+            "",
+            "| case_id | probe_id | answer_score | correct | evidence | recall@1 | recall@3 | recall@5 | hits | search_ms | top_score | top_vector | top_text | top_path |",
+            "|---|---|---:|---|---|---|---|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for result in results:
+        lines.append(
             f"| {result.case_id} | {result.probe_id} | {result.answer_score} | "
-            f"{result.answer_correct} | {result.evidence_correct} | {result.retrieval_recall_at_5} |"
+            f"{result.answer_correct} | {result.evidence_correct} | "
+            f"{result.retrieval_recall_at_1} | {result.retrieval_recall_at_3} | "
+            f"{result.retrieval_recall_at_5} | {_fmt(result.retrieval_result_count)} | "
+            f"{_fmt(result.memory_search_latency_ms)} | {_fmt(result.retrieval_top_score)} | "
+            f"{_fmt(result.retrieval_top_vector_score)} | {_fmt(result.retrieval_top_text_score)} | "
+            f"{_fmt(_top_location(result))} |"
         )
     lines.extend(["", "## OpenClaw Retrieved Contexts", ""])
     if any(result.retrieved_contexts for result in results):
@@ -124,13 +196,15 @@ def render_report(
                 continue
             lines.extend(["", f"### {result.case_id} / {result.probe_id}", ""])
             for index, context in enumerate(result.retrieved_contexts[:3], start=1):
+                hit = _raw_search_hit(result, index)
+                meta = _format_hit_meta(hit) if hit else f"rank={index}"
                 lines.extend(
                     [
-                        f"**Top {index}**",
+                        f"**Top {index}** `{meta}`",
                         "",
-                        "```text",
+                        "````text",
                         _truncate_context(context),
-                        "```",
+                        "````",
                         "",
                     ]
                 )
@@ -198,7 +272,7 @@ def _rate(values: list[bool]) -> float | None:
     return sum(1 for value in values if value) / len(values)
 
 
-def _avg(values: list[int]) -> float | None:
+def _avg(values: list[int | float]) -> float | None:
     if not values:
         return None
     return mean(values)
@@ -217,3 +291,44 @@ def _truncate_context(value: str, limit: int = 1200) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rstrip() + "\n...[truncated]"
+
+
+def _raw_search_hit(result: NormalizedResult, rank: int) -> dict[str, Any] | None:
+    hits = result.raw.get("memory_search_results")
+    if not isinstance(hits, list):
+        return None
+    index = rank - 1
+    if index < 0 or index >= len(hits):
+        return None
+    hit = hits[index]
+    return hit if isinstance(hit, dict) else None
+
+
+def _format_hit_meta(hit: dict[str, Any]) -> str:
+    parts = [
+        f"rank={_fmt(hit.get('rank'))}",
+        f"score={_fmt(hit.get('score'))}",
+        f"vector={_fmt(hit.get('vectorScore'))}",
+        f"text={_fmt(hit.get('textScore'))}",
+        f"path={_fmt(_hit_location(hit))}",
+    ]
+    return " ".join(parts)
+
+
+def _top_location(result: NormalizedResult) -> str | None:
+    if not result.retrieval_top_path:
+        return None
+    if result.retrieval_top_start_line is None or result.retrieval_top_end_line is None:
+        return result.retrieval_top_path
+    return f"{result.retrieval_top_path}:{result.retrieval_top_start_line}-{result.retrieval_top_end_line}"
+
+
+def _hit_location(hit: dict[str, Any]) -> str | None:
+    path = hit.get("path")
+    if not isinstance(path, str):
+        return None
+    start = hit.get("startLine")
+    end = hit.get("endLine")
+    if isinstance(start, int) and isinstance(end, int):
+        return f"{path}:{start}-{end}"
+    return path

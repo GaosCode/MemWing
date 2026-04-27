@@ -143,6 +143,7 @@ class FeishuCli:
         end: str | None = None,
         sort: str = "asc",
         page_size: int = 50,
+        command_timeout_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
         args = [
             self.cli_bin,
@@ -163,7 +164,7 @@ class FeishuCli:
             args.extend(["--start", start])
         if end:
             args.extend(["--end", end])
-        result = self._run(args)
+        result = self._run(args, timeout_seconds=command_timeout_seconds)
         data = _extract_data(result)
         messages = data.get("messages", data.get("items", []))
         if not isinstance(messages, list):
@@ -180,16 +181,32 @@ class FeishuCli:
         poll_seconds: float = 3.0,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
+        last_error: BenchmarkError | None = None
         while time.monotonic() < deadline:
-            messages = self.list_messages(chat_id=chat_id, start=since, sort="asc")
+            remaining = max(0.0, deadline - time.monotonic())
+            command_timeout_seconds = max(1.0, min(10.0, remaining))
+            try:
+                messages = self.list_messages(
+                    chat_id=chat_id,
+                    start=since,
+                    sort="asc",
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+            except BenchmarkError as exc:
+                last_error = exc
+                time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+                continue
             for message in messages:
                 if _is_bot_message(message, bot_ids):
                     return message
             time.sleep(poll_seconds)
-        raise BenchmarkError(f"Timed out waiting for bot reply after {timeout_seconds:.0f}s")
+        suffix = f"; last list error: {last_error}" if last_error else ""
+        raise BenchmarkError(
+            f"Timed out waiting for bot reply after {timeout_seconds:.0f}s{suffix}"
+        )
 
-    def _run(self, args: list[str]) -> dict[str, Any]:
-        completed = self._run_raw(args)
+    def _run(self, args: list[str], *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        completed = self._run_raw(args, timeout_seconds=timeout_seconds)
         self._record_completed(args, completed)
         if completed.returncode != 0:
             raise BenchmarkError(_format_cli_failure(args, completed.stdout, completed.stderr))
@@ -203,15 +220,29 @@ class FeishuCli:
             raise BenchmarkError("Feishu CLI returned non-object JSON")
         return parsed
 
-    def _run_raw(self, args: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            args,
-            cwd=None,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+    def _run_raw(
+        self, args: list[str], *, timeout_seconds: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                args,
+                cwd=None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            timeout_text = f"Feishu CLI command timed out after {timeout_seconds:.0f}s"
+            return subprocess.CompletedProcess(
+                args,
+                124,
+                stdout=stdout,
+                stderr=f"{stderr}\n{timeout_text}".strip(),
+            )
 
     def _record_completed(
         self, args: list[str], completed: subprocess.CompletedProcess[str]

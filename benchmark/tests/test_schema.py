@@ -53,3 +53,24 @@ def test_dataset_probes_match_reference_and_resolve_evidence() -> None:
             assert evidence_ids
             for evidence_id in evidence_ids:
                 assert seed_by_id[evidence_id].strip()
+
+
+def test_expected_memory_items_cover_probe_gold_evidence() -> None:
+    for case in load_cases(Path("datasets")):
+        preseed_evidence_ids = {
+            evidence_id
+            for item in case.expected_memory_items
+            for evidence_id in item.gold_evidence_ids
+        }
+        for probe in case.probes:
+            assert set(probe.gold_evidence_ids) <= preseed_evidence_ids
+
+
+def test_preseed_files_exist_for_all_cases_and_include_full_seed_messages() -> None:
+    for case in load_cases(Path("datasets")):
+        preseed_path = Path("datasets/preseed") / f"{case.case_id}.md"
+        assert preseed_path.exists()
+        preseed_text = preseed_path.read_text(encoding="utf-8")
+        for message in case.seed_messages:
+            assert message.content in preseed_text
+            assert message.id not in preseed_text

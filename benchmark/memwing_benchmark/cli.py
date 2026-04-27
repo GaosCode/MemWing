@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from datetime import datetime, timezone
 from hashlib import sha1
@@ -8,13 +9,13 @@ from typing import Any
 
 import typer
 
-from memwing_benchmark.adapters.openclaw_native import OpenClawNativeAdapter
+from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
 from memwing_benchmark.channels.feishu_cli import FeishuCli
 from memwing_benchmark.collectors.openclaw_trajectory import parse_trajectory_dir
 from memwing_benchmark.config import apply_overrides, load_config, sanitize_config_for_run
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.evaluators.llm_judge import JudgeResult, LlmJudge
-from memwing_benchmark.metrics.retrieval import recall_at_k
+from memwing_benchmark.metrics.retrieval import recall_at_k, unique_preserve_order
 from memwing_benchmark.models.volcengine_ark import VolcengineArkChatModel
 from memwing_benchmark.report import write_run_outputs
 from memwing_benchmark.schema import (
@@ -42,6 +43,7 @@ def main(
     cases_path: Path = typer.Option(Path("cases.json"), "--cases"),
     case_id: str | None = typer.Option(None, "--case-id"),
     live: bool = typer.Option(False, "--live"),
+    batch: bool = typer.Option(False, "--batch"),
     chat_id: str | None = typer.Option(None, "--chat-id"),
     create_chat: bool = typer.Option(False, "--create-chat"),
     configure_openclaw: bool = typer.Option(False, "--configure-openclaw"),
@@ -52,6 +54,8 @@ def main(
     message_interval_seconds: float = typer.Option(2.0, "--message-interval-seconds"),
     settle_seconds: float = typer.Option(2.0, "--settle-seconds"),
     reply_timeout_seconds: float = typer.Option(120.0, "--reply-timeout-seconds"),
+    memory_poll_interval_seconds: float = typer.Option(20.0, "--memory-poll-interval-seconds"),
+    memory_timeout_seconds: float = typer.Option(60.0, "--memory-timeout-seconds"),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -62,6 +66,7 @@ def main(
             cases_path=cases_path,
             case_id=case_id,
             live=live,
+            batch=batch,
             chat_id=chat_id,
             create_chat=create_chat,
             configure_openclaw=configure_openclaw,
@@ -72,6 +77,8 @@ def main(
             message_interval_seconds=message_interval_seconds,
             settle_seconds=settle_seconds,
             reply_timeout_seconds=reply_timeout_seconds,
+            memory_poll_interval_seconds=memory_poll_interval_seconds,
+            memory_timeout_seconds=memory_timeout_seconds,
         )
     except BenchmarkError as exc:
         typer.secho(str(exc), err=True, fg=typer.colors.RED)
@@ -85,6 +92,7 @@ def run(
     cases_path: Path,
     case_id: str | None,
     live: bool,
+    batch: bool,
     chat_id: str | None,
     create_chat: bool,
     configure_openclaw: bool,
@@ -95,9 +103,17 @@ def run(
     message_interval_seconds: float,
     settle_seconds: float,
     reply_timeout_seconds: float,
+    memory_poll_interval_seconds: float,
+    memory_timeout_seconds: float,
 ) -> Path:
     if backend != "openclaw-native":
         raise BenchmarkError("v1 only supports backend=openclaw-native")
+    if live and batch:
+        raise BenchmarkError("--batch currently supports offline retrieval runs only")
+    if memory_poll_interval_seconds <= 0:
+        raise BenchmarkError("--memory-poll-interval-seconds must be greater than 0")
+    if memory_timeout_seconds < 0:
+        raise BenchmarkError("--memory-timeout-seconds must be greater than or equal to 0")
     config = apply_overrides(
         load_config(config_path),
         runs_dir=runs_dir,
@@ -106,7 +122,7 @@ def run(
     )
     cases = load_cases(cases_path, case_id=case_id)
     run_id = make_run_id()
-    run_mode = "live" if live else "offline"
+    run_mode = "live" if live else "offline-batch" if batch else "offline"
     run_day = run_id.split("-", 1)[0]
     run_dir = Path(config.paths.runs_dir).expanduser() / run_mode / run_day / run_id
     started_at = utc_now_iso()
@@ -114,55 +130,95 @@ def run(
     adapter = OpenClawNativeAdapter(
         Path(config.paths.openclaw_repo_dir),
         agent_id=config.openclaw.agent_id,
-        workspace_dir=config.openclaw.workspace_dir,
+        workspace_dir="" if batch else config.openclaw.workspace_dir,
     )
     raw_records: dict[str, Any] = {
         "feishu": [],
         "feishu_commands": [],
         "openclaw": [],
+        "memory_polls": [],
+        "memory_searches": [],
         "side_effects": [],
+        "debug": [],
     }
-    actual_chat_id = config.feishu.chat_id
-    if live:
-        actual_chat_id = _prepare_live_chat(
-            config=config,
-            adapter=adapter,
-            raw_records=raw_records,
-            run_id=run_id,
-            create_chat=create_chat,
-            configure_openclaw=configure_openclaw,
-            restart_gateway=restart_gateway,
-            yes=yes,
-        )
-
     judge = _build_judge(config)
-    results = (
-        _run_live(
-            run_id=run_id,
-            backend=backend,
-            cases=cases,
-            config=config,
-            adapter=adapter,
-            chat_id=actual_chat_id,
-            judge=judge,
-            raw_records=raw_records,
-            message_interval_seconds=message_interval_seconds,
-            settle_seconds=settle_seconds,
-            reply_timeout_seconds=reply_timeout_seconds,
-            yes=yes,
-        )
-        if live
-        else _run_offline(
-            run_id=run_id,
-            backend=backend,
-            cases=cases,
-            config=config,
-            adapter=adapter,
-            judge=judge,
-            raw_records=raw_records,
-            yes=yes,
-        )
+    if live and judge is None:
+        raise BenchmarkError("live cross_chat_durable requires a configured judge api key")
+
+    live_chats = LiveChatIds(
+        seed_chat_id=config.feishu.seed_chat_id or config.feishu.chat_id,
+        probe_chat_id=config.feishu.probe_chat_id or config.feishu.chat_id,
     )
+    workspace_restore: LiveWorkspaceRestore | None = None
+    try:
+        if live:
+            workspace_restore = _prepare_live_workspace(
+                adapter=adapter,
+                raw_records=raw_records,
+                run_dir=run_dir,
+                yes=yes,
+            )
+            live_chats = _prepare_live_chat(
+                config=config,
+                adapter=adapter,
+                raw_records=raw_records,
+                run_id=run_id,
+                create_chat=create_chat,
+                configure_openclaw=configure_openclaw,
+                restart_gateway=restart_gateway,
+                yes=yes,
+            )
+
+        results = (
+            _run_live(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                config=config,
+                adapter=adapter,
+                chats=live_chats,
+                judge=judge,
+                raw_records=raw_records,
+                message_interval_seconds=message_interval_seconds,
+                settle_seconds=settle_seconds,
+                reply_timeout_seconds=reply_timeout_seconds,
+                memory_poll_interval_seconds=memory_poll_interval_seconds,
+                memory_timeout_seconds=memory_timeout_seconds,
+                yes=yes,
+            )
+            if live
+            else (
+                _run_offline_batch(
+                    run_id=run_id,
+                    backend=backend,
+                    cases=cases,
+                    config=config,
+                    adapter=adapter,
+                    judge=judge,
+                    raw_records=raw_records,
+                    run_dir=run_dir,
+                    yes=yes,
+                )
+                if batch
+                else _run_offline(
+                    run_id=run_id,
+                    backend=backend,
+                    cases=cases,
+                    config=config,
+                    adapter=adapter,
+                    judge=judge,
+                    raw_records=raw_records,
+                    yes=yes,
+                )
+            )
+        )
+    finally:
+        if workspace_restore is not None:
+            _restore_live_workspace(
+                adapter=adapter,
+                raw_records=raw_records,
+                restore=workspace_restore,
+            )
     raw_records["openclaw"] = [command.model_dump(mode="json") for command in adapter.commands]
     finished_at = utc_now_iso()
     run_config = {
@@ -175,7 +231,10 @@ def run(
         "finished_at": finished_at,
         "case_file": str(cases_path),
         "case_ids": [case.case_id for case in cases],
-        "chat_id": actual_chat_id,
+        "batch": batch,
+        "chat_id": live_chats.probe_chat_id,
+        "seed_chat_id": live_chats.seed_chat_id,
+        "probe_chat_id": live_chats.probe_chat_id,
         "live": live,
         "config": sanitize_config_for_run(config),
         "side_effects": raw_records["side_effects"],
@@ -185,6 +244,120 @@ def run(
     )
     typer.echo(str(run_dir))
     return run_dir
+
+
+@dataclass(frozen=True)
+class LiveChatIds:
+    seed_chat_id: str
+    probe_chat_id: str
+
+
+@dataclass(frozen=True)
+class LiveWorkspaceRestore:
+    original_workspace: str
+    memory_flush_present: bool
+    memory_flush_value: Any = None
+
+
+@dataclass(frozen=True)
+class DurablePollResult:
+    retrieved_contexts: list[str]
+    search_error: str | None
+    retrieval_result: JudgeResult | None
+    first_memory_available_at: str | None
+    durable_memory_available: bool
+    extraction_timeout: bool
+    attempts: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class MemorySearchOutcome:
+    details: MemorySearchDetails
+    error: str | None = None
+
+
+def _prepare_live_workspace(
+    *,
+    adapter: OpenClawNativeAdapter,
+    raw_records: dict[str, Any],
+    run_dir: Path,
+    yes: bool,
+) -> LiveWorkspaceRestore:
+    _debug(raw_records, "读取 OpenClaw 当前 workspace")
+    original_workspace = adapter.get_default_workspace()
+    _debug(raw_records, "读取 OpenClaw memoryFlush 配置", workspace=original_workspace)
+    original_memory_flush = adapter.get_config_value("agents.defaults.compaction.memoryFlush")
+    workspace_dir = run_dir / "openclaw-workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    _confirm_side_effect(
+        "切换 OpenClaw 到本轮 benchmark 独立 workspace、强制开启 seed memory flush 并重启 gateway",
+        yes,
+    )
+    _debug(raw_records, "切换 OpenClaw workspace", workspace=str(workspace_dir))
+    adapter.set_default_workspace(workspace_dir)
+    next_memory_flush = (
+        dict(original_memory_flush.value) if isinstance(original_memory_flush.value, dict) else {}
+    )
+    next_memory_flush["enabled"] = True
+    next_memory_flush["forceFlushTranscriptBytes"] = 1
+    _debug(raw_records, "写入 OpenClaw memoryFlush 配置", value=next_memory_flush)
+    adapter.set_config_json("agents.defaults.compaction.memoryFlush", next_memory_flush)
+    _debug(raw_records, "重启 OpenClaw gateway 以加载 workspace/memoryFlush")
+    adapter.restart_gateway()
+    raw_records["side_effects"].append(
+        {
+            "action": "isolate_openclaw_workspace",
+            "original_workspace": original_workspace,
+            "workspace": str(workspace_dir),
+        }
+    )
+    raw_records["side_effects"].append(
+        {
+            "action": "force_openclaw_memory_flush",
+            "path": "agents.defaults.compaction.memoryFlush",
+            "original_present": original_memory_flush.present,
+        }
+    )
+    return LiveWorkspaceRestore(
+        original_workspace=original_workspace,
+        memory_flush_present=original_memory_flush.present,
+        memory_flush_value=original_memory_flush.value,
+    )
+
+
+def _restore_live_workspace(
+    *,
+    adapter: OpenClawNativeAdapter,
+    raw_records: dict[str, Any],
+    restore: LiveWorkspaceRestore,
+) -> None:
+    _debug(raw_records, "恢复 OpenClaw workspace", workspace=restore.original_workspace)
+    adapter.set_default_workspace(Path(restore.original_workspace))
+    if restore.memory_flush_present:
+        _debug(
+            raw_records,
+            "恢复 OpenClaw memoryFlush 配置",
+            value=restore.memory_flush_value,
+        )
+        adapter.set_config_json(
+            "agents.defaults.compaction.memoryFlush",
+            restore.memory_flush_value,
+        )
+    else:
+        _debug(raw_records, "删除临时 OpenClaw memoryFlush 配置")
+        adapter.unset_config_value("agents.defaults.compaction.memoryFlush")
+    _debug(raw_records, "重启 OpenClaw gateway 以恢复原配置")
+    adapter.restart_gateway()
+    raw_records["side_effects"].append(
+        {"action": "restore_openclaw_workspace", "workspace": restore.original_workspace}
+    )
+    raw_records["side_effects"].append(
+        {
+            "action": "restore_openclaw_memory_flush",
+            "path": "agents.defaults.compaction.memoryFlush",
+            "restored_present": restore.memory_flush_present,
+        }
+    )
 
 
 def _prepare_live_chat(
@@ -197,35 +370,92 @@ def _prepare_live_chat(
     configure_openclaw: bool,
     restart_gateway: bool,
     yes: bool,
-) -> str:
-    chat_id = config.feishu.chat_id
+) -> LiveChatIds:
+    _debug(raw_records, "准备 Feishu live 群")
     feishu = FeishuCli(config.feishu.cli_bin)
-    required_scopes = _required_feishu_scopes(
-        will_create_chat=not config.feishu.chat_id
-        and (create_chat or config.feishu.create_chat_if_missing)
-    )
-    feishu.ensure_ready(required_scopes=required_scopes)
-    if not chat_id:
-        if not (create_chat or config.feishu.create_chat_if_missing):
-            raise BenchmarkError("live run requires --chat-id or create_chat_if_missing=true")
-        _confirm_side_effect("创建飞书测试群并邀请机器人", yes)
-        cli_bot_app_id = feishu.current_app_id()
-        created = feishu.create_chat(
-            name=f"{config.feishu.chat_name_prefix} {run_id} OpenClaw",
-            bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
+    should_create = create_chat or config.feishu.create_chat_if_missing
+    if not should_create:
+        raise BenchmarkError(
+            "formal live cross_chat_durable requires fresh seed/probe chats for every run; "
+            "use --create-chat or set feishu.create_chat_if_missing=true"
         )
-        chat_id = str(created["chat_id"])
-        raw_records["side_effects"].append({"action": "create_chat", "chat_id": chat_id})
-    if configure_openclaw or config.openclaw.configure_allowlist:
+    required_scopes = _required_feishu_scopes(will_create_chat=True)
+    _debug(raw_records, "检查 Feishu CLI 登录和 scope", scopes=required_scopes)
+    feishu.ensure_ready(required_scopes=required_scopes)
+    created_chat_ids: list[str] = []
+    _confirm_side_effect("创建飞书 seed/probe 两个测试群并邀请机器人", yes)
+    _debug(raw_records, "读取 Feishu CLI 当前 app id")
+    cli_bot_app_id = feishu.current_app_id()
+    _debug(raw_records, "Feishu CLI app id 已读取", cli_bot_app_id=cli_bot_app_id)
+    seed_chat_id = _create_named_chat(
+        feishu=feishu,
+        config=config,
+        run_id=run_id,
+        role="Seed",
+        cli_bot_app_id=cli_bot_app_id,
+        raw_records=raw_records,
+    )
+    created_chat_ids.append(seed_chat_id)
+    _debug(raw_records, "Seed 群创建完成", chat_id=seed_chat_id)
+    probe_chat_id = _create_named_chat(
+        feishu=feishu,
+        config=config,
+        run_id=run_id,
+        role="Probe",
+        cli_bot_app_id=cli_bot_app_id,
+        raw_records=raw_records,
+    )
+    created_chat_ids.append(probe_chat_id)
+    _debug(raw_records, "Probe 群创建完成", chat_id=probe_chat_id)
+    if seed_chat_id == probe_chat_id:
+        raise BenchmarkError(
+            "cross_chat_durable requires different feishu.seed_chat_id and feishu.probe_chat_id"
+        )
+    allowlist_chat_ids = (
+        [seed_chat_id, probe_chat_id]
+        if configure_openclaw or config.openclaw.configure_allowlist
+        else created_chat_ids
+    )
+    if allowlist_chat_ids:
         _confirm_side_effect("修改 OpenClaw 飞书 group allowlist/config", yes)
-        adapter.configure_feishu_group(chat_id)
-        raw_records["side_effects"].append({"action": "configure_openclaw", "chat_id": chat_id})
+        configured_chat_ids = unique_preserve_order(allowlist_chat_ids)
+        _debug(raw_records, "配置 OpenClaw 飞书群 allowlist", chat_ids=configured_chat_ids)
+        adapter.configure_feishu_groups(configured_chat_ids)
+        for chat_id in configured_chat_ids:
+            raw_records["side_effects"].append({"action": "configure_openclaw", "chat_id": chat_id})
     if restart_gateway or config.openclaw.restart_gateway:
         _confirm_side_effect("重启 OpenClaw gateway", yes)
+        _debug(raw_records, "重启 OpenClaw gateway 以加载群配置")
         adapter.restart_gateway()
         raw_records["side_effects"].append({"action": "restart_gateway"})
     raw_records["feishu_commands"].extend(
         command.model_dump(mode="json") for command in feishu.commands
+    )
+    return LiveChatIds(seed_chat_id=seed_chat_id, probe_chat_id=probe_chat_id)
+
+
+def _create_named_chat(
+    *,
+    feishu: FeishuCli,
+    config,
+    run_id: str,
+    role: str,
+    cli_bot_app_id: str,
+    raw_records: dict[str, Any],
+) -> str:
+    _debug(
+        raw_records,
+        f"开始创建 {role} 群",
+        name=f"{config.feishu.chat_name_prefix} {run_id} {role}",
+        bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
+    )
+    created = feishu.create_chat(
+        name=f"{config.feishu.chat_name_prefix} {run_id} {role}",
+        bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
+    )
+    chat_id = str(created["chat_id"])
+    raw_records["side_effects"].append(
+        {"action": f"create_{role.lower()}_chat", "chat_id": chat_id}
     )
     return chat_id
 
@@ -242,6 +472,12 @@ def _run_offline(
     yes: bool,
 ) -> list[NormalizedResult]:
     if judge is None:
+        _debug(
+            raw_records,
+            "离线检索跳过：judge api key unavailable",
+            case_count=len(cases),
+            probe_count=sum(len(case.probes) for case in cases),
+        )
         return [
             _result_from_eval(
                 run_id=run_id,
@@ -265,23 +501,77 @@ def _run_offline(
         ]
 
     if any(case.seed_messages for case in cases):
-        _confirm_side_effect(
-            "向 OpenClaw workspace 写入 benchmark preseed memory 并重建索引", yes
+        _debug(
+            raw_records,
+            "准备写入离线 preseed 并重建 OpenClaw memory index",
+            case_count=len(cases),
+            seed_message_count=sum(len(case.seed_messages) for case in cases),
         )
+        _confirm_side_effect("向 OpenClaw workspace 写入 benchmark preseed memory 并重建索引", yes)
     preseed_path = adapter.preseed_long_term_memories(cases=cases, run_id=run_id)
     if preseed_path:
+        _debug(raw_records, "离线 preseed 写入完成", path=str(preseed_path))
         raw_records["side_effects"].append(
             {"action": "preseed_openclaw_memory", "path": str(preseed_path)}
         )
+    else:
+        _debug(raw_records, "离线 preseed 无可写入内容", case_count=len(cases))
 
     results: list[NormalizedResult] = []
     for case, probe in iter_case_probes(cases):
-        retrieved_contexts, search_error = _safe_memory_search(adapter, probe.question)
+        _debug(
+            raw_records,
+            "离线检索开始",
+            case_id=case.case_id,
+            probe_id=probe.id,
+            query=probe.question,
+        )
+        search = _safe_memory_search(adapter, probe.question)
+        search_raw = _memory_search_raw(search)
+        _debug(
+            raw_records,
+            "离线检索完成",
+            case_id=case.case_id,
+            probe_id=probe.id,
+            result_count=search_raw["memory_search_result_count"],
+            latency_ms=search_raw["memory_search_latency_ms"],
+            top_score=search_raw["memory_search_top_score"],
+            top_path=search_raw["memory_search_top_path"],
+            error=search.error,
+        )
+        raw_records.setdefault("memory_searches", []).append(
+            {
+                "mode": "offline",
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                **search_raw,
+            }
+        )
+        retrieved_contexts = search.details.contexts
         retrieval_result = _evaluate_retrieval(
             judge=judge,
             case=case,
             probe=probe,
             retrieved_contexts=retrieved_contexts,
+        )
+        _debug(
+            raw_records,
+            "离线检索 judge 完成",
+            case_id=case.case_id,
+            probe_id=probe.id,
+            recall_at_1=retrieval_result.retrieval.recall_at_1
+            if retrieval_result
+            else None,
+            recall_at_3=retrieval_result.retrieval.recall_at_3
+            if retrieval_result
+            else None,
+            recall_at_5=retrieval_result.retrieval.recall_at_5
+            if retrieval_result
+            else None,
+            matched_gold_memory_ids=retrieval_result.retrieval.matched_gold_memory_ids
+            if retrieval_result
+            else [],
         )
         results.append(
             _result_from_eval(
@@ -300,8 +590,81 @@ def _run_offline(
                 memory_recall_latency_ms=None,
                 retrieval_result=retrieval_result,
                 answer_result=None,
-                raw={"mode": "offline", "memory_search_error": search_error},
+                raw={
+                    "mode": "offline",
+                    **search_raw,
+                },
             )
+        )
+    return results
+
+
+def _run_offline_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    config,
+    adapter: OpenClawNativeAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    run_dir: Path,
+    yes: bool,
+) -> list[NormalizedResult]:
+    del run_dir
+    if judge is None:
+        _debug(
+            raw_records,
+            "离线批量跳过：judge api key unavailable",
+            case_count=len(cases),
+        )
+        return _run_offline(
+            run_id=run_id,
+            backend=backend,
+            cases=cases,
+            config=config,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            yes=yes,
+        )
+
+    _confirm_side_effect(
+        "在当前 OpenClaw 默认 workspace 中按 case 写入对应 preseed memory 并重建索引",
+        yes,
+    )
+    workspace = adapter.get_default_workspace()
+    _debug(raw_records, "离线批量使用 OpenClaw 默认 workspace", workspace=workspace)
+    results: list[NormalizedResult] = []
+    raw_records["side_effects"].append(
+        {"action": "use_default_openclaw_workspace_for_offline_batch", "workspace": workspace}
+    )
+    for case in cases:
+        _debug(raw_records, "离线批量 case 开始", case_id=case.case_id, workspace=workspace)
+        case_results = _run_offline(
+            run_id=run_id,
+            backend=backend,
+            cases=[case],
+            config=config,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            yes=True,
+        )
+        results.extend(case_results)
+        _debug(
+            raw_records,
+            "离线批量 case 完成",
+            case_id=case.case_id,
+            probe_count=len(case.probes),
+            result_count=len(case_results),
+        )
+        raw_records["side_effects"].append(
+            {
+                "action": "offline_batch_case_completed",
+                "case_id": case.case_id,
+                "workspace": workspace,
+            }
         )
     return results
 
@@ -313,31 +676,45 @@ def _run_live(
     cases: list[BenchmarkCase],
     config,
     adapter: OpenClawNativeAdapter,
-    chat_id: str,
-    judge: LlmJudge | None,
+    chats: LiveChatIds,
+    judge: LlmJudge,
     raw_records: dict[str, Any],
     message_interval_seconds: float,
     settle_seconds: float,
     reply_timeout_seconds: float,
+    memory_poll_interval_seconds: float,
+    memory_timeout_seconds: float,
     yes: bool,
 ) -> list[NormalizedResult]:
+    del yes
+    _debug(raw_records, "检查 Feishu CLI 发送消息权限")
     feishu = FeishuCli(config.feishu.cli_bin)
     feishu.ensure_ready(required_scopes=_required_feishu_scopes(will_create_chat=False))
-    seed_chat_id = getattr(config.feishu, "seed_chat_id", "") or chat_id
-    probe_chat_id = getattr(config.feishu, "probe_chat_id", "") or chat_id
+    seed_chat_id = chats.seed_chat_id
+    probe_chat_id = chats.probe_chat_id
     if seed_chat_id == probe_chat_id:
-        raw_records["side_effects"].append(
-            {
-                "action": "same_chat_context_warning",
-                "chat_id": seed_chat_id,
-                "reason": "cross_chat_durable requires different seed and probe chats for formal runs",
-            }
+        raise BenchmarkError(
+            "cross_chat_durable requires different feishu.seed_chat_id and feishu.probe_chat_id"
         )
 
     results: list[NormalizedResult] = []
     for case in cases:
+        _debug(
+            raw_records,
+            "开始 live case",
+            case_id=case.case_id,
+            seed_chat_id=seed_chat_id,
+            probe_chat_id=probe_chat_id,
+        )
         seed_completed_at: str | None = None
         for message in case.seed_messages:
+            _debug(
+                raw_records,
+                "发送 seed 消息",
+                case_id=case.case_id,
+                seed_message_id=message.id,
+                chat_id=seed_chat_id,
+            )
             sent_seed = feishu.send_text(
                 chat_id=seed_chat_id,
                 text=message.content,
@@ -361,20 +738,119 @@ def _run_live(
             if message_interval_seconds > 0:
                 time.sleep(message_interval_seconds)
 
+        if case.seed_messages:
+            seed_flush_sent_at = utc_now_iso()
+            _debug(
+                raw_records, "发送 seed flush 摘要请求", case_id=case.case_id, chat_id=seed_chat_id
+            )
+            sent_seed_flush = feishu.send_text(
+                chat_id=seed_chat_id,
+                text=_build_seed_flush_text(config.feishu.mention_text),
+                idempotency_key=make_idempotency_key(
+                    run_id=run_id,
+                    backend=backend,
+                    case_id=case.case_id,
+                    item_id=f"{case.case_id}_seed_flush",
+                ),
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "seed_flush",
+                    "case_id": case.case_id,
+                    "chat_id": seed_chat_id,
+                    "result": sent_seed_flush,
+                }
+            )
+            _debug(
+                raw_records, "等待 seed flush 摘要回复", case_id=case.case_id, chat_id=seed_chat_id
+            )
+            seed_flush_reply = feishu.wait_for_bot_reply(
+                chat_id=seed_chat_id,
+                since=seed_flush_sent_at,
+                bot_ids=[config.feishu.bot_open_id, config.feishu.bot_app_id],
+                timeout_seconds=reply_timeout_seconds,
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "seed_flush_reply",
+                    "case_id": case.case_id,
+                    "chat_id": seed_chat_id,
+                    "result": seed_flush_reply,
+                }
+            )
+            seed_flush_commit_sent_at = utc_now_iso()
+            _debug(
+                raw_records, "发送 seed flush 写入请求", case_id=case.case_id, chat_id=seed_chat_id
+            )
+            sent_seed_flush_commit = feishu.send_text(
+                chat_id=seed_chat_id,
+                text=_build_seed_flush_commit_text(config.feishu.mention_text),
+                idempotency_key=make_idempotency_key(
+                    run_id=run_id,
+                    backend=backend,
+                    case_id=case.case_id,
+                    item_id=f"{case.case_id}_seed_flush_commit",
+                ),
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "seed_flush_commit",
+                    "case_id": case.case_id,
+                    "chat_id": seed_chat_id,
+                    "result": sent_seed_flush_commit,
+                }
+            )
+            _debug(
+                raw_records, "等待 seed flush 写入回复", case_id=case.case_id, chat_id=seed_chat_id
+            )
+            seed_flush_commit_reply = feishu.wait_for_bot_reply(
+                chat_id=seed_chat_id,
+                since=seed_flush_commit_sent_at,
+                bot_ids=[config.feishu.bot_open_id, config.feishu.bot_app_id],
+                timeout_seconds=reply_timeout_seconds,
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "seed_flush_commit_reply",
+                    "case_id": case.case_id,
+                    "chat_id": seed_chat_id,
+                    "result": seed_flush_commit_reply,
+                }
+            )
+            seed_completed_at = utc_now_iso()
+
         if settle_seconds > 0:
+            _debug(raw_records, "等待 seed settle", case_id=case.case_id, seconds=settle_seconds)
             time.sleep(settle_seconds)
+        _debug(raw_records, "重建 OpenClaw memory index", case_id=case.case_id)
+        adapter.memory_index()
 
         for probe in case.probes:
-            retrieved_contexts, search_error = _safe_memory_search(adapter, probe.question)
-            retrieval_result = _evaluate_retrieval(
+            _debug(raw_records, "轮询长期记忆", case_id=case.case_id, probe_id=probe.id)
+            durable_result = _poll_durable_memory(
+                adapter=adapter,
                 judge=judge,
                 case=case,
                 probe=probe,
-                retrieved_contexts=retrieved_contexts,
+                poll_interval_seconds=memory_poll_interval_seconds,
+                timeout_seconds=memory_timeout_seconds,
             )
-            first_memory_available_at = utc_now_iso() if _retrieval_hit(retrieval_result) else None
+            raw_records.setdefault("memory_polls", []).append(
+                {
+                    "case_id": case.case_id,
+                    "probe_id": probe.id,
+                    "attempts": durable_result.attempts,
+                }
+            )
             probe_text = f"{config.feishu.mention_text} {probe.question}".strip()
             probe_sent_at = utc_now_iso()
+            _debug(
+                raw_records,
+                "发送 probe 问题",
+                case_id=case.case_id,
+                probe_id=probe.id,
+                chat_id=probe_chat_id,
+            )
             sent_probe = feishu.send_text(
                 chat_id=probe_chat_id,
                 text=probe_text,
@@ -386,7 +862,19 @@ def _run_live(
                 ),
             )
             raw_records["feishu"].append(
-                {"kind": "probe", "case_id": case.case_id, "chat_id": probe_chat_id, "result": sent_probe}
+                {
+                    "kind": "probe",
+                    "case_id": case.case_id,
+                    "chat_id": probe_chat_id,
+                    "result": sent_probe,
+                }
+            )
+            _debug(
+                raw_records,
+                "等待 probe 回复",
+                case_id=case.case_id,
+                probe_id=probe.id,
+                chat_id=probe_chat_id,
             )
             reply = feishu.wait_for_bot_reply(
                 chat_id=probe_chat_id,
@@ -398,7 +886,12 @@ def _run_live(
             answer = _message_text(reply)
             latency_ms = _latency_ms(probe_sent_at, reply_received_at)
             raw_records["feishu"].append(
-                {"kind": "reply", "case_id": case.case_id, "chat_id": probe_chat_id, "result": reply}
+                {
+                    "kind": "reply",
+                    "case_id": case.case_id,
+                    "chat_id": probe_chat_id,
+                    "result": reply,
+                }
             )
 
             parsed_trajectory = parse_trajectory_dir(
@@ -409,7 +902,7 @@ def _run_live(
                 case=case,
                 probe=probe,
                 answer=answer,
-                retrieved_contexts=retrieved_contexts,
+                retrieved_contexts=durable_result.retrieved_contexts,
             )
             results.append(
                 _result_from_eval(
@@ -420,27 +913,30 @@ def _run_live(
                     chat_id=probe_chat_id,
                     seed_message_ids=[message.id for message in case.seed_messages],
                     answer=answer,
-                    retrieved_contexts=retrieved_contexts,
+                    retrieved_contexts=durable_result.retrieved_contexts,
                     retrieved_evidence_ids=[],
                     actual_tool_evidence_ids=parsed_trajectory.evidence_ids,
                     latency_ms=latency_ms,
                     tokens=parsed_trajectory.tokens,
                     memory_recall_latency_ms=parsed_trajectory.memory_recall_latency_ms,
-                    retrieval_result=retrieval_result,
+                    retrieval_result=durable_result.retrieval_result,
                     answer_result=answer_result,
                     raw={
                         "mode": "cross_chat_durable",
                         "seed_chat_id": seed_chat_id,
                         "probe_chat_id": probe_chat_id,
                         "seed_completed_at": seed_completed_at,
-                        "first_memory_available_at": first_memory_available_at,
+                        "first_memory_available_at": durable_result.first_memory_available_at,
+                        "durable_memory_available": durable_result.durable_memory_available,
+                        "extraction_timeout": durable_result.extraction_timeout,
                         "probe_sent_at": probe_sent_at,
                         "answer_received_at": reply_received_at,
                         "probe_send_result": sent_probe,
                         "reply": reply,
                         "trajectory_paths": [str(path) for path in parsed_trajectory.paths],
                         "trajectory_missing_reason": parsed_trajectory.missing_reason,
-                        "memory_search_error": search_error,
+                        "memory_search_error": durable_result.search_error,
+                        "memory_poll_attempts": durable_result.attempts,
                     },
                 )
             )
@@ -448,6 +944,70 @@ def _run_live(
         command.model_dump(mode="json") for command in feishu.commands
     )
     return results
+
+
+def _poll_durable_memory(
+    *,
+    adapter: OpenClawNativeAdapter,
+    judge: LlmJudge,
+    case: BenchmarkCase,
+    probe: Probe,
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+) -> DurablePollResult:
+    deadline = time.monotonic() + timeout_seconds
+    attempts: list[dict[str, Any]] = []
+    last_contexts: list[str] = []
+    last_error: str | None = None
+    last_result: JudgeResult | None = None
+
+    while True:
+        attempted_at = utc_now_iso()
+        search = _safe_memory_search(adapter, probe.question)
+        retrieved_contexts = search.details.contexts
+        retrieval_result = _evaluate_retrieval(
+            judge=judge,
+            case=case,
+            probe=probe,
+            retrieved_contexts=retrieved_contexts,
+        )
+        hit = _retrieval_hit(retrieval_result)
+        attempts.append(
+            {
+                "attempted_at": attempted_at,
+                "retrieved_contexts": retrieved_contexts,
+                **_memory_search_raw(search),
+                "retrieval_judge": retrieval_result.model_dump(mode="json")
+                if retrieval_result
+                else None,
+                "durable_memory_available": hit,
+            }
+        )
+        last_contexts = retrieved_contexts
+        last_error = search.error
+        last_result = retrieval_result
+        if hit:
+            return DurablePollResult(
+                retrieved_contexts=retrieved_contexts,
+                search_error=search.error,
+                retrieval_result=retrieval_result,
+                first_memory_available_at=attempted_at,
+                durable_memory_available=True,
+                extraction_timeout=False,
+                attempts=attempts,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return DurablePollResult(
+                retrieved_contexts=last_contexts,
+                search_error=last_error,
+                retrieval_result=last_result,
+                first_memory_available_at=None,
+                durable_memory_available=False,
+                extraction_timeout=True,
+                attempts=attempts,
+            )
+        time.sleep(min(poll_interval_seconds, remaining))
 
 
 def _result_from_eval(
@@ -475,6 +1035,10 @@ def _result_from_eval(
         case_id=case.case_id,
         probe_id=probe.id,
         chat_id=chat_id,
+        seed_chat_id=raw.get("seed_chat_id") if isinstance(raw.get("seed_chat_id"), str) else None,
+        probe_chat_id=raw.get("probe_chat_id")
+        if isinstance(raw.get("probe_chat_id"), str)
+        else None,
         seed_message_ids=seed_message_ids,
         probe_message_id=_nested_str(raw, "probe_send_result", "message_id"),
         reply_message_id=_nested_str(raw, "reply", "message_id"),
@@ -484,6 +1048,17 @@ def _result_from_eval(
         gold_evidence_ids=probe.gold_evidence_ids,
         retrieved_evidence_ids=retrieved_evidence_ids,
         retrieved_contexts=retrieved_contexts,
+        retrieval_result_count=_optional_int(raw.get("memory_search_result_count")),
+        retrieval_top_score=_optional_float(raw.get("memory_search_top_score")),
+        retrieval_top_vector_score=_optional_float(raw.get("memory_search_top_vector_score")),
+        retrieval_top_text_score=_optional_float(raw.get("memory_search_top_text_score")),
+        retrieval_top_path=(
+            raw.get("memory_search_top_path")
+            if isinstance(raw.get("memory_search_top_path"), str)
+            else None
+        ),
+        retrieval_top_start_line=_optional_int(raw.get("memory_search_top_start_line")),
+        retrieval_top_end_line=_optional_int(raw.get("memory_search_top_end_line")),
         retrieval_recall_at_1=(
             retrieval_result.retrieval.recall_at_1 if retrieval_result else None
         ),
@@ -513,18 +1088,33 @@ def _result_from_eval(
         temporal_correct=answer_result.answer.temporal_correct if answer_result else None,
         evidence_correct=answer_result.answer.evidence_correct if answer_result else None,
         noise_polluted=answer_result.answer.noise_polluted if answer_result else None,
-        seed_completed_at=raw.get("seed_completed_at") if isinstance(raw.get("seed_completed_at"), str) else None,
+        seed_completed_at=raw.get("seed_completed_at")
+        if isinstance(raw.get("seed_completed_at"), str)
+        else None,
         first_memory_available_at=(
             raw.get("first_memory_available_at")
             if isinstance(raw.get("first_memory_available_at"), str)
             else None
         ),
-        probe_sent_at=raw.get("probe_sent_at") if isinstance(raw.get("probe_sent_at"), str) else None,
+        durable_memory_available=(
+            raw.get("durable_memory_available")
+            if isinstance(raw.get("durable_memory_available"), bool)
+            else None
+        ),
+        extraction_timeout=(
+            raw.get("extraction_timeout")
+            if isinstance(raw.get("extraction_timeout"), bool)
+            else False
+        ),
+        probe_sent_at=raw.get("probe_sent_at")
+        if isinstance(raw.get("probe_sent_at"), str)
+        else None,
         answer_received_at=(
             raw.get("answer_received_at")
             if isinstance(raw.get("answer_received_at"), str)
             else None
         ),
+        memory_search_latency_ms=_optional_int(raw.get("memory_search_latency_ms")),
         memory_availability_latency_ms=_latency_ms(
             raw.get("seed_completed_at"), raw.get("first_memory_available_at")
         )
@@ -542,7 +1132,9 @@ def _result_from_eval(
             and isinstance(raw.get("first_memory_available_at"), str)
             else None,
             memory_write_tokens=None,
-            memory_recall_latency_ms=memory_recall_latency_ms,
+            memory_recall_latency_ms=memory_recall_latency_ms
+            if memory_recall_latency_ms is not None
+            else _optional_int(raw.get("memory_search_latency_ms")),
             memory_recall_tokens=None,
             answer_latency_ms=latency_ms,
             notes=[
@@ -627,11 +1219,31 @@ def _gold_memories(case: BenchmarkCase, memory_ids: list[str]) -> list[GoldMemor
     return [by_id[memory_id] for memory_id in memory_ids if memory_id in by_id]
 
 
-def _safe_memory_search(adapter: OpenClawNativeAdapter, question: str) -> tuple[list[str], str | None]:
+def _safe_memory_search(adapter: OpenClawNativeAdapter, question: str) -> MemorySearchOutcome:
     try:
-        return adapter.memory_search(question, max_results=5), None
+        return MemorySearchOutcome(details=adapter.memory_search_details(question, max_results=5))
     except Exception as exc:
-        return [], str(exc)
+        return MemorySearchOutcome(
+            details=MemorySearchDetails(contexts=[], results=[], latency_ms=0, raw=None),
+            error=str(exc),
+        )
+
+
+def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
+    top = search.details.results[0] if search.details.results else {}
+    return {
+        "memory_search_error": search.error,
+        "memory_search_latency_ms": search.details.latency_ms,
+        "memory_search_result_count": len(search.details.results),
+        "memory_search_results": search.details.results,
+        "memory_search_raw": search.details.raw,
+        "memory_search_top_score": top.get("score") if isinstance(top, dict) else None,
+        "memory_search_top_vector_score": top.get("vectorScore") if isinstance(top, dict) else None,
+        "memory_search_top_text_score": top.get("textScore") if isinstance(top, dict) else None,
+        "memory_search_top_path": top.get("path") if isinstance(top, dict) else None,
+        "memory_search_top_start_line": top.get("startLine") if isinstance(top, dict) else None,
+        "memory_search_top_end_line": top.get("endLine") if isinstance(top, dict) else None,
+    }
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -640,6 +1252,27 @@ def _message_text(message: dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def _build_seed_flush_text(mention_text: str) -> str:
+    mention = mention_text.strip()
+    body = (
+        "请只基于本群刚刚这组 benchmark seed 对话，整理一份可写入持久记忆的事实摘要。"
+        "现在不要声称已经写入文件，也不要编造。"
+        "保留项目名、人名、负责人、交付范围、验收人、截止时间、状态更新和明确约束。"
+        "摘要末尾单独输出 MEMWING_SEED_FLUSH_READY。"
+    )
+    return f"{mention} {body}".strip()
+
+
+def _build_seed_flush_commit_text(mention_text: str) -> str:
+    mention = mention_text.strip()
+    body = (
+        "现在执行 seed 持久记忆 flush。请把上一条事实摘要和本群 seed 对话中可跨群、跨 session "
+        "使用的事实写入 OpenClaw 持久记忆文件 memory/YYYY-MM-DD.md。只基于本群已经出现的消息，"
+        "不要编造。写入完成后只回复 MEMWING_SEED_FLUSH_DONE。"
+    )
+    return f"{mention} {body}".strip()
 
 
 def _latency_ms(start_iso: str, end_iso: str) -> int | None:
@@ -662,12 +1295,35 @@ def _nested_str(data: dict[str, Any], outer: str, inner: str) -> str | None:
     return None
 
 
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _confirm_side_effect(description: str, yes: bool) -> None:
     if yes:
         return
     confirmed = typer.confirm(f"将执行外部副作用：{description}。是否继续？")
     if not confirmed:
         raise BenchmarkError(f"用户取消：{description}")
+
+
+def _debug(raw_records: dict[str, Any], message: str, **fields: Any) -> None:
+    record = {"at": utc_now_iso(), "message": message, **fields}
+    raw_records.setdefault("debug", []).append(record)
+    suffix = ""
+    if fields:
+        suffix = " " + " ".join(f"{key}={value!r}" for key, value in fields.items())
+    typer.echo(f"[debug] {message}{suffix}", err=True)
 
 
 def _required_feishu_scopes(*, will_create_chat: bool) -> list[str]:

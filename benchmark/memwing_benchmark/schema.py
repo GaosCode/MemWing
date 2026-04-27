@@ -109,6 +109,8 @@ class NormalizedResult(BaseModel):
     case_id: str
     probe_id: str
     chat_id: str | None
+    seed_chat_id: str | None = None
+    probe_chat_id: str | None = None
     seed_message_ids: list[str] = Field(default_factory=list)
     probe_message_id: str | None = None
     reply_message_id: str | None = None
@@ -118,6 +120,13 @@ class NormalizedResult(BaseModel):
     gold_evidence_ids: list[str] = Field(default_factory=list)
     retrieved_evidence_ids: list[str] = Field(default_factory=list)
     retrieved_contexts: list[str] = Field(default_factory=list)
+    retrieval_result_count: int | None = None
+    retrieval_top_score: float | None = None
+    retrieval_top_vector_score: float | None = None
+    retrieval_top_text_score: float | None = None
+    retrieval_top_path: str | None = None
+    retrieval_top_start_line: int | None = None
+    retrieval_top_end_line: int | None = None
     retrieval_recall_at_1: bool | None = None
     retrieval_recall_at_3: bool | None = None
     retrieval_recall_at_5: bool | None = None
@@ -131,8 +140,11 @@ class NormalizedResult(BaseModel):
     noise_polluted: bool | None = None
     seed_completed_at: str | None = None
     first_memory_available_at: str | None = None
+    durable_memory_available: bool | None = None
+    extraction_timeout: bool = False
     probe_sent_at: str | None = None
     answer_received_at: str | None = None
+    memory_search_latency_ms: int | None = None
     memory_availability_latency_ms: int | None = None
     latency_ms: int | None = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)

@@ -107,6 +107,37 @@ def test_wait_for_bot_reply_matches_app_id_sender(monkeypatch) -> None:
     assert reply["sender"]["id"] == "cli_bot"
 
 
+def test_wait_for_bot_reply_times_out_when_lark_cli_hangs(monkeypatch) -> None:
+    monotonic_values = iter([0.0, 0.0, 0.6, 1.2, 1.2])
+    sleeps = []
+
+    monkeypatch.setattr("time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("time.sleep", lambda seconds: sleeps.append(seconds))
+
+    def fake_run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs.get("timeout") or 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cli = FeishuCli("lark-cli")
+
+    try:
+        cli.wait_for_bot_reply(
+            chat_id="oc_1",
+            since="2026-04-26T01:00:00+00:00",
+            bot_ids=["cli_bot"],
+            timeout_seconds=1,
+            poll_seconds=0.5,
+        )
+    except BenchmarkError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected BenchmarkError")
+
+    assert "Timed out waiting for bot reply after 1s" in message
+    assert "Feishu CLI command timed out" in message
+    assert cli.commands[0].exit_code == 124
+
+
 def test_preflight_reports_install_hint_when_binary_missing(monkeypatch) -> None:
     monkeypatch.setattr("shutil.which", lambda _: None)
     cli = FeishuCli("lark-cli")
