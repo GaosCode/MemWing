@@ -86,6 +86,33 @@ def build_scores(results: list[NormalizedResult]) -> dict[str, Any]:
                 if result.memory_search_latency_ms is not None
             ]
         ),
+        "write_recall": _avg(
+            [result.write_recall for result in results if result.write_recall is not None]
+        ),
+        "write_precision": _avg(
+            [result.write_precision for result in results if result.write_precision is not None]
+        ),
+        "avg_write_changed_file_count": _avg(
+            [
+                result.write_changed_file_count
+                for result in results
+                if result.write_changed_file_count is not None
+            ]
+        ),
+        "avg_write_written_claim_count": _avg(
+            [
+                result.write_written_claim_count
+                for result in results
+                if result.write_written_claim_count is not None
+            ]
+        ),
+        "avg_memory_write_latency_ms": _avg(
+            [
+                result.memory_write_latency_ms
+                for result in results
+                if result.memory_write_latency_ms is not None
+            ]
+        ),
         "avg_answer_latency_ms": _avg(
             [result.latency_ms for result in results if result.latency_ms is not None]
         ),
@@ -96,26 +123,39 @@ def build_scores(results: list[NormalizedResult]) -> dict[str, Any]:
 
 def collect_missing_data(results: list[NormalizedResult]) -> list[str]:
     missing: list[str] = []
-    if any(not result.tokens.available for result in results):
+    scored_results = [
+        result for result in results if result.raw.get("mode") != "memory_write_ingest"
+    ]
+    if not scored_results:
+        return []
+    if any(not result.tokens.available for result in scored_results):
         reasons = {
             result.tokens.missing_reason or "token usage unavailable"
-            for result in results
+            for result in scored_results
             if not result.tokens.available
         }
         missing.extend(sorted(reasons))
-    if any(result.actual_tool_recall_at_1 is None for result in results):
+    if any(result.actual_tool_recall_at_1 is None for result in scored_results):
         missing.append("OpenClaw trajectory not found")
-    if any(result.latency_ms is None for result in results):
+    if any(result.latency_ms is None for result in scored_results):
         missing.append("answer latency unavailable")
-    if any(result.retrieval_recall_at_5 is None for result in results):
+    if any(result.retrieval_recall_at_5 is None for result in scored_results):
         missing.append("retrieval judge unavailable")
-    if any(result.memory_search_latency_ms is None for result in results):
+    if any(
+        result.raw.get("mode") != "memory_write" and result.memory_search_latency_ms is None
+        for result in scored_results
+    ):
         missing.append("memory search latency unavailable")
-    if any(result.answer and result.answer_score is None for result in results):
+    if any(
+        result.raw.get("mode") == "memory_write" and result.write_recall is None
+        for result in scored_results
+    ):
+        missing.append("write judge unavailable")
+    if any(result.answer and result.answer_score is None for result in scored_results):
         missing.append("answer judge unavailable")
-    if any(result.raw.get("memory_search_error") for result in results):
+    if any(result.raw.get("memory_search_error") for result in scored_results):
         missing.append("OpenClaw memory search failed")
-    if any(result.extraction_timeout for result in results):
+    if any(result.extraction_timeout for result in scored_results):
         missing.append("durable memory extraction timed out")
     return sorted(set(missing))
 
@@ -152,6 +192,11 @@ def render_report(
         f"- avg_retrieval_top_vector_score: {_fmt(scores.get('avg_retrieval_top_vector_score'))}",
         f"- avg_retrieval_top_text_score: {_fmt(scores.get('avg_retrieval_top_text_score'))}",
         f"- avg_memory_search_latency_ms: {_fmt(scores.get('avg_memory_search_latency_ms'))}",
+        f"- write_recall: {_fmt(scores.get('write_recall'))}",
+        f"- write_precision: {_fmt(scores.get('write_precision'))}",
+        f"- avg_write_changed_file_count: {_fmt(scores.get('avg_write_changed_file_count'))}",
+        f"- avg_write_written_claim_count: {_fmt(scores.get('avg_write_written_claim_count'))}",
+        f"- avg_memory_write_latency_ms: {_fmt(scores.get('avg_memory_write_latency_ms'))}",
         f"- evidence_correct_rate: {_fmt(scores.get('evidence_correct_rate'))}",
         f"- avg_answer_latency_ms: {_fmt(scores.get('avg_answer_latency_ms'))}",
         "",
@@ -185,6 +230,53 @@ def render_report(
             f"{_fmt(result.retrieval_top_vector_score)} | {_fmt(result.retrieval_top_text_score)} | "
             f"{_fmt(_top_location(result))} |"
         )
+    if any(result.raw.get("mode") == "memory_write_ingest" for result in results):
+        lines.extend(
+            [
+                "",
+                "## Write Ingest",
+                "",
+                "| case_id | chat_id | sent_seed_messages | completed_at |",
+                "|---|---|---:|---|",
+            ]
+        )
+        for result in results:
+            if result.raw.get("mode") != "memory_write_ingest":
+                continue
+            lines.append(
+                f"| {result.case_id} | {_fmt(result.seed_chat_id)} | "
+                f"{len(result.seed_message_ids)} | {_fmt(result.seed_completed_at)} |"
+            )
+    if any(result.raw.get("mode") == "memory_write" for result in results):
+        lines.extend(
+            [
+                "",
+                "## Write Results",
+                "",
+                "| case_id | expected | matched | missing | recall | precision | changed_files | claims | noise | wrong | stale | timeout |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for result in results:
+            if result.raw.get("mode") != "memory_write":
+                continue
+            lines.append(
+                f"| {result.case_id} | {_fmt(result.write_expected_count)} | "
+                f"{_fmt(result.write_matched_expected_count)} | "
+                f"{_fmt(result.write_missing_expected_count)} | "
+                f"{_fmt(result.write_recall)} | {_fmt(result.write_precision)} | "
+                f"{_fmt(result.write_changed_file_count)} | "
+                f"{_fmt(result.write_written_claim_count)} | "
+                f"{_fmt(result.write_noise_count)} | {_fmt(result.write_wrong_count)} | "
+                f"{_fmt(result.write_stale_count)} | {result.extraction_timeout} |"
+            )
+        lines.extend(["", "## Written Memory Contexts", ""])
+        for result in results:
+            if not result.written_contexts:
+                continue
+            lines.extend(["", f"### {result.case_id}", ""])
+            for index, context in enumerate(result.written_contexts, start=1):
+                lines.extend(["", f"**Changed block {index}**", "", "````text", context, "````"])
     lines.extend(["", "## OpenClaw Retrieved Contexts", ""])
     if any(result.retrieved_contexts for result in results):
         lines.append(

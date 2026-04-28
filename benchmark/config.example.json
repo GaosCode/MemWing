@@ -1,32 +1,32 @@
 {
   "judge": {
     "provider": "volcengine_ark",
-    "api_key": "填火山方舟 API Key",
+    "api_key": "",
     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "model": "ep-20260423222531-dnqtj",
+    "model": "YOUR_MODEL_ID",
     "temperature": 0
   },
   "paths": {
-    "openclaw_repo_dir": "/Users/mrbrain/code/openclaw",
-    "memwing_repo_dir": "/Users/mrbrain/code/MemWing",
-    "runs_dir": "/Users/mrbrain/code/MemWing/benchmark/runs"
+    "openclaw_repo_dir": "/absolute/path/to/openclaw",
+    "memwing_repo_dir": "/absolute/path/to/MemWing",
+    "runs_dir": "/absolute/path/to/MemWing/benchmark/runs"
   },
   "feishu": {
     "cli_bin": "lark-cli",
-    "bot_app_id": "cli_xxx",
-    "bot_open_id": "ou_0453b2b52a68cf17905458ba4a215a0f",
-    "bot_name": "飞书用户5924KW的智能助手",
-    "mention_text": "<at user_id=\"ou_0453b2b52a68cf17905458ba4a215a0f\">飞书用户5924KW的智能助手</at>",
+    "bot_app_id": "YOUR_BOT_APP_ID",
+    "bot_open_id": "YOUR_BOT_OPEN_ID",
+    "bot_name": "YOUR_BOT_NAME",
+    "mention_text": "<at user_id=\"YOUR_BOT_OPEN_ID\">YOUR_BOT_NAME</at>",
     "chat_id": "",
     "seed_chat_id": "",
     "probe_chat_id": "",
-    "create_chat_if_missing": true,
+    "create_chat_if_missing": false,
     "chat_name_prefix": "MemWing Bench"
   },
   "openclaw": {
     "agent_id": "main",
     "trajectory_dir": "",
-    "configure_allowlist": true,
-    "restart_gateway": true
+    "configure_allowlist": false,
+    "restart_gateway": false
   }
 }

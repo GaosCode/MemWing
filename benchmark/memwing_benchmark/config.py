@@ -12,7 +12,7 @@ class JudgeConfig(BaseModel):
     provider: str = "volcengine_ark"
     api_key: str = ""
     base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    model: str = "ep-20260423222531-dnqtj"
+    model: str = ""
     temperature: float = 0
 
     @property
@@ -21,9 +21,9 @@ class JudgeConfig(BaseModel):
 
 
 class PathsConfig(BaseModel):
-    openclaw_repo_dir: str = "/Users/mrbrain/code/openclaw"
-    memwing_repo_dir: str = "/Users/mrbrain/code/MemWing"
-    runs_dir: str = "/Users/mrbrain/code/MemWing/benchmark/runs"
+    openclaw_repo_dir: str = ""
+    memwing_repo_dir: str = ""
+    runs_dir: str = "runs"
 
 
 class FeishuConfig(BaseModel):

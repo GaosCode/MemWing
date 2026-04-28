@@ -82,10 +82,12 @@ class OpenClawNativeAdapter:
     def memory_index(self) -> None:
         self._run(["pnpm", "openclaw", "memory", "index", "--force", "--agent", self.agent_id])
 
-    def configure_feishu_group(self, chat_id: str) -> None:
-        self.configure_feishu_groups([chat_id])
+    def configure_feishu_group(self, chat_id: str, *, require_mention: bool = True) -> None:
+        self.configure_feishu_groups([chat_id], require_mention=require_mention)
 
-    def configure_feishu_groups(self, chat_ids: list[str]) -> None:
+    def configure_feishu_groups(
+        self, chat_ids: list[str], *, require_mention: bool = True
+    ) -> None:
         chat_ids = unique_preserve_order([chat_id for chat_id in chat_ids if chat_id])
         if not chat_ids:
             return
@@ -113,7 +115,7 @@ class OpenClawNativeAdapter:
                     "config",
                     "set",
                     f"channels.feishu.groups.{chat_id}.requireMention",
-                    "true",
+                    "true" if require_mention else "false",
                     "--strict-json",
                 ]
             )
@@ -201,7 +203,7 @@ class OpenClawNativeAdapter:
                     self.agent_id,
                 ]
             )
-            parsed = loads_json(result.stdout)
+            parsed = _parse_stdout_json_value(result.stdout)
             path = _find_workspace_path(parsed)
             if path:
                 return Path(path).expanduser()
@@ -343,17 +345,9 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _parse_stdout_json_value(stdout: str) -> Any:
-    for line in reversed(stdout.splitlines()):
-        stripped = line.strip()
-        if not stripped or stripped.startswith(">"):
-            continue
-        try:
-            return loads_json(stripped)
-        except Exception:
-            pass
     decoder = json.JSONDecoder()
     for index, char in enumerate(stdout):
-        if char not in "{[":
+        if char not in "{[\"":
             continue
         try:
             parsed, _ = decoder.raw_decode(stdout[index:])

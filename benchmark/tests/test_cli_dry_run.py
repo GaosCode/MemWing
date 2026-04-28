@@ -10,6 +10,9 @@ from memwing_benchmark.cli import (
     _restore_live_workspace,
     _run_offline_batch,
     _run_live,
+    _run_write_evaluate_batch,
+    _run_write_ingest_batch,
+    _run_write_live_batch,
     app,
     make_idempotency_key,
 )
@@ -18,6 +21,7 @@ from memwing_benchmark.evaluators.llm_judge import (
     AnswerJudgeBlock,
     JudgeResult,
     RetrievalJudgeBlock,
+    WriteJudgeBlock,
 )
 from memwing_benchmark.schema import BenchmarkCase, Probe, SeedMessage
 
@@ -41,7 +45,7 @@ def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    mode_dir = tmp_path / "offline"
+    mode_dir = tmp_path / "retrieval"
     assert mode_dir.exists()
     day_dirs = list(mode_dir.iterdir())
     assert len(day_dirs) == 1
@@ -52,12 +56,44 @@ def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
     assert (run_dirs[0] / "report.md").exists()
 
 
-def test_cli_rejects_live_batch_mode() -> None:
+def test_cli_uses_datasets_as_default_cases_path(tmp_path: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["--live", "--batch"])
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            "config.example.json",
+            "--backend",
+            "openclaw-native",
+            "--mode",
+            "retrieval",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "retrieval").exists()
+
+
+def test_cli_requires_single_case_without_batch() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            "config.example.json",
+            "--backend",
+            "openclaw-native",
+            "--cases",
+            "datasets",
+        ],
+    )
 
     assert result.exit_code == 1
-    assert "--batch currently supports offline retrieval runs only" in result.output
+    assert "non-batch runs require exactly one case" in result.output
 
 
 def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:
@@ -166,6 +202,211 @@ def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:
         "case_id": "lt001",
         "workspace": original_workspace,
     }
+
+
+def test_write_live_sends_seed_without_flush_and_scores_memory_diff(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sent_messages = []
+    workspace = tmp_path / "workspace"
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir(parents=True)
+
+    class FakeFeishu:
+        commands = []
+
+        def __init__(self, _bin):
+            pass
+
+        def ensure_ready(self, *, required_scopes):
+            assert required_scopes == ["im:message.send_as_user"]
+
+        def send_text(self, *, chat_id, text, idempotency_key):
+            sent_messages.append((chat_id, text))
+            (memory_dir / "2026-04-27.md").write_text(
+                "云帆看板改造项目负责人确定为沈南。\n",
+                encoding="utf-8",
+            )
+            return {"message_id": f"msg_{len(sent_messages)}", "chat_id": chat_id}
+
+    class FakeAdapter:
+        commands = []
+
+        def get_default_workspace(self):
+            return workspace
+
+    class FakeJudge:
+        def evaluate_write(self, **kwargs):
+            assert kwargs["written_context"] == ["云帆看板改造项目负责人确定为沈南。"]
+            return JudgeResult(
+                judge_type="memory_write",
+                case_id=kwargs["case_id"],
+                probe_id="bs001_write",
+                write=WriteJudgeBlock(
+                    write_recall=1.0,
+                    write_precision=1.0,
+                    written_claim_count=1,
+                    matched_expected_memory_ids=["bs001_m1"],
+                    missing_expected_memory_ids=[],
+                ),
+            )
+
+    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="long_term_preseed",
+        seed_messages=[SeedMessage(id="bs001_s1", content="云帆负责人是沈南。")],
+        expected_memory_items=[
+            {"id": "bs001_m1", "fact": "云帆看板改造项目负责人确定为沈南。"}
+        ],
+    )
+    raw_records = {"feishu": [], "feishu_commands": [], "memory_writes": [], "side_effects": []}
+
+    results = _run_write_live_batch(
+        run_id="run1",
+        backend="openclaw-native",
+        cases=[case],
+        config=SimpleNamespace(feishu=SimpleNamespace(cli_bin="lark-cli")),
+        adapter=FakeAdapter(),
+        chats=SimpleNamespace(seed_chat_id="oc_seed", probe_chat_id="oc_probe"),
+        judge=FakeJudge(),
+        raw_records=raw_records,
+        message_interval_seconds=0,
+        settle_seconds=0,
+        memory_poll_interval_seconds=20,
+        memory_timeout_seconds=0,
+    )
+
+    assert sent_messages == [("oc_seed", "云帆负责人是沈南。")]
+    assert [record["kind"] for record in raw_records["feishu"]] == ["write_seed"]
+    assert results[0].probe_id == "bs001_write"
+    assert results[0].write_recall == 1.0
+    assert results[0].write_precision == 1.0
+    assert results[0].write_changed_file_count == 1
+    assert "云帆看板改造项目负责人确定为沈南" in results[0].written_contexts[0]
+
+
+def test_write_ingest_batch_sends_all_cases_to_one_chat(monkeypatch, tmp_path: Path) -> None:
+    sent_messages = []
+
+    class FakeFeishu:
+        commands = []
+
+        def __init__(self, _bin):
+            pass
+
+        def ensure_ready(self, *, required_scopes):
+            assert required_scopes == ["im:message.send_as_user"]
+
+        def send_text(self, *, chat_id, text, idempotency_key):
+            sent_messages.append((chat_id, text, idempotency_key))
+            return {"message_id": f"msg_{len(sent_messages)}", "chat_id": chat_id}
+
+    class FakeAdapter:
+        def get_default_workspace(self):
+            return tmp_path / "workspace"
+
+    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    cases = [
+        BenchmarkCase(
+            case_id="bs001",
+            category="long_term_preseed",
+            seed_messages=[SeedMessage(id="bs001_s1", content="负责人是沈南。")],
+        ),
+        BenchmarkCase(
+            case_id="bs002",
+            category="long_term_preseed",
+            seed_messages=[SeedMessage(id="bs002_s1", content="验收人是韩悦。")],
+        ),
+    ]
+    raw_records = {"feishu": [], "feishu_commands": [], "memory_writes": [], "side_effects": []}
+
+    results = _run_write_ingest_batch(
+        run_id="run1",
+        backend="openclaw-native",
+        cases=cases,
+        config=SimpleNamespace(feishu=SimpleNamespace(cli_bin="lark-cli")),
+        adapter=FakeAdapter(),
+        chats=SimpleNamespace(seed_chat_id="oc_ingest", probe_chat_id="oc_ingest"),
+        raw_records=raw_records,
+        message_interval_seconds=0,
+    )
+
+    assert [item[:2] for item in sent_messages] == [
+        ("oc_ingest", "负责人是沈南。"),
+        ("oc_ingest", "验收人是韩悦。"),
+    ]
+    assert [record["kind"] for record in raw_records["feishu"]] == [
+        "write_ingest_seed",
+        "write_ingest_seed",
+    ]
+    assert raw_records["memory_writes"][0]["phase"] == "ingest"
+    assert raw_records["memory_writes"][0]["sent_message_count"] == 2
+    assert [result.raw["phase"] for result in results] == ["ingest", "ingest"]
+
+
+def test_write_evaluate_batch_scores_current_workspace_memory(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "2026-04-27.md").write_text(
+        "云帆看板改造项目负责人确定为沈南。\n验收人是韩悦。\n",
+        encoding="utf-8",
+    )
+    seen_kwargs = []
+
+    class FakeAdapter:
+        def get_default_workspace(self):
+            return workspace
+
+    class FakeJudge:
+        def evaluate_write(self, **kwargs):
+            seen_kwargs.append(kwargs)
+            return JudgeResult(
+                judge_type="memory_write",
+                case_id=kwargs["case_id"],
+                probe_id=f"{kwargs['case_id']}_write",
+                write=WriteJudgeBlock(
+                    write_recall=1.0,
+                    write_precision=1.0,
+                    written_claim_count=1,
+                    matched_expected_memory_ids=[kwargs["expected_memories"][0].id],
+                    missing_expected_memory_ids=[],
+                ),
+            )
+
+    cases = [
+        BenchmarkCase(
+            case_id="bs001",
+            category="long_term_preseed",
+            expected_memory_items=[
+                {"id": "bs001_m1", "fact": "云帆看板改造项目负责人确定为沈南。"}
+            ],
+        ),
+        BenchmarkCase(
+            case_id="bs002",
+            category="long_term_preseed",
+            expected_memory_items=[{"id": "bs002_m1", "fact": "验收人是韩悦。"}],
+        ),
+    ]
+    raw_records = {"memory_writes": [], "side_effects": []}
+
+    results = _run_write_evaluate_batch(
+        run_id="run1",
+        backend="openclaw-native",
+        cases=cases,
+        adapter=FakeAdapter(),
+        judge=FakeJudge(),
+        raw_records=raw_records,
+        chat_id=None,
+    )
+
+    assert len(seen_kwargs) == 2
+    assert "Source: memory/2026-04-27.md" in seen_kwargs[0]["written_context"][0]
+    assert seen_kwargs[0]["allowed_other_memories"][0].id == "bs002_m1"
+    assert [result.write_recall for result in results] == [1.0, 1.0]
+    assert results[0].raw["phase"] == "evaluate"
+    assert raw_records["memory_writes"][0]["phase"] == "evaluate"
 
 
 def test_idempotency_key_is_short_stable_and_traceable() -> None:
@@ -439,25 +680,28 @@ def test_prepare_live_chat_creates_seed_and_probe_chats(monkeypatch) -> None:
     chats = _prepare_live_chat(
         config=config,
         adapter=SimpleNamespace(
-            configure_feishu_groups=lambda chat_ids: configured_chat_ids.extend(chat_ids)
+            configure_feishu_groups=lambda chat_ids, *, require_mention: configured_chat_ids.extend(
+                (chat_id, require_mention) for chat_id in chat_ids
+            )
         ),
         raw_records=raw_records,
         run_id="run1",
         create_chat=False,
         configure_openclaw=False,
         restart_gateway=False,
+        require_mention=True,
         yes=True,
     )
 
     assert chats.seed_chat_id == "oc_1"
     assert chats.probe_chat_id == "oc_2"
     assert created_names == ["MemWing Bench run1 Seed", "MemWing Bench run1 Probe"]
-    assert configured_chat_ids == ["oc_1", "oc_2"]
+    assert configured_chat_ids == [("oc_1", True), ("oc_2", True)]
     assert raw_records["side_effects"] == [
         {"action": "create_seed_chat", "chat_id": "oc_1"},
         {"action": "create_probe_chat", "chat_id": "oc_2"},
-        {"action": "configure_openclaw", "chat_id": "oc_1"},
-        {"action": "configure_openclaw", "chat_id": "oc_2"},
+        {"action": "configure_openclaw", "chat_id": "oc_1", "require_mention": True},
+        {"action": "configure_openclaw", "chat_id": "oc_2", "require_mention": True},
     ]
 
 
@@ -494,6 +738,7 @@ def test_prepare_live_chat_requires_fresh_chat_creation(monkeypatch) -> None:
             create_chat=False,
             configure_openclaw=False,
             restart_gateway=False,
+            require_mention=True,
             yes=True,
         )
     except BenchmarkError as exc:
@@ -538,6 +783,7 @@ def test_live_workspace_uses_one_clean_workspace_per_run(tmp_path: Path) -> None
         adapter=adapter,
         raw_records=raw_records,
         run_dir=run_dir,
+        force_memory_flush=True,
         yes=True,
     )
     _restore_live_workspace(
@@ -582,4 +828,45 @@ def test_live_workspace_uses_one_clean_workspace_per_run(tmp_path: Path) -> None
             "path": "agents.defaults.compaction.memoryFlush",
             "restored_present": True,
         },
+    ]
+
+
+def test_live_workspace_can_skip_forced_memory_flush(tmp_path: Path) -> None:
+    calls = []
+    original_workspace = str(tmp_path / "original-openclaw-workspace")
+
+    class FakeAdapter:
+        def get_default_workspace(self):
+            calls.append(("get", None))
+            return original_workspace
+
+        def set_default_workspace(self, workspace_dir):
+            calls.append(("set", str(workspace_dir)))
+
+        def restart_gateway(self):
+            calls.append(("restart", None))
+
+    raw_records = {"side_effects": []}
+    run_dir = tmp_path / "runs" / "write" / "20260427" / "run1"
+
+    restore = _prepare_live_workspace(
+        adapter=FakeAdapter(),
+        raw_records=raw_records,
+        run_dir=run_dir,
+        force_memory_flush=False,
+        yes=True,
+    )
+
+    assert restore.memory_flush_touched is False
+    assert calls == [
+        ("get", None),
+        ("set", str(run_dir / "openclaw-workspace")),
+        ("restart", None),
+    ]
+    assert raw_records["side_effects"] == [
+        {
+            "action": "isolate_openclaw_workspace",
+            "original_workspace": original_workspace,
+            "workspace": str(run_dir / "openclaw-workspace"),
+        }
     ]

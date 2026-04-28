@@ -1,0 +1,53 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*~
+.idea/
+.vscode/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python caches and local runtimes
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+# Node / frontend local artifacts
+node_modules/
+.next/
+.turbo/
+coverage/
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+tmp/
+temp/
+
+# Vendored Graphiti runtime artifacts only.
+# Keep memwing/infrastructure/graph/graphiti/**/*.py tracked.
+memwing/infrastructure/graph/graphiti/**/__pycache__/
+memwing/infrastructure/graph/graphiti/**/*.py[cod]
+memwing/infrastructure/graph/graphiti/**/.pytest_cache/
+memwing/infrastructure/graph/graphiti/**/.mypy_cache/
+memwing/infrastructure/graph/graphiti/**/.ruff_cache/
+memwing/infrastructure/graph/graphiti/**/*.db
+memwing/infrastructure/graph/graphiti/**/*.sqlite
+memwing/infrastructure/graph/graphiti/**/*.sqlite3

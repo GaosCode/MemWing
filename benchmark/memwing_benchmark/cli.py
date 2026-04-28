@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import ndiff
 import time
 from datetime import datetime, timezone
 from hashlib import sha1
@@ -40,7 +41,9 @@ def main(
     ctx: typer.Context,
     config_path: Path = typer.Option(Path("config.example.json"), "--config"),
     backend: str = typer.Option("openclaw-native", "--backend"),
-    cases_path: Path = typer.Option(Path("cases.json"), "--cases"),
+    mode: str = typer.Option("retrieval", "--mode"),
+    phase: str = typer.Option("full", "--phase"),
+    cases_path: Path = typer.Option(Path("datasets"), "--cases"),
     case_id: str | None = typer.Option(None, "--case-id"),
     live: bool = typer.Option(False, "--live"),
     batch: bool = typer.Option(False, "--batch"),
@@ -63,6 +66,8 @@ def main(
         run(
             config_path=config_path,
             backend=backend,
+            mode=mode,
+            phase=phase,
             cases_path=cases_path,
             case_id=case_id,
             live=live,
@@ -89,6 +94,8 @@ def run(
     *,
     config_path: Path,
     backend: str,
+    mode: str,
+    phase: str,
     cases_path: Path,
     case_id: str | None,
     live: bool,
@@ -108,8 +115,18 @@ def run(
 ) -> Path:
     if backend != "openclaw-native":
         raise BenchmarkError("v1 only supports backend=openclaw-native")
-    if live and batch:
-        raise BenchmarkError("--batch currently supports offline retrieval runs only")
+    if mode not in {"retrieval", "write"}:
+        raise BenchmarkError("--mode must be one of: retrieval, write")
+    if phase not in {"full", "ingest", "evaluate"}:
+        raise BenchmarkError("--phase must be one of: full, ingest, evaluate")
+    if mode != "write" and phase != "full":
+        raise BenchmarkError("--phase is only supported with --mode write")
+    if mode == "retrieval" and live and batch:
+        raise BenchmarkError("--mode retrieval --live currently supports a single case only")
+    if mode == "write" and phase in {"full", "ingest"} and not live:
+        raise BenchmarkError("--mode write --phase full/ingest requires --live")
+    if mode == "write" and phase == "evaluate" and live:
+        raise BenchmarkError("--mode write --phase evaluate reads local memory files; omit --live")
     if memory_poll_interval_seconds <= 0:
         raise BenchmarkError("--memory-poll-interval-seconds must be greater than 0")
     if memory_timeout_seconds < 0:
@@ -121,8 +138,10 @@ def run(
         trajectory_dir=trajectory_dir,
     )
     cases = load_cases(cases_path, case_id=case_id)
+    if not batch and len(cases) != 1:
+        raise BenchmarkError("non-batch runs require exactly one case; pass --case-id or --batch")
     run_id = make_run_id()
-    run_mode = "live" if live else "offline-batch" if batch else "offline"
+    run_mode = _run_mode_name(mode=mode, phase=phase, batch=batch)
     run_day = run_id.split("-", 1)[0]
     run_dir = Path(config.paths.runs_dir).expanduser() / run_mode / run_day / run_id
     started_at = utc_now_iso()
@@ -130,7 +149,7 @@ def run(
     adapter = OpenClawNativeAdapter(
         Path(config.paths.openclaw_repo_dir),
         agent_id=config.openclaw.agent_id,
-        workspace_dir="" if batch else config.openclaw.workspace_dir,
+        workspace_dir="" if batch or mode == "write" else config.openclaw.workspace_dir,
     )
     raw_records: dict[str, Any] = {
         "feishu": [],
@@ -142,8 +161,10 @@ def run(
         "debug": [],
     }
     judge = _build_judge(config)
-    if live and judge is None:
-        raise BenchmarkError("live cross_chat_durable requires a configured judge api key")
+    if live and judge is None and not (mode == "write" and phase == "ingest"):
+        raise BenchmarkError("live benchmark requires a configured judge api key")
+    if mode == "write" and phase == "evaluate" and judge is None:
+        raise BenchmarkError("--mode write --phase evaluate requires a configured judge api key")
 
     live_chats = LiveChatIds(
         seed_chat_id=config.feishu.seed_chat_id or config.feishu.chat_id,
@@ -151,67 +172,120 @@ def run(
     )
     workspace_restore: LiveWorkspaceRestore | None = None
     try:
-        if live:
+        if live and mode == "retrieval":
             workspace_restore = _prepare_live_workspace(
                 adapter=adapter,
                 raw_records=raw_records,
                 run_dir=run_dir,
+                force_memory_flush=True,
                 yes=yes,
             )
-            live_chats = _prepare_live_chat(
-                config=config,
-                adapter=adapter,
-                raw_records=raw_records,
-                run_id=run_id,
-                create_chat=create_chat,
-                configure_openclaw=configure_openclaw,
-                restart_gateway=restart_gateway,
-                yes=yes,
-            )
+        if live:
+            if mode == "write":
+                live_chats = _prepare_write_ingest_chat(
+                    config=config,
+                    adapter=adapter,
+                    raw_records=raw_records,
+                    run_id=run_id,
+                    create_chat=create_chat,
+                    configure_openclaw=configure_openclaw,
+                    restart_gateway=restart_gateway,
+                    yes=yes,
+                )
+            else:
+                live_chats = _prepare_live_chat(
+                    config=config,
+                    adapter=adapter,
+                    raw_records=raw_records,
+                    run_id=run_id,
+                    create_chat=create_chat,
+                    configure_openclaw=configure_openclaw,
+                    restart_gateway=restart_gateway,
+                    require_mention=True,
+                    yes=yes,
+                )
 
-        results = (
-            _run_live(
-                run_id=run_id,
-                backend=backend,
-                cases=cases,
-                config=config,
-                adapter=adapter,
-                chats=live_chats,
-                judge=judge,
-                raw_records=raw_records,
-                message_interval_seconds=message_interval_seconds,
-                settle_seconds=settle_seconds,
-                reply_timeout_seconds=reply_timeout_seconds,
-                memory_poll_interval_seconds=memory_poll_interval_seconds,
-                memory_timeout_seconds=memory_timeout_seconds,
-                yes=yes,
-            )
-            if live
-            else (
-                _run_offline_batch(
+        if mode == "write":
+            if phase == "ingest":
+                results = _run_write_ingest_batch(
                     run_id=run_id,
                     backend=backend,
                     cases=cases,
                     config=config,
                     adapter=adapter,
+                    chats=live_chats,
+                    raw_records=raw_records,
+                    message_interval_seconds=message_interval_seconds,
+                )
+            elif phase == "evaluate":
+                results = _run_write_evaluate_batch(
+                    run_id=run_id,
+                    backend=backend,
+                    cases=cases,
+                    adapter=adapter,
                     judge=judge,
                     raw_records=raw_records,
-                    run_dir=run_dir,
-                    yes=yes,
+                    chat_id=live_chats.seed_chat_id,
                 )
-                if batch
-                else _run_offline(
+            else:
+                results = _run_write_live_batch(
                     run_id=run_id,
                     backend=backend,
                     cases=cases,
                     config=config,
                     adapter=adapter,
+                    chats=live_chats,
                     judge=judge,
                     raw_records=raw_records,
+                    message_interval_seconds=message_interval_seconds,
+                    settle_seconds=settle_seconds,
+                    memory_poll_interval_seconds=memory_poll_interval_seconds,
+                    memory_timeout_seconds=memory_timeout_seconds,
+                )
+        else:
+            results = (
+                _run_live(
+                    run_id=run_id,
+                    backend=backend,
+                    cases=cases,
+                    config=config,
+                    adapter=adapter,
+                    chats=live_chats,
+                    judge=judge,
+                    raw_records=raw_records,
+                    message_interval_seconds=message_interval_seconds,
+                    settle_seconds=settle_seconds,
+                    reply_timeout_seconds=reply_timeout_seconds,
+                    memory_poll_interval_seconds=memory_poll_interval_seconds,
+                    memory_timeout_seconds=memory_timeout_seconds,
                     yes=yes,
                 )
+                if live
+                else (
+                    _run_offline_batch(
+                        run_id=run_id,
+                        backend=backend,
+                        cases=cases,
+                        config=config,
+                        adapter=adapter,
+                        judge=judge,
+                        raw_records=raw_records,
+                        run_dir=run_dir,
+                        yes=yes,
+                    )
+                    if batch
+                    else _run_offline(
+                        run_id=run_id,
+                        backend=backend,
+                        cases=cases,
+                        config=config,
+                        adapter=adapter,
+                        judge=judge,
+                        raw_records=raw_records,
+                        yes=yes,
+                    )
+                )
             )
-        )
     finally:
         if workspace_restore is not None:
             _restore_live_workspace(
@@ -224,6 +298,8 @@ def run(
     run_config = {
         "benchmark_version": "v1",
         "backend": backend,
+        "mode": mode,
+        "phase": phase,
         "run_id": run_id,
         "run_mode": run_mode,
         "run_day": run_day,
@@ -246,6 +322,13 @@ def run(
     return run_dir
 
 
+def _run_mode_name(*, mode: str, phase: str, batch: bool) -> str:
+    suffix = "-batch" if batch else ""
+    if mode == "write" and phase != "full":
+        return f"write-{phase}{suffix}"
+    return f"{mode}{suffix}"
+
+
 @dataclass(frozen=True)
 class LiveChatIds:
     seed_chat_id: str
@@ -255,6 +338,7 @@ class LiveChatIds:
 @dataclass(frozen=True)
 class LiveWorkspaceRestore:
     original_workspace: str
+    memory_flush_touched: bool
     memory_flush_present: bool
     memory_flush_value: Any = None
 
@@ -276,33 +360,55 @@ class MemorySearchOutcome:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class MemoryArtifactSnapshot:
+    workspace: Path
+    files: dict[str, str]
+    captured_at: str
+
+
+@dataclass(frozen=True)
+class MemoryArtifactPollResult:
+    before: MemoryArtifactSnapshot
+    after: MemoryArtifactSnapshot
+    changed_files: list[dict[str, Any]]
+    first_changed_at: str | None
+    timeout: bool
+
+
 def _prepare_live_workspace(
     *,
     adapter: OpenClawNativeAdapter,
     raw_records: dict[str, Any],
     run_dir: Path,
+    force_memory_flush: bool,
     yes: bool,
 ) -> LiveWorkspaceRestore:
     _debug(raw_records, "读取 OpenClaw 当前 workspace")
     original_workspace = adapter.get_default_workspace()
-    _debug(raw_records, "读取 OpenClaw memoryFlush 配置", workspace=original_workspace)
-    original_memory_flush = adapter.get_config_value("agents.defaults.compaction.memoryFlush")
+    original_memory_flush = None
+    if force_memory_flush:
+        _debug(raw_records, "读取 OpenClaw memoryFlush 配置", workspace=original_workspace)
+        original_memory_flush = adapter.get_config_value("agents.defaults.compaction.memoryFlush")
     workspace_dir = run_dir / "openclaw-workspace"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     _confirm_side_effect(
-        "切换 OpenClaw 到本轮 benchmark 独立 workspace、强制开启 seed memory flush 并重启 gateway",
+        "切换 OpenClaw 到本轮 benchmark 独立 workspace 并重启 gateway",
         yes,
     )
     _debug(raw_records, "切换 OpenClaw workspace", workspace=str(workspace_dir))
     adapter.set_default_workspace(workspace_dir)
-    next_memory_flush = (
-        dict(original_memory_flush.value) if isinstance(original_memory_flush.value, dict) else {}
-    )
-    next_memory_flush["enabled"] = True
-    next_memory_flush["forceFlushTranscriptBytes"] = 1
-    _debug(raw_records, "写入 OpenClaw memoryFlush 配置", value=next_memory_flush)
-    adapter.set_config_json("agents.defaults.compaction.memoryFlush", next_memory_flush)
-    _debug(raw_records, "重启 OpenClaw gateway 以加载 workspace/memoryFlush")
+    if force_memory_flush:
+        next_memory_flush = (
+            dict(original_memory_flush.value)
+            if isinstance(original_memory_flush.value, dict)
+            else {}
+        )
+        next_memory_flush["enabled"] = True
+        next_memory_flush["forceFlushTranscriptBytes"] = 1
+        _debug(raw_records, "写入 OpenClaw memoryFlush 配置", value=next_memory_flush)
+        adapter.set_config_json("agents.defaults.compaction.memoryFlush", next_memory_flush)
+    _debug(raw_records, "重启 OpenClaw gateway 以加载 workspace")
     adapter.restart_gateway()
     raw_records["side_effects"].append(
         {
@@ -311,17 +417,19 @@ def _prepare_live_workspace(
             "workspace": str(workspace_dir),
         }
     )
-    raw_records["side_effects"].append(
-        {
-            "action": "force_openclaw_memory_flush",
-            "path": "agents.defaults.compaction.memoryFlush",
-            "original_present": original_memory_flush.present,
-        }
-    )
+    if original_memory_flush is not None:
+        raw_records["side_effects"].append(
+            {
+                "action": "force_openclaw_memory_flush",
+                "path": "agents.defaults.compaction.memoryFlush",
+                "original_present": original_memory_flush.present,
+            }
+        )
     return LiveWorkspaceRestore(
         original_workspace=original_workspace,
-        memory_flush_present=original_memory_flush.present,
-        memory_flush_value=original_memory_flush.value,
+        memory_flush_touched=original_memory_flush is not None,
+        memory_flush_present=original_memory_flush.present if original_memory_flush else False,
+        memory_flush_value=original_memory_flush.value if original_memory_flush else None,
     )
 
 
@@ -333,31 +441,33 @@ def _restore_live_workspace(
 ) -> None:
     _debug(raw_records, "恢复 OpenClaw workspace", workspace=restore.original_workspace)
     adapter.set_default_workspace(Path(restore.original_workspace))
-    if restore.memory_flush_present:
-        _debug(
-            raw_records,
-            "恢复 OpenClaw memoryFlush 配置",
-            value=restore.memory_flush_value,
-        )
-        adapter.set_config_json(
-            "agents.defaults.compaction.memoryFlush",
-            restore.memory_flush_value,
-        )
-    else:
-        _debug(raw_records, "删除临时 OpenClaw memoryFlush 配置")
-        adapter.unset_config_value("agents.defaults.compaction.memoryFlush")
+    if restore.memory_flush_touched:
+        if restore.memory_flush_present:
+            _debug(
+                raw_records,
+                "恢复 OpenClaw memoryFlush 配置",
+                value=restore.memory_flush_value,
+            )
+            adapter.set_config_json(
+                "agents.defaults.compaction.memoryFlush",
+                restore.memory_flush_value,
+            )
+        else:
+            _debug(raw_records, "删除临时 OpenClaw memoryFlush 配置")
+            adapter.unset_config_value("agents.defaults.compaction.memoryFlush")
     _debug(raw_records, "重启 OpenClaw gateway 以恢复原配置")
     adapter.restart_gateway()
     raw_records["side_effects"].append(
         {"action": "restore_openclaw_workspace", "workspace": restore.original_workspace}
     )
-    raw_records["side_effects"].append(
-        {
-            "action": "restore_openclaw_memory_flush",
-            "path": "agents.defaults.compaction.memoryFlush",
-            "restored_present": restore.memory_flush_present,
-        }
-    )
+    if restore.memory_flush_touched:
+        raw_records["side_effects"].append(
+            {
+                "action": "restore_openclaw_memory_flush",
+                "path": "agents.defaults.compaction.memoryFlush",
+                "restored_present": restore.memory_flush_present,
+            }
+        )
 
 
 def _prepare_live_chat(
@@ -369,6 +479,7 @@ def _prepare_live_chat(
     create_chat: bool,
     configure_openclaw: bool,
     restart_gateway: bool,
+    require_mention: bool,
     yes: bool,
 ) -> LiveChatIds:
     _debug(raw_records, "准备 Feishu live 群")
@@ -420,9 +531,15 @@ def _prepare_live_chat(
         _confirm_side_effect("修改 OpenClaw 飞书 group allowlist/config", yes)
         configured_chat_ids = unique_preserve_order(allowlist_chat_ids)
         _debug(raw_records, "配置 OpenClaw 飞书群 allowlist", chat_ids=configured_chat_ids)
-        adapter.configure_feishu_groups(configured_chat_ids)
+        adapter.configure_feishu_groups(configured_chat_ids, require_mention=require_mention)
         for chat_id in configured_chat_ids:
-            raw_records["side_effects"].append({"action": "configure_openclaw", "chat_id": chat_id})
+            raw_records["side_effects"].append(
+                {
+                    "action": "configure_openclaw",
+                    "chat_id": chat_id,
+                    "require_mention": require_mention,
+                }
+            )
     if restart_gateway or config.openclaw.restart_gateway:
         _confirm_side_effect("重启 OpenClaw gateway", yes)
         _debug(raw_records, "重启 OpenClaw gateway 以加载群配置")
@@ -432,6 +549,68 @@ def _prepare_live_chat(
         command.model_dump(mode="json") for command in feishu.commands
     )
     return LiveChatIds(seed_chat_id=seed_chat_id, probe_chat_id=probe_chat_id)
+
+
+def _prepare_write_ingest_chat(
+    *,
+    config,
+    adapter: OpenClawNativeAdapter,
+    raw_records: dict[str, Any],
+    run_id: str,
+    create_chat: bool,
+    configure_openclaw: bool,
+    restart_gateway: bool,
+    yes: bool,
+) -> LiveChatIds:
+    _debug(raw_records, "准备 Feishu write ingest 群")
+    feishu = FeishuCli(config.feishu.cli_bin)
+    should_create = create_chat or config.feishu.create_chat_if_missing
+    if should_create:
+        required_scopes = _required_feishu_scopes(will_create_chat=True)
+        _debug(raw_records, "检查 Feishu CLI 登录和 scope", scopes=required_scopes)
+        feishu.ensure_ready(required_scopes=required_scopes)
+        _confirm_side_effect("创建飞书 write ingest 测试群并邀请机器人", yes)
+        _debug(raw_records, "读取 Feishu CLI 当前 app id")
+        cli_bot_app_id = feishu.current_app_id()
+        _debug(raw_records, "Feishu CLI app id 已读取", cli_bot_app_id=cli_bot_app_id)
+        chat_id = _create_named_chat(
+            feishu=feishu,
+            config=config,
+            run_id=run_id,
+            role="Ingest",
+            cli_bot_app_id=cli_bot_app_id,
+            raw_records=raw_records,
+        )
+        _debug(raw_records, "Ingest 群创建完成", chat_id=chat_id)
+    else:
+        chat_id = config.feishu.seed_chat_id or config.feishu.chat_id
+        if not chat_id:
+            raise BenchmarkError(
+                "write ingest requires --chat-id, feishu.chat_id, or --create-chat"
+            )
+        _debug(raw_records, "使用已有 Feishu write ingest 群", chat_id=chat_id)
+        feishu.ensure_ready(required_scopes=_required_feishu_scopes(will_create_chat=False))
+
+    if configure_openclaw or config.openclaw.configure_allowlist or should_create:
+        _confirm_side_effect("修改 OpenClaw 飞书 group allowlist/config", yes)
+        _debug(raw_records, "配置 OpenClaw 飞书 ingest 群 allowlist", chat_id=chat_id)
+        adapter.configure_feishu_group(chat_id, require_mention=False)
+        raw_records["side_effects"].append(
+            {
+                "action": "configure_openclaw",
+                "chat_id": chat_id,
+                "require_mention": False,
+            }
+        )
+    if restart_gateway or config.openclaw.restart_gateway or should_create:
+        _confirm_side_effect("重启 OpenClaw gateway", yes)
+        _debug(raw_records, "重启 OpenClaw gateway 以加载 ingest 群配置")
+        adapter.restart_gateway()
+        raw_records["side_effects"].append({"action": "restart_gateway"})
+    raw_records["feishu_commands"].extend(
+        command.model_dump(mode="json") for command in feishu.commands
+    )
+    return LiveChatIds(seed_chat_id=chat_id, probe_chat_id=chat_id)
 
 
 def _create_named_chat(
@@ -665,6 +844,308 @@ def _run_offline_batch(
                 "case_id": case.case_id,
                 "workspace": workspace,
             }
+        )
+    return results
+
+
+def _run_write_live_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    config,
+    adapter: OpenClawNativeAdapter,
+    chats: LiveChatIds,
+    judge: LlmJudge,
+    raw_records: dict[str, Any],
+    message_interval_seconds: float,
+    settle_seconds: float,
+    memory_poll_interval_seconds: float,
+    memory_timeout_seconds: float,
+) -> list[NormalizedResult]:
+    _debug(raw_records, "检查 Feishu CLI 发送消息权限")
+    feishu = FeishuCli(config.feishu.cli_bin)
+    feishu.ensure_ready(required_scopes=_required_feishu_scopes(will_create_chat=False))
+    workspace = Path(adapter.get_default_workspace()).expanduser()
+    seed_chat_id = chats.seed_chat_id
+    results: list[NormalizedResult] = []
+    for case in cases:
+        _debug(
+            raw_records,
+            "开始 write case",
+            case_id=case.case_id,
+            seed_chat_id=seed_chat_id,
+            workspace=str(workspace),
+        )
+        before = _snapshot_memory_artifacts(workspace)
+        seed_completed_at: str | None = None
+        for message in case.seed_messages:
+            _debug(
+                raw_records,
+                "发送 write seed 消息",
+                case_id=case.case_id,
+                seed_message_id=message.id,
+                chat_id=seed_chat_id,
+            )
+            sent_seed = feishu.send_text(
+                chat_id=seed_chat_id,
+                text=message.content,
+                idempotency_key=make_idempotency_key(
+                    run_id=run_id,
+                    backend=backend,
+                    case_id=case.case_id,
+                    item_id=f"write_{message.id}",
+                ),
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "write_seed",
+                    "case_id": case.case_id,
+                    "seed_message_id": message.id,
+                    "chat_id": seed_chat_id,
+                    "result": sent_seed,
+                }
+            )
+            seed_completed_at = utc_now_iso()
+            if message_interval_seconds > 0:
+                time.sleep(message_interval_seconds)
+        if settle_seconds > 0:
+            _debug(raw_records, "等待 write seed settle", case_id=case.case_id, seconds=settle_seconds)
+            time.sleep(settle_seconds)
+        poll_result = _poll_memory_artifact_change(
+            workspace=workspace,
+            before=before,
+            poll_interval_seconds=memory_poll_interval_seconds,
+            timeout_seconds=memory_timeout_seconds,
+        )
+        written_contexts = [
+            change["added_text"]
+            for change in poll_result.changed_files
+            if isinstance(change.get("added_text"), str) and change["added_text"].strip()
+        ]
+        write_result = _evaluate_write(
+            judge=judge,
+            case_id=case.case_id,
+            expected_memories=_expected_memories(case),
+            noise_memories=_noise_memories(case),
+            written_contexts=written_contexts,
+        )
+        raw_records.setdefault("memory_writes", []).append(
+            {
+                "case_id": case.case_id,
+                "workspace": str(workspace),
+                "before": _snapshot_raw(poll_result.before),
+                "after": _snapshot_raw(poll_result.after),
+                "changed_files": poll_result.changed_files,
+                "first_changed_at": poll_result.first_changed_at,
+                "timeout": poll_result.timeout,
+                "write_judge": write_result.model_dump(mode="json") if write_result else None,
+            }
+        )
+        results.append(
+            _result_from_write(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                chat_id=seed_chat_id,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                written_contexts=written_contexts,
+                changed_files=poll_result.changed_files,
+                seed_completed_at=seed_completed_at,
+                first_changed_at=poll_result.first_changed_at,
+                timeout=poll_result.timeout,
+                write_result=write_result,
+            )
+        )
+    raw_records["feishu_commands"].extend(
+        command.model_dump(mode="json") for command in feishu.commands
+    )
+    return results
+
+
+def _run_write_ingest_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    config,
+    adapter: OpenClawNativeAdapter,
+    chats: LiveChatIds,
+    raw_records: dict[str, Any],
+    message_interval_seconds: float,
+) -> list[NormalizedResult]:
+    _debug(raw_records, "检查 Feishu CLI 发送消息权限")
+    feishu = FeishuCli(config.feishu.cli_bin)
+    feishu.ensure_ready(required_scopes=_required_feishu_scopes(will_create_chat=False))
+    workspace = Path(adapter.get_default_workspace()).expanduser()
+    chat_id = chats.seed_chat_id
+    sent_by_case: dict[str, list[str]] = {case.case_id: [] for case in cases}
+    completed_by_case: dict[str, str | None] = {case.case_id: None for case in cases}
+    _debug(
+        raw_records,
+        "开始 write ingest batch",
+        case_count=len(cases),
+        chat_id=chat_id,
+        workspace=str(workspace),
+    )
+    for case in cases:
+        for message in case.seed_messages:
+            _debug(
+                raw_records,
+                "发送 write ingest seed 消息",
+                case_id=case.case_id,
+                seed_message_id=message.id,
+                chat_id=chat_id,
+            )
+            sent_seed = feishu.send_text(
+                chat_id=chat_id,
+                text=message.content,
+                idempotency_key=make_idempotency_key(
+                    run_id=run_id,
+                    backend=backend,
+                    case_id=case.case_id,
+                    item_id=f"ingest_{message.id}",
+                ),
+            )
+            raw_records["feishu"].append(
+                {
+                    "kind": "write_ingest_seed",
+                    "case_id": case.case_id,
+                    "seed_message_id": message.id,
+                    "chat_id": chat_id,
+                    "result": sent_seed,
+                }
+            )
+            sent_by_case[case.case_id].append(message.id)
+            completed_by_case[case.case_id] = utc_now_iso()
+            if message_interval_seconds > 0:
+                time.sleep(message_interval_seconds)
+    raw_records.setdefault("memory_writes", []).append(
+        {
+            "phase": "ingest",
+            "workspace": str(workspace),
+            "chat_id": chat_id,
+            "case_ids": [case.case_id for case in cases],
+            "sent_message_count": sum(len(ids) for ids in sent_by_case.values()),
+            "note": "ingest phase only sends seed messages; run --mode write --phase evaluate later.",
+        }
+    )
+    raw_records["feishu_commands"].extend(
+        command.model_dump(mode="json") for command in feishu.commands
+    )
+    return [
+        _result_from_write_ingest(
+            run_id=run_id,
+            backend=backend,
+            case=case,
+            chat_id=chat_id,
+            seed_message_ids=sent_by_case[case.case_id],
+            seed_completed_at=completed_by_case[case.case_id],
+        )
+        for case in cases
+    ]
+
+
+def _run_write_evaluate_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: OpenClawNativeAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    chat_id: str | None,
+) -> list[NormalizedResult]:
+    workspace = Path(adapter.get_default_workspace()).expanduser()
+    _debug(
+        raw_records,
+        "开始 write evaluate batch",
+        case_count=len(cases),
+        workspace=str(workspace),
+    )
+    snapshot = _snapshot_memory_artifacts(workspace)
+    written_contexts = _memory_artifact_contexts(snapshot)
+    evaluated_files = _snapshot_as_changed_files(snapshot)
+    _debug(
+        raw_records,
+        "write evaluate workspace snapshot 完成",
+        file_count=len(snapshot.files),
+        non_empty_file_count=len(written_contexts),
+        total_bytes=sum(len(text.encode("utf-8")) for text in snapshot.files.values()),
+        evaluated_file_count=len(evaluated_files),
+        files=[
+            {
+                "path": path,
+                "bytes": len(text.encode("utf-8")),
+                "lines": len(text.splitlines()),
+            }
+            for path, text in sorted(snapshot.files.items())
+        ],
+    )
+    results: list[NormalizedResult] = []
+    total_cases = len(cases)
+    for index, case in enumerate(cases, start=1):
+        expected_memories = _expected_memories(case)
+        noise_memories = _noise_memories(case)
+        allowed_other_memories = _expected_memories_for_other_cases(cases, case.case_id)
+        _debug(
+            raw_records,
+            "write evaluate case 开始",
+            case_id=case.case_id,
+            case_index=index,
+            case_count=total_cases,
+            expected_memory_count=len(expected_memories),
+            noise_memory_count=len(noise_memories),
+            allowed_other_memory_count=len(allowed_other_memories),
+            written_context_count=len(written_contexts),
+            written_context_bytes=sum(
+                len(context.encode("utf-8")) for context in written_contexts
+            ),
+        )
+        judge_started = time.monotonic()
+        _debug(raw_records, "write evaluate judge 开始", case_id=case.case_id)
+        write_result = _evaluate_write(
+            judge=judge,
+            case_id=case.case_id,
+            expected_memories=expected_memories,
+            noise_memories=noise_memories,
+            written_contexts=written_contexts,
+            allowed_other_memories=allowed_other_memories,
+        )
+        _debug(
+            raw_records,
+            "write evaluate judge 完成",
+            case_id=case.case_id,
+            duration_ms=round((time.monotonic() - judge_started) * 1000),
+            judge_available=write_result is not None,
+            write_recall=write_result.write.write_recall if write_result else None,
+            write_precision=write_result.write.write_precision if write_result else None,
+        )
+        raw_records.setdefault("memory_writes", []).append(
+            {
+                "phase": "evaluate",
+                "case_id": case.case_id,
+                "workspace": str(workspace),
+                "snapshot": _snapshot_raw(snapshot),
+                "evaluated_files": evaluated_files,
+                "write_judge": write_result.model_dump(mode="json") if write_result else None,
+            }
+        )
+        results.append(
+            _result_from_write(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                chat_id=chat_id,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                written_contexts=written_contexts,
+                changed_files=evaluated_files,
+                seed_completed_at=None,
+                first_changed_at=snapshot.captured_at if written_contexts else None,
+                timeout=False,
+                write_result=write_result,
+                phase="evaluate",
+            )
         )
     return results
 
@@ -1010,6 +1491,124 @@ def _poll_durable_memory(
         time.sleep(min(poll_interval_seconds, remaining))
 
 
+def _poll_memory_artifact_change(
+    *,
+    workspace: Path,
+    before: MemoryArtifactSnapshot,
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+) -> MemoryArtifactPollResult:
+    deadline = time.monotonic() + timeout_seconds
+    last_after = _snapshot_memory_artifacts(workspace)
+    last_changed = _diff_memory_artifacts(before, last_after)
+    while True:
+        if last_changed:
+            return MemoryArtifactPollResult(
+                before=before,
+                after=last_after,
+                changed_files=last_changed,
+                first_changed_at=last_after.captured_at,
+                timeout=False,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return MemoryArtifactPollResult(
+                before=before,
+                after=last_after,
+                changed_files=last_changed,
+                first_changed_at=None,
+                timeout=True,
+            )
+        time.sleep(min(poll_interval_seconds, remaining))
+        last_after = _snapshot_memory_artifacts(workspace)
+        last_changed = _diff_memory_artifacts(before, last_after)
+
+
+def _snapshot_memory_artifacts(workspace: Path) -> MemoryArtifactSnapshot:
+    files: dict[str, str] = {}
+    candidates: list[Path] = []
+    for name in ("MEMORY.md", "DREAMS.md"):
+        candidates.append(workspace / name)
+    memory_dir = workspace / "memory"
+    if memory_dir.exists():
+        candidates.extend(path for path in memory_dir.rglob("*.md") if path.is_file())
+    for path in sorted(set(candidates)):
+        if not path.is_file():
+            continue
+        try:
+            rel_path = path.relative_to(workspace).as_posix()
+            files[rel_path] = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return MemoryArtifactSnapshot(workspace=workspace, files=files, captured_at=utc_now_iso())
+
+
+def _diff_memory_artifacts(
+    before: MemoryArtifactSnapshot, after: MemoryArtifactSnapshot
+) -> list[dict[str, Any]]:
+    changed: list[dict[str, Any]] = []
+    paths = sorted(set(before.files) | set(after.files))
+    for rel_path in paths:
+        before_text = before.files.get(rel_path, "")
+        after_text = after.files.get(rel_path, "")
+        if before_text == after_text:
+            continue
+        added_lines = [
+            line[2:]
+            for line in ndiff(before_text.splitlines(), after_text.splitlines())
+            if line.startswith("+ ")
+        ]
+        changed.append(
+            {
+                "path": rel_path,
+                "before_bytes": len(before_text.encode("utf-8")),
+                "after_bytes": len(after_text.encode("utf-8")),
+                "added_line_count": len(added_lines),
+                "added_text": "\n".join(added_lines),
+            }
+        )
+    return changed
+
+
+def _snapshot_raw(snapshot: MemoryArtifactSnapshot) -> dict[str, Any]:
+    return {
+        "workspace": str(snapshot.workspace),
+        "captured_at": snapshot.captured_at,
+        "files": {
+            path: {"bytes": len(text.encode("utf-8")), "lines": len(text.splitlines())}
+            for path, text in snapshot.files.items()
+        },
+    }
+
+
+def _memory_artifact_contexts(snapshot: MemoryArtifactSnapshot) -> list[str]:
+    contexts: list[str] = []
+    for rel_path, text in sorted(snapshot.files.items()):
+        stripped = text.strip()
+        if not stripped:
+            continue
+        contexts.append(f"Source: {rel_path}\n{stripped}")
+    return contexts
+
+
+def _snapshot_as_changed_files(snapshot: MemoryArtifactSnapshot) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    for rel_path, text in sorted(snapshot.files.items()):
+        if not text.strip():
+            continue
+        files.append(
+            {
+                "path": rel_path,
+                "before_bytes": 0,
+                "after_bytes": len(text.encode("utf-8")),
+                "added_line_count": len(text.splitlines()),
+                "added_text": text,
+                "source": "current_workspace_snapshot",
+            }
+        )
+    return files
+
+
 def _result_from_eval(
     *,
     run_id: str,
@@ -1151,6 +1750,133 @@ def _result_from_eval(
     )
 
 
+def _result_from_write(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    chat_id: str | None,
+    seed_message_ids: list[str],
+    written_contexts: list[str],
+    changed_files: list[dict[str, Any]],
+    seed_completed_at: str | None,
+    first_changed_at: str | None,
+    timeout: bool,
+    write_result: JudgeResult | None,
+    phase: str = "full",
+) -> NormalizedResult:
+    expected_count = len(case.expected_memory_items)
+    write = write_result.write if write_result else None
+    matched_count = len(write.matched_expected_memory_ids) if write else None
+    missing_count = (
+        len(write.missing_expected_memory_ids)
+        if write and write.missing_expected_memory_ids
+        else (expected_count - matched_count if matched_count is not None else None)
+    )
+    unexpected_count = len(write.unexpected_facts) if write else None
+    noise_count = len(write.noise_facts) if write else None
+    wrong_count = len(write.wrong_facts) if write else None
+    stale_count = len(write.stale_facts) if write else None
+    memory_write_latency_ms = (
+        _latency_ms(seed_completed_at, first_changed_at)
+        if seed_completed_at and first_changed_at
+        else None
+    )
+    return NormalizedResult(
+        run_id=run_id,
+        backend=backend,
+        case_id=case.case_id,
+        probe_id=f"{case.case_id}_write",
+        chat_id=chat_id,
+        seed_chat_id=chat_id,
+        seed_message_ids=seed_message_ids,
+        question="memory_write",
+        answer="",
+        expected_answer="\n".join(item.fact for item in case.expected_memory_items),
+        gold_evidence_ids=[item.id for item in case.expected_memory_items],
+        retrieved_contexts=[],
+        written_contexts=written_contexts,
+        durable_memory_available=bool(changed_files),
+        extraction_timeout=timeout,
+        seed_completed_at=seed_completed_at,
+        first_memory_available_at=first_changed_at,
+        memory_write_latency_ms=memory_write_latency_ms,
+        memory_availability_latency_ms=memory_write_latency_ms,
+        write_expected_count=expected_count,
+        write_matched_expected_count=matched_count,
+        write_missing_expected_count=missing_count,
+        write_unexpected_count=unexpected_count,
+        write_noise_count=noise_count,
+        write_wrong_count=wrong_count,
+        write_stale_count=stale_count,
+        write_changed_file_count=len(changed_files),
+        write_written_claim_count=write.written_claim_count if write else None,
+        write_recall=write.write_recall if write else None,
+        write_precision=write.write_precision if write else None,
+        tokens=TokenUsage(available=False, missing_reason="write mode does not collect tokens"),
+        observability=Observability(
+            memory_write_latency_ms=memory_write_latency_ms,
+            memory_availability_latency_ms=memory_write_latency_ms,
+            notes=[_write_observability_note(phase)],
+        ),
+        raw={
+            "mode": "memory_write",
+            "phase": phase,
+            "seed_completed_at": seed_completed_at,
+            "first_memory_available_at": first_changed_at,
+            "durable_memory_available": bool(changed_files),
+            "extraction_timeout": timeout,
+            "changed_memory_files": changed_files,
+            "write_judge": write_result.model_dump(mode="json") if write_result else None,
+        },
+    )
+
+
+def _result_from_write_ingest(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    chat_id: str,
+    seed_message_ids: list[str],
+    seed_completed_at: str | None,
+) -> NormalizedResult:
+    return NormalizedResult(
+        run_id=run_id,
+        backend=backend,
+        case_id=case.case_id,
+        probe_id=f"{case.case_id}_write_ingest",
+        chat_id=chat_id,
+        seed_chat_id=chat_id,
+        probe_chat_id=chat_id,
+        seed_message_ids=seed_message_ids,
+        question="memory_write_ingest",
+        answer="",
+        expected_answer="\n".join(item.fact for item in case.expected_memory_items),
+        gold_evidence_ids=[item.id for item in case.expected_memory_items],
+        durable_memory_available=None,
+        extraction_timeout=False,
+        seed_completed_at=seed_completed_at,
+        tokens=TokenUsage(available=False, missing_reason="write ingest does not collect tokens"),
+        observability=Observability(
+            notes=[
+                "Write ingest phase only sends seed messages; evaluate memory after OpenClaw finishes writing.",
+            ],
+        ),
+        raw={
+            "mode": "memory_write_ingest",
+            "phase": "ingest",
+            "seed_completed_at": seed_completed_at,
+        },
+    )
+
+
+def _write_observability_note(phase: str) -> str:
+    if phase == "evaluate":
+        return "Write evaluate phase scores current durable memory files without sending Feishu messages."
+    return "Write mode evaluates durable memory file diffs without forced flush."
+
+
 def _build_judge(config) -> LlmJudge | None:
     if not config.judge.has_api_key:
         return None
@@ -1209,6 +1935,26 @@ def _evaluate_answer(
     )
 
 
+def _evaluate_write(
+    *,
+    judge: LlmJudge | None,
+    case_id: str,
+    expected_memories: list[GoldMemory],
+    noise_memories: list[GoldMemory],
+    written_contexts: list[str],
+    allowed_other_memories: list[GoldMemory] | None = None,
+) -> JudgeResult | None:
+    if judge is None:
+        return None
+    return judge.evaluate_write(
+        case_id=case_id,
+        expected_memories=expected_memories,
+        noise_memories=noise_memories,
+        written_context=written_contexts,
+        allowed_other_memories=allowed_other_memories,
+    )
+
+
 def _gold_memories(case: BenchmarkCase, memory_ids: list[str]) -> list[GoldMemory]:
     by_id = {
         message.id: GoldMemory(id=message.id, time=message.time, fact=message.content)
@@ -1217,6 +1963,31 @@ def _gold_memories(case: BenchmarkCase, memory_ids: list[str]) -> list[GoldMemor
     for item in case.expected_memory_items:
         by_id.setdefault(item.id, GoldMemory(id=item.id, time=None, fact=item.fact))
     return [by_id[memory_id] for memory_id in memory_ids if memory_id in by_id]
+
+
+def _expected_memories(case: BenchmarkCase) -> list[GoldMemory]:
+    return [
+        GoldMemory(id=item.id, time=None, fact=item.fact) for item in case.expected_memory_items
+    ]
+
+
+def _expected_memories_for_other_cases(
+    cases: list[BenchmarkCase], current_case_id: str
+) -> list[GoldMemory]:
+    return [
+        GoldMemory(id=item.id, time=None, fact=item.fact)
+        for case in cases
+        if case.case_id != current_case_id
+        for item in case.expected_memory_items
+    ]
+
+
+def _noise_memories(case: BenchmarkCase) -> list[GoldMemory]:
+    return [
+        GoldMemory(id=message.id, time=message.time, fact=message.content)
+        for message in case.seed_messages
+        if not message.should_write_memory
+    ]
 
 
 def _safe_memory_search(adapter: OpenClawNativeAdapter, question: str) -> MemorySearchOutcome:

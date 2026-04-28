@@ -120,6 +120,7 @@ class NormalizedResult(BaseModel):
     gold_evidence_ids: list[str] = Field(default_factory=list)
     retrieved_evidence_ids: list[str] = Field(default_factory=list)
     retrieved_contexts: list[str] = Field(default_factory=list)
+    written_contexts: list[str] = Field(default_factory=list)
     retrieval_result_count: int | None = None
     retrieval_top_score: float | None = None
     retrieval_top_vector_score: float | None = None
@@ -145,6 +146,18 @@ class NormalizedResult(BaseModel):
     probe_sent_at: str | None = None
     answer_received_at: str | None = None
     memory_search_latency_ms: int | None = None
+    memory_write_latency_ms: int | None = None
+    write_expected_count: int | None = None
+    write_matched_expected_count: int | None = None
+    write_missing_expected_count: int | None = None
+    write_unexpected_count: int | None = None
+    write_noise_count: int | None = None
+    write_wrong_count: int | None = None
+    write_stale_count: int | None = None
+    write_changed_file_count: int | None = None
+    write_written_claim_count: int | None = None
+    write_recall: float | None = None
+    write_precision: float | None = None
     memory_availability_latency_ms: int | None = None
     latency_ms: int | None = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)

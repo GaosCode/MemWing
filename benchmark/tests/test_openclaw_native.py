@@ -84,6 +84,24 @@ def test_memory_search_extracts_json_after_pnpm_prefix(monkeypatch) -> None:
     assert adapter.memory_search("负责人是谁") == ["项目负责人是沈南。"]
 
 
+def test_parses_pretty_json_after_pnpm_prefix(monkeypatch) -> None:
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+    stdout = (
+        "> openclaw@2026.4.24 openclaw /tmp/openclaw\n"
+        "> node scripts/run-node.mjs memory search --json\n\n"
+        "[\n"
+        "  {\n"
+        '    "status": {\n'
+        '      "workspaceDir": "/tmp/openclaw-workspace"\n'
+        "    }\n"
+        "  }\n"
+        "]\n"
+    )
+    monkeypatch.setattr(adapter, "_run", lambda args: _command_record(args, stdout))
+
+    assert adapter.resolve_workspace() == Path("/tmp/openclaw-workspace")
+
+
 def test_configure_feishu_group_preserves_allowlist_with_pnpm_prefix(monkeypatch) -> None:
     adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
     commands = []
@@ -155,6 +173,36 @@ def test_configure_feishu_groups_writes_allowlist_once(monkeypatch) -> None:
         "channels.feishu.groups.oc_seed.requireMention",
         "channels.feishu.groups.oc_probe.requireMention",
     ]
+    assert [args[5] for args in require_mention_sets] == ["true", "true"]
+
+
+def test_configure_feishu_groups_can_disable_require_mention(monkeypatch) -> None:
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+    commands = []
+
+    def fake_run_full(args):
+        commands.append(args)
+        if args[:5] == [
+            "pnpm",
+            "openclaw",
+            "config",
+            "get",
+            "channels.feishu.groupAllowFrom",
+        ]:
+            return _command_result(args, "[]")
+        return _command_result(args, "{}")
+
+    monkeypatch.setattr(adapter, "_run_full", fake_run_full)
+
+    adapter.configure_feishu_groups(["oc_seed"], require_mention=False)
+
+    require_mention_sets = [
+        args
+        for args in commands
+        if args[:4] == ["pnpm", "openclaw", "config", "set"] and "requireMention" in args[4]
+    ]
+    assert require_mention_sets[0][4] == "channels.feishu.groups.oc_seed.requireMention"
+    assert require_mention_sets[0][5] == "false"
 
 
 def test_get_default_workspace_parses_json_string_with_pnpm_prefix(monkeypatch) -> None:
@@ -167,6 +215,18 @@ def test_get_default_workspace_parses_json_string_with_pnpm_prefix(monkeypatch) 
     monkeypatch.setattr(adapter, "_run_full", lambda args: _command_result(args, stdout))
 
     assert adapter.get_default_workspace() == "/tmp/openclaw-workspace"
+
+
+def test_resolve_workspace_parses_memory_status_with_pnpm_prefix(monkeypatch) -> None:
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+    stdout = (
+        "> openclaw@2026.4.24 openclaw /tmp/openclaw\n"
+        "> node scripts/run-node.mjs memory status --deep --json --agent main\n\n"
+        '[{"agentId":"main","status":{"workspaceDir":"/tmp/openclaw-workspace"}}]'
+    )
+    monkeypatch.setattr(adapter, "_run", lambda args: _command_record(args, stdout))
+
+    assert adapter.resolve_workspace() == Path("/tmp/openclaw-workspace")
 
 
 def test_get_config_value_handles_missing_path(monkeypatch) -> None:
@@ -230,3 +290,7 @@ def _command_result(args: list[str], stdout: str) -> CommandResult:
         stdout=stdout,
         stderr="",
     )
+
+
+def _command_record(args: list[str], stdout: str) -> CommandRecord:
+    return CommandRecord(command=args, cwd="/tmp/openclaw", exit_code=0, stdout=stdout)
