@@ -22,6 +22,7 @@ from memwing.infrastructure.platforms.feishu_security import (
     InMemoryFeishuReplayProtector,
     NoopFeishuAuditSink,
     compute_feishu_signature,
+    has_formal_signature_headers,
     normalize_headers,
     parse_timestamp,
     payload_from_decrypted,
@@ -38,11 +39,6 @@ from memwing.ports.platform_webhook import PlatformWebhookKind, PlatformWebhookR
 
 FeishuWebhookKind = PlatformWebhookKind
 FeishuWebhookResult = PlatformWebhookResult
-FORMAL_SIGNATURE_HEADER_NAMES = (
-    "x-lark-request-timestamp",
-    "x-lark-request-nonce",
-    "x-lark-signature",
-)
 
 
 class FeishuDecryptor(Protocol):
@@ -92,13 +88,9 @@ class FeishuWebhookHandler:
 
         raw_hash = raw_payload_hash(body)
         request_headers = normalize_headers(headers)
-        if not _has_formal_signature_header(request_headers):
-            challenge_payload = self._decode_body_for_challenge(body)
-        else:
-            challenge_payload = None
-        if challenge_payload is not None:
-            challenge = await self._challenge_from_payload(
-                challenge_payload,
+        if not has_formal_signature_headers(request_headers):
+            challenge = await self._challenge_from_body_before_formal_verification(
+                body,
                 raw_hash,
             )
             if challenge is not None:
@@ -183,6 +175,18 @@ class FeishuWebhookHandler:
             return self._decode_body(body)
         except SchemaValidationError:
             return None
+
+    async def _challenge_from_body_before_formal_verification(
+        self,
+        body: bytes,
+        raw_payload_hash: str,
+    ) -> str | None:
+        payload = self._decode_body_for_challenge(body)
+        if payload is None:
+            return None
+        if "encrypt" in payload:
+            payload = await self._decrypt_payload(payload["encrypt"], raw_payload_hash)
+        return await self._challenge_from_payload(payload, raw_payload_hash)
 
     def _decode_body(self, body: bytes) -> JsonObject:
         try:
@@ -337,7 +341,3 @@ class FeishuWebhookHandler:
         )
         if inspect.isawaitable(result):
             await result
-
-
-def _has_formal_signature_header(headers: Mapping[str, str]) -> bool:
-    return any(header_name in headers for header_name in FORMAL_SIGNATURE_HEADER_NAMES)

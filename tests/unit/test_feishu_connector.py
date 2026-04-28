@@ -86,7 +86,7 @@ def test_signed_encrypted_challenge_uses_decryptor_after_formal_signature() -> N
     assert decryptor.calls == ["decrypt:cipher_challenge"]
 
 
-def test_unsigned_encrypted_event_fails_before_decrypting() -> None:
+def test_unsigned_encrypted_event_fails_formal_security_after_challenge_probe() -> None:
     audit = FakeAuditSink()
     decryptor = FakeDecryptor(_message_payload())
     body = b'{"encrypt":"cipher_event"}'
@@ -106,7 +106,7 @@ def test_unsigned_encrypted_event_fails_before_decrypting() -> None:
             )
         )
 
-    assert decryptor.calls == []
+    assert decryptor.calls == ["decrypt:cipher_event"]
     assert [record.reason_code for record in audit.records] == ["timestamp_missing"]
 
 
