@@ -6,6 +6,7 @@ from memwing.api.schemas import (
     AgentMemoryQuery,
     AgentRuntimeRef,
     OpenClawNativeMemorySearchRequest,
+    SchemaValidationError,
 )
 from memwing.core.scope import MemoryScope
 
@@ -77,3 +78,50 @@ def test_openclaw_native_memory_request_translates_max_results_to_limit() -> Non
     assert agent_query.sort == "relevance"
     assert agent_query.min_score == 0
     assert agent_query.scope is scope
+
+
+def test_openclaw_native_memory_request_preserves_search_contract_fields() -> None:
+    runtime_ref = AgentRuntimeRef(
+        runtime="openclaw",
+        agent_id="agent_001",
+        workspace_id="workspace_001",
+        session_id="session_001",
+    )
+    scope = MemoryScope(project_memory_space_id="project_001", group_id="group_001")
+    native_request = OpenClawNativeMemorySearchRequest(
+        runtime_ref=runtime_ref,
+        query="demo scope",
+        max_results=7,
+        mode="history",
+        min_score=0.25,
+        scope=scope,
+    )
+
+    agent_query = native_request.to_agent_memory_query()
+
+    assert agent_query.mode == "history"
+    assert agent_query.min_score == 0.25
+    assert agent_query.limit == 7
+
+
+def test_openclaw_native_memory_request_rejects_invalid_search_contract_fields() -> None:
+    runtime_ref = AgentRuntimeRef(runtime="openclaw", agent_id="agent_001")
+    scope = MemoryScope(project_memory_space_id="project_001", group_id="group_001")
+
+    with pytest.raises(SchemaValidationError, match="mode"):
+        OpenClawNativeMemorySearchRequest(
+            runtime_ref=runtime_ref,
+            query="demo scope",
+            max_results=7,
+            mode="all",  # type: ignore[arg-type]
+            scope=scope,
+        )
+
+    with pytest.raises(SchemaValidationError, match="min_score"):
+        OpenClawNativeMemorySearchRequest(
+            runtime_ref=runtime_ref,
+            query="demo scope",
+            max_results=7,
+            min_score=-0.1,
+            scope=scope,
+        )
