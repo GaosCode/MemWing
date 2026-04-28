@@ -113,6 +113,56 @@ def test_bad_signature_is_audited_and_not_decrypted() -> None:
     assert "cipher_event" not in str(audit.records[0].details)
 
 
+def test_signed_invalid_json_with_bad_signature_audits_signature_before_schema() -> None:
+    audit = FakeAuditSink()
+    body = b"{not-json"
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="signature_mismatch"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={
+                    "X-Lark-Request-Timestamp": str(int(RECEIVED_AT.timestamp())),
+                    "X-Lark-Request-Nonce": "nonce_001",
+                    "X-Lark-Signature": "bad",
+                },
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert [record.reason_code for record in audit.records] == ["signature_mismatch"]
+
+
+def test_signed_invalid_json_with_valid_signature_schemas_after_replay() -> None:
+    audit = FakeAuditSink()
+    calls: list[str] = []
+    replay = RecordingReplayProtector(calls)
+    body = b"{not-json"
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        replay_protector=replay,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="schema_invalid"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers=_signed_headers(body),
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert calls == ["replay"]
+    assert [record.reason_code for record in audit.records] == ["schema_invalid"]
+
+
 def test_replay_is_audited_by_timestamp_nonce_and_raw_hash() -> None:
     audit = FakeAuditSink()
     body = json.dumps(_message_payload()).encode()

@@ -115,15 +115,20 @@ class FeishuConnector:
             await self._fail("body_too_large", raw_hash, 413)
 
         request_headers = normalize_headers(headers)
-        payload = await self._parse_body(body, raw_hash)
-        challenge = await self._challenge_from_payload(payload, request_headers, raw_hash)
-        if challenge is not None:
-            return FeishuWebhookResult(
-                kind="challenge",
-                status_code=200,
-                body={"challenge": challenge},
-                raw_payload_hash=raw_hash,
+        challenge_payload = self._decode_body_for_challenge(body)
+        if challenge_payload is not None:
+            challenge = await self._challenge_from_payload(
+                challenge_payload,
+                request_headers,
+                raw_hash,
             )
+            if challenge is not None:
+                return FeishuWebhookResult(
+                    kind="challenge",
+                    status_code=200,
+                    body={"challenge": challenge},
+                    raw_payload_hash=raw_hash,
+                )
 
         raw_request = PlatformRawRequest(
             platform="feishu",
@@ -133,6 +138,7 @@ class FeishuConnector:
             raw_payload_hash=raw_hash,
         )
         await self._verify_formal_request(raw_request)
+        payload = await self._parse_body(body, raw_hash)
         if "encrypt" in payload:
             payload = await self._decrypt_payload(payload["encrypt"], raw_hash)
 
@@ -185,16 +191,28 @@ class FeishuConnector:
 
     async def _parse_body(self, body: bytes, raw_payload_hash: str) -> JsonObject:
         try:
-            parsed = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return self._decode_body(body)
+        except SchemaValidationError as exc:
             await self._fail(
                 "schema_invalid",
                 raw_payload_hash,
                 400,
-                {"message": f"invalid json: {exc.__class__.__name__}"},
+                {"message": str(exc)},
             )
+
+    def _decode_body_for_challenge(self, body: bytes) -> JsonObject | None:
+        try:
+            return self._decode_body(body)
+        except SchemaValidationError:
+            return None
+
+    def _decode_body(self, body: bytes) -> JsonObject:
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SchemaValidationError(f"invalid json: {exc.__class__.__name__}") from exc
         if not isinstance(parsed, dict):
-            await self._fail("schema_invalid", raw_payload_hash, 400, {"message": "body"})
+            raise SchemaValidationError("body must be a json object")
         return to_json_object(parsed)
 
     async def _challenge_from_payload(
