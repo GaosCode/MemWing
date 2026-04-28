@@ -1,9 +1,23 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const plugin = require("../src/index.js");
+
+test("manifest config schema accepts documented MemWing base URL", () => {
+  const manifestPath = path.resolve(__dirname, "..", "openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const schema = manifest.configSchema;
+
+  assert.equal(schema.type, "object");
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(Object.keys(schema.properties), ["memwingBaseUrl"]);
+  assert.equal(schema.properties.memwingBaseUrl.type, "string");
+  assert.equal(schema.properties.memwingBaseUrl.minLength, 1);
+});
 
 test("registers MemWing context engine, hooks, tools, and native shims", async () => {
   const registered = captureRegistrations();

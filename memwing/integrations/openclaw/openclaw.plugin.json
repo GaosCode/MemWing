@@ -8,6 +8,12 @@
   },
   "configSchema": {
     "type": "object",
+    "properties": {
+      "memwingBaseUrl": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "additionalProperties": false
   },
   "permissions": {
