@@ -1,3 +1,34 @@
+POSTGRES_LIKE_ESCAPE = "!"
+
+SESSION_KEY_PATTERN_LIKE_SQL = f"""
+replace(
+    replace(
+        replace(
+            replace(session_key_pattern, '{POSTGRES_LIKE_ESCAPE}', '{POSTGRES_LIKE_ESCAPE}{POSTGRES_LIKE_ESCAPE}'),
+            '%',
+            '{POSTGRES_LIKE_ESCAPE}%'
+        ),
+        '_',
+        '{POSTGRES_LIKE_ESCAPE}_'
+    ),
+    '*',
+    '%'
+) ESCAPE '{POSTGRES_LIKE_ESCAPE}'
+"""
+
+
+def session_pattern_to_postgres_like(pattern: str) -> str:
+    parts: list[str] = []
+    for char in pattern:
+        if char == "*":
+            parts.append("%")
+        elif char in (POSTGRES_LIKE_ESCAPE, "%", "_"):
+            parts.append(f"{POSTGRES_LIKE_ESCAPE}{char}")
+        else:
+            parts.append(char)
+    return "".join(parts)
+
+
 _INSERT_SOURCE_EVENT_SQL = """
 INSERT INTO source_events (
     id, project_memory_space_id, group_id, thread_id, shared_group_id,

@@ -3,6 +3,7 @@
 import asyncio
 
 from memwing.infrastructure.db.postgres import PostgresDataStore
+from memwing.infrastructure.db.postgres_sql import session_pattern_to_postgres_like
 
 from tests.unit.postgres_store_fixtures import (
     FakePostgresConnection,
@@ -65,6 +66,13 @@ def test_postgres_source_insert_if_absent_loads_existing_conflict_row() -> None:
 
     assert "SELECT *\nFROM source_events" in connection.calls[1][1]
     assert connection.calls[1][2]["runtime_event_idempotency_key"] == "runtime-key-001"
+
+
+def test_postgres_session_key_pattern_like_escapes_sql_wildcards() -> None:
+    assert session_pattern_to_postgres_like("feature/*") == "feature/%"
+    assert session_pattern_to_postgres_like("session_100%_*") == "session!_100!%!_%"
+    assert session_pattern_to_postgres_like(r"path\\*") == r"path\\%"
+    assert session_pattern_to_postgres_like("bang!_*") == "bang!!!_%"
 
 
 def test_postgres_scope_binding_queries_preserve_authoritative_server_lookup() -> None:

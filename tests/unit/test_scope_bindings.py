@@ -9,7 +9,7 @@ from memwing.core.scope import (
     ProjectMemorySpace,
     RuntimeScopeBinding,
 )
-from memwing.core.scope_patterns import session_pattern_to_sql_like
+from memwing.core.scope_patterns import session_pattern_matches
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 
 
@@ -138,7 +138,8 @@ def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals()
     assert matched is not None
 
 
-def test_runtime_session_key_pattern_sql_like_escapes_only_sql_wildcards() -> None:
-    assert session_pattern_to_sql_like("feature/*") == "feature/%"
-    assert session_pattern_to_sql_like("session_100%_*") == "session!_100!%!_%"
-    assert session_pattern_to_sql_like("bang!_*") == "bang!!!_%"
+def test_runtime_session_key_pattern_treats_only_star_as_wildcard() -> None:
+    assert session_pattern_matches("feature/*", "feature/lane-a")
+    assert session_pattern_matches("session_100%_*", "session_100%_more")
+    assert session_pattern_matches(r"path\\*", r"path\\child")
+    assert not session_pattern_matches("session_100%_*", "sessionX100Z_more")

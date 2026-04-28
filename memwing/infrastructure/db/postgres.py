@@ -10,8 +10,8 @@ from memwing.core.scope import (
     ProjectMemorySpace,
     RuntimeScopeBinding,
 )
-from memwing.core.scope_patterns import SQL_LIKE_ESCAPE
 
+from .postgres_sql import SESSION_KEY_PATTERN_LIKE_SQL
 from .postgres_repositories import (
     PostgresAuditEventRepository,
     PostgresExecutor,
@@ -25,22 +25,6 @@ from .postgres_rows import (
     project_memory_space_from_row,
     runtime_scope_binding_from_row,
 )
-
-_SESSION_KEY_PATTERN_LIKE_SQL = f"""
-replace(
-    replace(
-        replace(
-            replace(session_key_pattern, '{SQL_LIKE_ESCAPE}', '{SQL_LIKE_ESCAPE}{SQL_LIKE_ESCAPE}'),
-            '%',
-            '{SQL_LIKE_ESCAPE}%'
-        ),
-        '_',
-        '{SQL_LIKE_ESCAPE}_'
-    ),
-    '*',
-    '%'
-) ESCAPE '{SQL_LIKE_ESCAPE}'
-"""
 
 
 class AsyncPostgresConnection(Protocol):
@@ -90,7 +74,7 @@ class PostgresDataStore:
             WHERE runtime = %(runtime)s
               AND agent_id = %(agent_id)s
               AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
-              AND COALESCE(%(session_id)s, '') LIKE {_SESSION_KEY_PATTERN_LIKE_SQL}
+              AND COALESCE(%(session_id)s, '') LIKE {SESSION_KEY_PATTERN_LIKE_SQL}
             ORDER BY length(session_key_pattern) DESC
             LIMIT 1
             """,
