@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "entry": "dist/index.js",
   "openclaw": {
-    "supportedVersions": ">=0.0.0"
+    "supportedVersions": ">=2026.4.24 <2027.0.0"
   },
   "permissions": {
     "allowConversationAccess": true,
