@@ -29,11 +29,27 @@ test("registers MemWing context engine, hooks, tools, and native shims", async (
 
 test("memwing_search_memory rejects invalid input and returns explicit empty envelope for valid input", async () => {
   const registered = captureRegistrations();
+  const searchCalls = [];
+  const client = {
+    ...plugin.createMockMemWingClient(),
+    async searchMemory(params) {
+      searchCalls.push(params);
+      return {
+        content: "",
+        contexts: [],
+        results: [],
+        nextCursor: null,
+        traceId: "memwing:search-memory:mock"
+      };
+    }
+  };
 
-  plugin.register(registered.api);
+  plugin.register(registered.api, { client });
 
   const tool = registered.tools.get("memwing_search_memory");
   assert.deepEqual(tool.parameters.required, ["agent_id", "query", "scope"]);
+  assert.equal(tool.parameters.additionalProperties, false);
+  assert.equal(tool.parameters.properties.scope.additionalProperties, false);
   await assert.rejects(
     () => tool.execute({ agent_id: "main" }),
     (error) => {
@@ -49,6 +65,15 @@ test("memwing_search_memory rejects invalid input and returns explicit empty env
       assert.equal(error.name, "OpenClawToolSchemaError");
       assert.equal(error.code, "schema_validation_failed");
       assert.equal(error.field, "query");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => tool.execute({ agent_id: "main", query: "demo scope", max_results: 9, scope: scope() }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.code, "schema_validation_failed");
+      assert.equal(error.field, "max_results");
       return true;
     }
   );
@@ -73,6 +98,20 @@ test("memwing_search_memory rejects invalid input and returns explicit empty env
     nextCursor: null,
     traceId: "memwing:search-memory:mock"
   });
+  assert.deepEqual(searchCalls[0], {
+    agent_id: "main",
+    query: "demo scope",
+    scope: {
+      project_memory_space_id: "project_001",
+      group_id: "group_001"
+    },
+    mode: "current",
+    limit: 3,
+    cursor: "cursor_001",
+    sort: "event_time",
+    min_score: 0.25
+  });
+  assert.equal(Object.hasOwn(searchCalls[0], "max_results"), false);
 });
 
 test("all memwing tools reject missing required fields before calling the client", async () => {
@@ -132,6 +171,7 @@ test("native memory_search converts max_results before calling MemWing client", 
     sort: "relevance",
     min_score: 0
   });
+  assert.equal(Object.hasOwn(searchCalls[0], "max_results"), false);
 });
 
 function scope() {

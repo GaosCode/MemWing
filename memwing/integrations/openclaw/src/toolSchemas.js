@@ -1,5 +1,14 @@
 "use strict";
 
+const RUNTIME_SCOPE_FIELDS = ["agent_id", "workspace_id", "session_id", "scope"];
+const SEARCH_FIELDS = ["query", "mode", "limit", "cursor", "sort", "min_score"];
+const SCOPE_FIELDS = [
+  "project_memory_space_id",
+  "group_id",
+  "thread_id",
+  "shared_group_id"
+];
+
 class OpenClawToolSchemaError extends Error {
   constructor(field, message) {
     super(message);
@@ -41,11 +50,13 @@ function toolParameters(toolName) {
 }
 
 function validateSearchParams(params, options) {
-  const input = validateRuntimeScopeParams(params);
+  const input = requireObject(params, "params");
+  rejectUnknownFields(input, [...RUNTIME_SCOPE_FIELDS, ...SEARCH_FIELDS], "params");
+  const runtime = validateRuntimeScopeParams(input);
   const query = requireText(input.query, "query");
   const mode = optionalEnum(input.mode, "mode", ["current", "history"], options.modeDefault);
   return withoutUndefined({
-    ...input,
+    ...runtime,
     query,
     mode,
     limit: optionalPositiveInteger(input.limit, "limit", 20),
@@ -56,21 +67,34 @@ function validateSearchParams(params, options) {
 }
 
 function validateNativeSearchParams(params) {
-  const input = validateRuntimeScopeParams(params);
+  const input = requireObject(params, "params");
+  rejectUnknownFields(
+    input,
+    [...RUNTIME_SCOPE_FIELDS, "query", "mode", "max_results", "min_score"],
+    "params"
+  );
+  const runtime = validateRuntimeScopeParams(input);
+  const query = requireText(input.query, "query");
   const limit = optionalPositiveInteger(input.max_results, "max_results", 20);
-  const canonical = validateSearchParams({
-    ...input,
+  return withoutUndefined({
+    ...runtime,
+    query,
     limit,
-    mode: input.mode || "current"
-  }, { modeDefault: "current" });
-  delete canonical.max_results;
-  return canonical;
+    mode: optionalEnum(input.mode, "mode", ["current", "history"], "current"),
+    sort: "relevance",
+    min_score: optionalNonNegativeNumber(input.min_score, "min_score", 0)
+  });
 }
 
 function validateMemoryIdParams(params, options) {
-  const input = validateRuntimeScopeParams(params);
+  const input = requireObject(params, "params");
+  const allowedFields = options.includeEvidence
+    ? [...RUNTIME_SCOPE_FIELDS, "memory_id", "include_evidence"]
+    : [...RUNTIME_SCOPE_FIELDS, "memory_id"];
+  rejectUnknownFields(input, allowedFields, "params");
+  const runtime = validateRuntimeScopeParams(input);
   const validated = {
-    ...input,
+    ...runtime,
     memory_id: requireText(input.memory_id, "memory_id")
   };
   if (options.includeEvidence) {
@@ -80,9 +104,11 @@ function validateMemoryIdParams(params, options) {
 }
 
 function validateProjectContextParams(params) {
-  const input = validateRuntimeScopeParams(params);
+  const input = requireObject(params, "params");
+  rejectUnknownFields(input, [...RUNTIME_SCOPE_FIELDS, "token_budget"], "params");
+  const runtime = validateRuntimeScopeParams(input);
   return withoutUndefined({
-    ...input,
+    ...runtime,
     token_budget: optionalPositiveInteger(input.token_budget, "token_budget", undefined)
   });
 }
@@ -90,7 +116,7 @@ function validateProjectContextParams(params) {
 function objectSchema(properties, required) {
   return {
     type: "object",
-    additionalProperties: true,
+    additionalProperties: false,
     required,
     properties
   };
@@ -103,7 +129,7 @@ function runtimeScopeProperties() {
     session_id: { type: "string", minLength: 1 },
     scope: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       required: ["project_memory_space_id"],
       properties: {
         project_memory_space_id: { type: "string", minLength: 1 },
@@ -118,7 +144,6 @@ function runtimeScopeProperties() {
 function validateRuntimeScopeParams(params) {
   const input = requireObject(params, "params");
   return withoutUndefined({
-    ...input,
     agent_id: requireText(input.agent_id, "agent_id"),
     workspace_id: optionalText(input.workspace_id, "workspace_id"),
     session_id: optionalText(input.session_id, "session_id"),
@@ -128,8 +153,8 @@ function validateRuntimeScopeParams(params) {
 
 function validateScope(scope) {
   const input = requireObject(scope, "scope");
+  rejectUnknownFields(input, SCOPE_FIELDS, "scope");
   return withoutUndefined({
-    ...input,
     project_memory_space_id: requireText(
       input.project_memory_space_id,
       "scope.project_memory_space_id"
@@ -145,6 +170,14 @@ function requireObject(value, field) {
     throw new OpenClawToolSchemaError(field, `${field} must be an object`);
   }
   return value;
+}
+
+function rejectUnknownFields(value, allowedFields, field) {
+  for (const key of Object.keys(value)) {
+    if (!allowedFields.includes(key)) {
+      throw new OpenClawToolSchemaError(key, `${field}.${key} is not supported`);
+    }
+  }
 }
 
 function requireText(value, field) {
