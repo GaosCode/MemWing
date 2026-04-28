@@ -235,6 +235,10 @@ class FeishuConnector:
         payload: JsonObject,
         raw_payload_hash: str,
     ) -> str | None:
+        if text_value(payload.get("type")) != "url_verification":
+            return None
+        if "event" in payload or "encrypt" in payload:
+            return None
         challenge = text_value(payload.get("challenge"))
         if challenge is not None:
             await self._verify_challenge_token(payload, raw_payload_hash)

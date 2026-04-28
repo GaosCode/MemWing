@@ -39,8 +39,33 @@ def test_plain_challenge_bypasses_formal_signature_headers() -> None:
     assert audit.records == []
 
 
+def test_unsigned_challenge_with_event_shape_fails_formal_security_check() -> None:
+    audit = FakeAuditSink()
+    body = b'{"challenge":"challenge_001","event":{"message":{"chat_id":"oc_group_001"}}}'
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="timestamp_missing"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={},
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert [record.reason_code for record in audit.records] == ["timestamp_missing"]
+    assert "challenge_001" not in str(audit.records[0].details)
+    assert "oc_group_001" not in str(audit.records[0].details)
+
+
 def test_signed_encrypted_challenge_uses_decryptor_after_formal_signature() -> None:
-    decryptor = FakeDecryptor({"challenge": "challenge_002", "token": "token_001"})
+    decryptor = FakeDecryptor(
+        {"challenge": "challenge_002", "token": "token_001", "type": "url_verification"}
+    )
     body = b'{"encrypt":"cipher_challenge"}'
     connector = FeishuConnector(
         project_memory_space_id="project_001",
