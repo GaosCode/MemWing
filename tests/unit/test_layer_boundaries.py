@@ -28,3 +28,23 @@ def test_core_and_application_do_not_import_external_sdk_boundaries() -> None:
                     violations.append(f"{path}: {name}")
 
     assert violations == []
+
+
+def test_api_does_not_import_infrastructure_implementations() -> None:
+    package_root = Path(__file__).resolve().parents[2] / "memwing"
+    violations: list[str] = []
+    for path in sorted((package_root / "api").rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+
+            for name in names:
+                if name.startswith("memwing.infrastructure"):
+                    violations.append(f"{path}: {name}")
+
+    assert violations == []

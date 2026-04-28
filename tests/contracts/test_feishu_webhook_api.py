@@ -1,26 +1,28 @@
 import asyncio
-import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from memwing.api.platform_webhooks import handle_feishu_webhook
-from memwing.infrastructure.platforms.feishu_connector import FeishuConnector
+from memwing.ports.platform_webhook import PlatformWebhookError, PlatformWebhookResult
 
 
 RECEIVED_AT = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)
 
 
-def test_feishu_webhook_api_returns_signed_encrypted_challenge() -> None:
-    body = b'{"encrypt":"cipher_challenge"}'
-    connector = FeishuConnector(
-        project_memory_space_id="project_001",
-        signing_secret="secret_001",
-        decryptor=StaticDecryptor({"challenge": "challenge_001"}),
+def test_feishu_webhook_api_returns_challenge_response() -> None:
+    connector = FakeWebhookConnector(
+        PlatformWebhookResult(
+            kind="challenge",
+            status_code=200,
+            body={"challenge": "challenge_001"},
+            raw_payload_hash="hash_001",
+        )
     )
 
     response = asyncio.run(
         handle_feishu_webhook(
-            headers=_signed_headers(body),
-            body=body,
+            headers={},
+            body=b'{"challenge":"challenge_001"}',
             connector=connector,
             received_at=RECEIVED_AT,
         )
@@ -31,12 +33,14 @@ def test_feishu_webhook_api_returns_signed_encrypted_challenge() -> None:
 
 
 def test_feishu_webhook_api_returns_clear_error_for_invalid_schema() -> None:
-    connector = FeishuConnector(project_memory_space_id="project_001", signing_secret="secret_001")
+    connector = FailingWebhookConnector(
+        PlatformWebhookError("schema_invalid", "schema_invalid", 400)
+    )
     body = b'{"event":{"message":{"content":"{\\"text\\":\\"missing chat\\"}"}}}'
 
     response = asyncio.run(
         handle_feishu_webhook(
-            headers=_signed_headers(body),
+            headers={},
             body=body,
             connector=connector,
             received_at=RECEIVED_AT,
@@ -48,26 +52,31 @@ def test_feishu_webhook_api_returns_clear_error_for_invalid_schema() -> None:
     assert response.body["code"] == "schema_invalid"
 
 
-def _signed_headers(body: bytes) -> dict[str, str]:
-    from memwing.infrastructure.platforms.feishu_connector import compute_feishu_signature
+class FakeWebhookConnector:
+    def __init__(self, result: PlatformWebhookResult) -> None:
+        self._result = result
+        self.calls: list[tuple[dict[str, str], bytes, datetime | None]] = []
 
-    timestamp = str(int(RECEIVED_AT.timestamp()))
-    nonce = "nonce_001"
-    return {
-        "X-Lark-Request-Timestamp": timestamp,
-        "X-Lark-Request-Nonce": nonce,
-        "X-Lark-Signature": compute_feishu_signature(
-            signing_secret="secret_001",
-            timestamp=timestamp,
-            nonce=nonce,
-            body=body,
-        ),
-    }
+    async def handle_webhook(
+        self,
+        *,
+        headers: Mapping[str, str],
+        body: bytes,
+        received_at: datetime | None = None,
+    ) -> PlatformWebhookResult:
+        self.calls.append((dict(headers), body, received_at))
+        return self._result
 
 
-class StaticDecryptor:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self._payload = payload
+class FailingWebhookConnector:
+    def __init__(self, error: PlatformWebhookError) -> None:
+        self._error = error
 
-    def decrypt(self, encrypted_text: str) -> str:
-        return json.dumps(self._payload)
+    async def handle_webhook(
+        self,
+        *,
+        headers: Mapping[str, str],
+        body: bytes,
+        received_at: datetime | None = None,
+    ) -> PlatformWebhookResult:
+        raise self._error

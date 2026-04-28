@@ -9,9 +9,9 @@ from typing import Protocol
 from memwing.api.agent_runtime import RememberEventResult
 from memwing.api.platform import PlatformEvent
 from memwing.api.types import JsonObject
-from memwing.infrastructure.platforms.feishu_connector import (
-    FeishuConnector,
-    FeishuConnectorError,
+from memwing.ports.platform_webhook import (
+    PlatformWebhookError,
+    PlatformWebhookHandlerPort,
 )
 
 
@@ -32,7 +32,7 @@ async def handle_feishu_webhook(
     *,
     headers: Mapping[str, str],
     body: bytes,
-    connector: FeishuConnector,
+    connector: PlatformWebhookHandlerPort,
     remember_client: PlatformRememberClient | None = None,
     received_at: datetime | None = None,
 ) -> PlatformWebhookResponse:
@@ -43,7 +43,7 @@ async def handle_feishu_webhook(
             body=body,
             received_at=received_at,
         )
-    except FeishuConnectorError as exc:
+    except PlatformWebhookError as exc:
         return PlatformWebhookResponse(
             status_code=exc.status_code,
             body={"ok": False, "code": exc.reason_code, "message": str(exc)},

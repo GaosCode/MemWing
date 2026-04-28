@@ -4,9 +4,8 @@ import hmac
 import inspect
 import json
 from collections.abc import Awaitable, Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Protocol
 
 from memwing.api.platform import (
     PlatformEvent,
@@ -37,9 +36,11 @@ from memwing.infrastructure.platforms.feishu_security import (
     text_value,
     to_json_object,
 )
+from memwing.ports.platform_webhook import PlatformWebhookKind, PlatformWebhookResult
 
 
-FeishuWebhookKind = Literal["challenge", "event"]
+FeishuWebhookKind = PlatformWebhookKind
+FeishuWebhookResult = PlatformWebhookResult
 FORMAL_SIGNATURE_HEADER_NAMES = (
     "x-lark-request-timestamp",
     "x-lark-request-nonce",
@@ -60,15 +61,6 @@ class FeishuPushSender(Protocol):
         trace_id: str,
     ) -> str | Awaitable[str]:
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class FeishuWebhookResult:
-    kind: FeishuWebhookKind
-    status_code: int
-    body: JsonObject
-    raw_payload_hash: str
-    platform_event: PlatformEvent | None = None
 
 
 class MockFeishuPushSender:

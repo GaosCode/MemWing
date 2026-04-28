@@ -9,6 +9,7 @@ from typing import Literal, Protocol
 
 from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
+from memwing.ports.platform_webhook import PlatformWebhookError
 
 
 class FeishuAuditSink(Protocol):
@@ -43,11 +44,9 @@ class FeishuAuditRecord:
         )
 
 
-class FeishuConnectorError(Exception):
+class FeishuConnectorError(PlatformWebhookError):
     def __init__(self, reason_code: str, message: str, status_code: int) -> None:
-        super().__init__(message)
-        self.reason_code = reason_code
-        self.status_code = status_code
+        super().__init__(reason_code, message, status_code)
 
 
 class InMemoryFeishuReplayProtector:
