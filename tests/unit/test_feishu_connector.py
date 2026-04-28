@@ -491,24 +491,25 @@ def test_payload_create_time_overflow_is_audited_as_schema_invalid() -> None:
 def test_send_candidate_uses_push_sender_boundary() -> None:
     sender = FakePushSender()
     connector = FeishuConnector(project_memory_space_id="project_001", push_sender=sender)
-    candidate = PushCandidate(
-        id="push_001",
-        platform_ref=PlatformRef(
-            platform="feishu",
-            tenant_id="tenant_001",
-            channel_id="oc_group_001",
-            thread_id="om_root",
-            message_id=None,
-        ),
-        content="Review this candidate.",
-        trace_id="trace_001",
-    )
+    candidate = _push_candidate()
 
     result = asyncio.run(connector.send_candidate(candidate))
 
     assert result.delivered is True
     assert result.provider_message_id == "sent_001"
     assert sender.sent == [("oc_group_001", "Review this candidate.", "trace_001")]
+
+
+def test_send_candidate_without_push_sender_reports_not_delivered() -> None:
+    connector = FeishuConnector(project_memory_space_id="project_001")
+    candidate = _push_candidate()
+
+    result = asyncio.run(connector.send_candidate(candidate))
+
+    assert result.delivered is False
+    assert result.provider_message_id is None
+    assert result.candidate_id == "push_001"
+    assert result.trace_id == "trace_001"
 
 
 def _message_payload() -> dict[str, object]:
@@ -531,6 +532,21 @@ def _message_payload() -> dict[str, object]:
             },
         },
     }
+
+
+def _push_candidate() -> PushCandidate:
+    return PushCandidate(
+        id="push_001",
+        platform_ref=PlatformRef(
+            platform="feishu",
+            tenant_id="tenant_001",
+            channel_id="oc_group_001",
+            thread_id="om_root",
+            message_id=None,
+        ),
+        content="Review this candidate.",
+        trace_id="trace_001",
+    )
 
 
 def _signed_headers(body: bytes, *, timestamp: str | None = None) -> dict[str, str]:

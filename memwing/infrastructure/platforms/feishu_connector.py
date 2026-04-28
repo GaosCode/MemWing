@@ -63,11 +63,6 @@ class FeishuPushSender(Protocol):
         ...
 
 
-class MockFeishuPushSender:
-    def send_text(self, platform_ref: PlatformRef, content: str, trace_id: str) -> str:
-        return f"mock-feishu:{platform_ref.channel_id}:{trace_id}"
-
-
 class FeishuConnector:
     def __init__(
         self,
@@ -96,7 +91,7 @@ class FeishuConnector:
         self._decryptor = decryptor
         self._replay_protector = replay_protector or InMemoryFeishuReplayProtector()
         self._audit_sink = audit_sink or NoopFeishuAuditSink()
-        self._push_sender = push_sender or MockFeishuPushSender()
+        self._push_sender = push_sender
 
     async def handle_webhook(
         self,
@@ -188,6 +183,13 @@ class FeishuConnector:
         )
 
     async def send_candidate(self, candidate: PushCandidate) -> PlatformSendResult:
+        if self._push_sender is None:
+            return PlatformSendResult(
+                candidate_id=candidate.id,
+                delivered=False,
+                trace_id=candidate.trace_id,
+            )
+
         provider_message_id = self._push_sender.send_text(
             candidate.platform_ref,
             candidate.content,
