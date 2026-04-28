@@ -44,7 +44,7 @@ function register(api, options = {}) {
   }
 
   for (const toolName of REQUIRED_TOOLS) {
-    api.registerTool(toolName, createTool(toolName, client));
+    api.registerTool(createTool(toolName, client));
   }
 
   if (options.registerNativeMemoryShim !== false) {
@@ -128,7 +128,7 @@ function createTool(toolName, client) {
 }
 
 function registerNativeMemoryShim(api, client) {
-  api.registerTool("memory_search", {
+  api.registerTool({
     name: "memory_search",
     description: "Compatibility shim for OpenClaw native memory_search.",
     parameters: nativeToolParameters("memory_search"),
@@ -136,7 +136,7 @@ function registerNativeMemoryShim(api, client) {
       return client.searchMemory(validateNativeSearchParams(params));
     }
   });
-  api.registerTool("memory_get", {
+  api.registerTool({
     name: "memory_get",
     description: "Compatibility shim for OpenClaw native memory_get.",
     parameters: nativeToolParameters("memory_get"),
@@ -144,7 +144,7 @@ function registerNativeMemoryShim(api, client) {
       return client.getMemory(validateNativeGetParams(params));
     }
   });
-  api.registerTool("memory_index", {
+  api.registerTool({
     name: "memory_index",
     description: "Compatibility shim for OpenClaw native memory_index.",
     parameters: nativeToolParameters("memory_index"),
@@ -158,7 +158,7 @@ function registerNativeMemoryShim(api, client) {
       };
     }
   });
-  api.registerTool("memory_status", {
+  api.registerTool({
     name: "memory_status",
     description: "Compatibility shim for OpenClaw native memory_status.",
     parameters: nativeToolParameters("memory_status"),

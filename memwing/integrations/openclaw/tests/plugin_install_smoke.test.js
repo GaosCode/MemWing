@@ -40,8 +40,9 @@ function captureRegistrations() {
         contextEngines.push({ id, factory });
       },
       on() {},
-      registerTool(name, tool) {
-        tools.set(name, tool);
+      registerTool(tool) {
+        assert.equal(typeof tool.name, "string");
+        tools.set(tool.name, tool);
       },
       async delegateCompactionToRuntime(params) {
         delegateCalls.push(params);
