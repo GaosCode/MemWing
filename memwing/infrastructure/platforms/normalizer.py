@@ -102,11 +102,11 @@ def normalize_feishu_event(
         sender.get("name"),
         _object_field(sender.get("sender_name")).get("name"),
     )
-    event_time = (
-        _parse_feishu_time(message.get("create_time"))
-        or _parse_feishu_time(event.get("create_time"))
-        or _parse_feishu_time(header.get("create_time"))
-        or raw_event.raw_request.received_at
+    event_time = _event_time_from_payload(
+        message,
+        event,
+        header,
+        raw_event.raw_request.received_at,
     )
 
     return PlatformEvent(
@@ -290,20 +290,39 @@ def _flatten_text(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _parse_feishu_time(value: object) -> datetime | None:
+def _event_time_from_payload(
+    message: JsonObject,
+    event: JsonObject,
+    header: JsonObject,
+    fallback: datetime,
+) -> datetime:
+    for field_name, value in (
+        ("message.create_time", message.get("create_time")),
+        ("event.create_time", event.get("create_time")),
+        ("header.create_time", header.get("create_time")),
+    ):
+        if value is not None:
+            return _parse_feishu_time(value, field_name)
+    return fallback
+
+
+def _parse_feishu_time(value: object, field_name: str) -> datetime:
     text = _first_text(value)
     if text is None:
-        return None
+        raise SchemaValidationError(f"{field_name} must be a timestamp")
     try:
         timestamp = int(text)
-    except ValueError:
+    except (TypeError, ValueError):
         try:
             return datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if timestamp > 10_000_000_000:
-        return datetime.fromtimestamp(timestamp / 1000, tz=UTC)
-    return datetime.fromtimestamp(timestamp, tz=UTC)
+        except (TypeError, ValueError) as exc:
+            raise SchemaValidationError(f"{field_name} is invalid") from exc
+    try:
+        if timestamp > 10_000_000_000:
+            return datetime.fromtimestamp(timestamp / 1000, tz=UTC)
+        return datetime.fromtimestamp(timestamp, tz=UTC)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise SchemaValidationError(f"{field_name} is invalid") from exc
 
 
 def _first_text(*values: object) -> str | None:

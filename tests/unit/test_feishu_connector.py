@@ -431,6 +431,37 @@ def test_decrypt_failure_and_schema_invalid_are_audited() -> None:
     ]
 
 
+def test_payload_create_time_overflow_is_audited_as_schema_invalid() -> None:
+    audit = FakeAuditSink()
+    calls: list[str] = []
+    replay = RecordingReplayProtector(calls)
+    payload = _message_payload()
+    event = payload["event"]
+    assert isinstance(event, dict)
+    message = event["message"]
+    assert isinstance(message, dict)
+    message["create_time"] = "9" * 400
+    body = json.dumps(payload).encode()
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        replay_protector=replay,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="schema_invalid"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers=_signed_headers(body),
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert calls == ["replay"]
+    assert [record.reason_code for record in audit.records] == ["schema_invalid"]
+
+
 def test_send_candidate_uses_push_sender_boundary() -> None:
     sender = FakePushSender()
     connector = FeishuConnector(project_memory_space_id="project_001", push_sender=sender)
