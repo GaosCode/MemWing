@@ -22,6 +22,15 @@ OPENCLAW_HOOK_EVENT_TYPES: Mapping[str, AgentRuntimeEventType] = {
     "after_compaction": "compaction_completed",
 }
 
+_MEMORY_SCOPE_FIELDS = frozenset(
+    (
+        "project_memory_space_id",
+        "group_id",
+        "thread_id",
+        "shared_group_id",
+    )
+)
+
 
 def map_openclaw_ingest_event(payload: Mapping[str, object]) -> AgentRuntimeEvent:
     return _map_event(
@@ -63,6 +72,7 @@ def memory_scope_from_payload(payload: Mapping[str, object]) -> MemoryScope:
     if not isinstance(raw_scope, Mapping):
         raise SchemaValidationError("scope is required")
     scope = cast(Mapping[str, object], raw_scope)
+    _reject_unknown_fields(scope, _MEMORY_SCOPE_FIELDS, "scope")
     return MemoryScope(
         project_memory_space_id=_required_text(
             scope.get("project_memory_space_id"),
@@ -72,6 +82,16 @@ def memory_scope_from_payload(payload: Mapping[str, object]) -> MemoryScope:
         thread_id=_optional_text(scope.get("thread_id"), "scope.thread_id"),
         shared_group_id=_optional_text(scope.get("shared_group_id"), "scope.shared_group_id"),
     )
+
+
+def _reject_unknown_fields(
+    payload: Mapping[str, object],
+    allowed_fields: frozenset[str],
+    object_name: str,
+) -> None:
+    for field_name in payload:
+        if field_name not in allowed_fields:
+            raise SchemaValidationError(f"{object_name}.{field_name} is not supported")
 
 
 def json_object_from_mapping(value: Mapping[str, object], field_name: str) -> JsonObject:

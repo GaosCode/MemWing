@@ -121,6 +121,27 @@ def test_memwing_search_memory_rejects_native_max_results() -> None:
     asyncio.run(run())
 
 
+def test_memwing_search_memory_rejects_unknown_scope_fields() -> None:
+    async def run() -> None:
+        runtime = RecordingRuntime()
+        with pytest.raises(SchemaValidationError, match="scope.unexpected"):
+            await memwing_search_memory(
+                {
+                    "agent_id": "main",
+                    "query": "demo scope",
+                    "scope": {
+                        "project_memory_space_id": "project_001",
+                        "unexpected": "accepted",
+                    },
+                },
+                runtime,
+            )
+
+        assert runtime.queries == []
+
+    asyncio.run(run())
+
+
 def test_native_memory_search_converts_max_results_at_boundary() -> None:
     async def run() -> None:
         runtime = RecordingRuntime()

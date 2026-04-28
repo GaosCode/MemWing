@@ -77,6 +77,22 @@ test("memwing_search_memory rejects invalid input and returns explicit empty env
       return true;
     }
   );
+  await assert.rejects(
+    () => tool.execute({
+      agent_id: "main",
+      query: "demo scope",
+      scope: {
+        project_memory_space_id: "project_001",
+        unexpected: "accepted"
+      }
+    }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.code, "schema_validation_failed");
+      assert.equal(error.field, "unexpected");
+      return true;
+    }
+  );
 
   const result = await tool.execute({
     agent_id: "main",
