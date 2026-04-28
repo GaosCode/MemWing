@@ -2,9 +2,12 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from memwing.infrastructure.platforms.feishu_connector import (
     FeishuAuditRecord,
     FeishuConnector,
+    FeishuConnectorError,
 )
 
 
@@ -37,6 +40,32 @@ def test_encrypted_challenge_bypasses_formal_signature_headers() -> None:
     assert result.body == {"challenge": "challenge_001"}
     assert decryptor.calls == ["decrypt:cipher_challenge"]
     assert audit.records == []
+
+
+def test_encrypted_request_with_partial_formal_headers_fails_before_decrypting() -> None:
+    audit = FakeAuditSink()
+    decryptor = FakeDecryptor(
+        {"challenge": "challenge_001", "token": "token_001", "type": "url_verification"}
+    )
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        verification_token="token_001",
+        decryptor=decryptor,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="nonce_missing"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={"X-Lark-Request-Timestamp": str(int(RECEIVED_AT.timestamp()))},
+                body=b'{"encrypt":"cipher_challenge"}',
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert decryptor.calls == []
+    assert [record.reason_code for record in audit.records] == ["nonce_missing"]
 
 
 class FakeAuditSink:

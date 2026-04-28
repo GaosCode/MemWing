@@ -22,7 +22,7 @@ from memwing.infrastructure.platforms.feishu_security import (
     InMemoryFeishuReplayProtector,
     NoopFeishuAuditSink,
     compute_feishu_signature,
-    has_formal_signature_headers,
+    has_any_formal_signature_header,
     normalize_headers,
     parse_timestamp,
     payload_from_decrypted,
@@ -88,7 +88,7 @@ class FeishuWebhookHandler:
 
         raw_hash = raw_payload_hash(body)
         request_headers = normalize_headers(headers)
-        if not has_formal_signature_headers(request_headers):
+        if not has_any_formal_signature_header(request_headers):
             challenge = await self._challenge_from_body_before_formal_verification(
                 body,
                 raw_hash,

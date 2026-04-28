@@ -12,6 +12,13 @@ from memwing.api.validation import SchemaValidationError, require_positive_int, 
 from memwing.ports.platform_webhook import PlatformWebhookError
 
 
+FORMAL_SIGNATURE_HEADER_NAMES = (
+    "x-lark-request-timestamp",
+    "x-lark-request-nonce",
+    "x-lark-signature",
+)
+
+
 class FeishuAuditSink(Protocol):
     def record(self, record: "FeishuAuditRecord") -> object:
         ...
@@ -86,14 +93,11 @@ def normalize_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 
 def has_formal_signature_headers(headers: Mapping[str, str]) -> bool:
-    return all(
-        text_value(headers.get(name)) is not None
-        for name in (
-            "x-lark-request-timestamp",
-            "x-lark-request-nonce",
-            "x-lark-signature",
-        )
-    )
+    return all(text_value(headers.get(name)) is not None for name in FORMAL_SIGNATURE_HEADER_NAMES)
+
+
+def has_any_formal_signature_header(headers: Mapping[str, str]) -> bool:
+    return any(name in headers for name in FORMAL_SIGNATURE_HEADER_NAMES)
 
 
 def parse_timestamp(value: str) -> datetime | None:
