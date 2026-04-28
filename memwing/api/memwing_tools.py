@@ -10,8 +10,7 @@ from memwing.api.agent_knowledge import (
     AgentKnowledgeGetResult,
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemorySearchResult
-from memwing.api.openclaw_runtime import _optional_positive_int, _required_text
-from memwing.api.validation import SchemaValidationError
+from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.infrastructure.agents.openclaw_event_mapper import (
     memory_scope_from_payload,
@@ -152,6 +151,20 @@ def _reject_unknown_fields(payload: Mapping[str, object], allowed_fields: frozen
     for field_name in payload:
         if field_name not in allowed_fields:
             raise SchemaValidationError(f"{field_name} is not supported")
+
+
+def _required_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise SchemaValidationError(f"{field_name} is required")
+    return require_text(value, field_name)
+
+
+def _optional_positive_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be a positive integer")
+    return require_positive_int(value, field_name)
 
 
 def _mode(value: object, default: str) -> str:
