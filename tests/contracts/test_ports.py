@@ -19,7 +19,7 @@ from memwing.api.schemas import (
     PushCandidate,
     RememberEventResult,
 )
-from memwing.core.models import GraphWriteJob, GraphWriteResult, SourceEvent
+from memwing.core.models import GraphWriteJob, GraphWriteResult
 from memwing.core.scope import EffectiveScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
