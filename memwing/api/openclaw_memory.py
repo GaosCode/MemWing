@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from memwing.api.agent_knowledge import AgentRuntimeStatusRequest
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemoryResultItem
 from memwing.api.memwing_tools import memwing_get_memory
-from memwing.api.types import JsonObject
-from memwing.api.validation import SchemaValidationError, require_text
-from memwing.core.scope import MemoryScope
-from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
-from memwing.infrastructure.agents.openclaw_event_mapper import (
+from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
+from memwing.api.openclaw_payloads import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.types import JsonObject
+from memwing.api.validation import SchemaValidationError, require_text
+from memwing.core.scope import MemoryScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -209,4 +209,4 @@ def _scope_from_status_payload(payload: Mapping[str, object]) -> MemoryScope:
 
 
 def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawAdapter()
+    return runtime if runtime is not None else OpenClawMockRuntime()

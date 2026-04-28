@@ -10,12 +10,12 @@ from memwing.api.agent_knowledge import (
     AgentKnowledgeGetResult,
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemorySearchResult
-from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
-from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
-from memwing.infrastructure.agents.openclaw_event_mapper import (
+from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
+from memwing.api.openclaw_payloads import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -206,4 +206,4 @@ def _include_evidence(value: object) -> bool:
 
 
 def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawAdapter()
+    return runtime if runtime is not None else OpenClawMockRuntime()

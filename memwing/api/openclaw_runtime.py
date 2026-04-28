@@ -4,10 +4,8 @@ from collections.abc import Mapping
 from typing import cast
 
 from memwing.api.agent_context import AgentContextRequest, AgentContextResult, RememberEventResult
-from memwing.api.types import JsonObject
-from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
-from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
-from memwing.infrastructure.agents.openclaw_event_mapper import (
+from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
+from memwing.api.openclaw_payloads import (
     json_object_from_mapping,
     map_openclaw_after_turn_event,
     map_openclaw_hook_event,
@@ -15,6 +13,8 @@ from memwing.infrastructure.agents.openclaw_event_mapper import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.types import JsonObject
+from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -115,4 +115,4 @@ def _optional_positive_int(value: object, field_name: str) -> int | None:
 
 
 def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawAdapter()
+    return runtime if runtime is not None else OpenClawMockRuntime()
