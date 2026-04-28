@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from memwing.api.platform import PlatformRef, PushCandidate
-from memwing.infrastructure.platforms import feishu_connector as feishu_connector_module
+from memwing.infrastructure.platforms import feishu_webhook as feishu_webhook_module
 from memwing.infrastructure.platforms.feishu_connector import (
     FeishuAuditRecord,
     FeishuConnector,
@@ -213,7 +213,7 @@ def test_oversized_body_checks_size_before_hashing(monkeypatch: pytest.MonkeyPat
         order.append("hash")
         return "oversized_hash"
 
-    monkeypatch.setattr(feishu_connector_module, "raw_payload_hash", fake_raw_payload_hash)
+    monkeypatch.setattr(feishu_webhook_module, "raw_payload_hash", fake_raw_payload_hash)
     connector = FeishuConnector(
         project_memory_space_id="project_001",
         signing_secret=SECRET,
