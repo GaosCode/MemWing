@@ -8,12 +8,10 @@ const path = require("node:path");
 const test = require("node:test");
 
 test("links the build artifact with the OpenClaw CLI when available", async (t) => {
-  const cli = process.env.OPENCLAW_CLI || "openclaw";
-  const availability = childProcess.spawnSync(cli, ["plugin", "--help"], {
-    encoding: "utf8"
-  });
+  const cli = openClawCli();
+  const availability = runOpenClaw(cli, ["plugins", "install", "--help"], process.env, null);
   if (availability.error && availability.error.code === "ENOENT") {
-    t.skip(`OpenClaw CLI not found: ${cli}`);
+    t.skip(`OpenClaw CLI not found: ${cli.label}`);
     return;
   }
 
@@ -21,11 +19,22 @@ test("links the build artifact with the OpenClaw CLI when available", async (t) 
   const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "memwing-openclaw-link-"));
   const env = isolatedOpenClawEnv(isolatedHome);
   try {
-    const linkResult = runOpenClaw(cli, ["plugin", "link", packageRoot], env, packageRoot);
+    const linkResult = runOpenClaw(
+      cli,
+      [
+        "plugins",
+        "install",
+        "--link",
+        "--dangerously-force-unsafe-install",
+        packageRoot
+      ],
+      env,
+      packageRoot
+    );
     assert.equal(
       linkResult.status,
       0,
-      commandFailureMessage("openclaw plugin link", linkResult)
+      commandFailureMessage("openclaw plugins install --link", linkResult)
     );
 
     const manifest = JSON.parse(
@@ -42,10 +51,26 @@ test("links the build artifact with the OpenClaw CLI when available", async (t) 
       assert.ok(registered.tools.has(toolName), `${toolName} should register after link`);
     }
   } finally {
-    runOpenClaw(cli, ["plugin", "unlink", "memwing"], env, packageRoot);
+    runOpenClaw(cli, ["plugins", "uninstall", "memwing"], env, packageRoot);
     fs.rmSync(isolatedHome, { recursive: true, force: true });
   }
 });
+
+function openClawCli() {
+  const command = process.env.OPENCLAW_CLI || "openclaw";
+  const prefixArgs = splitArgs(process.env.OPENCLAW_CLI_ARGS || "");
+  const cwd = process.env.OPENCLAW_CLI_CWD || null;
+  return {
+    command,
+    prefixArgs,
+    cwd,
+    label: [command, ...prefixArgs].join(" ")
+  };
+}
+
+function splitArgs(raw) {
+  return raw.trim() === "" ? [] : raw.trim().split(/\s+/);
+}
 
 function isolatedOpenClawEnv(isolatedHome) {
   return {
@@ -60,8 +85,8 @@ function isolatedOpenClawEnv(isolatedHome) {
 }
 
 function runOpenClaw(cli, args, env, cwd) {
-  return childProcess.spawnSync(cli, args, {
-    cwd,
+  return childProcess.spawnSync(cli.command, [...cli.prefixArgs, ...args], {
+    cwd: cli.cwd || cwd,
     env,
     encoding: "utf8"
   });

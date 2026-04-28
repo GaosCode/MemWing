@@ -6,6 +6,10 @@
   "openclaw": {
     "supportedVersions": ">=2026.4.24 <2027.0.0"
   },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  },
   "permissions": {
     "allowConversationAccess": true,
     "network": [

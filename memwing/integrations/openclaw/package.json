@@ -16,6 +16,11 @@
     "openclaw.plugin.json",
     "README.md"
   ],
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
   "engines": {
     "node": ">=20"
   }
