@@ -1,0 +1,114 @@
+import { useMemo, useState } from "react";
+import { AppShell } from "./AppShell";
+import { maintenanceItems, memories } from "../shared/api/mockData";
+import { SplitSurface, type InspectorSize } from "../shared/components/ui";
+import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
+import { InboxPage } from "../features/inbox/InboxPage";
+import { LibraryPage } from "../features/library/LibraryPage";
+import { MaintenanceDetailPage } from "../features/maintenance/MaintenanceDetailPage";
+import { MaintenanceInspector } from "../features/maintenance/MaintenanceInspector";
+import { MaintenancePage } from "../features/maintenance/MaintenancePage";
+import { MemoryDetailPage } from "../features/memory-detail/MemoryDetailPage";
+import { MemoryInspector } from "../features/memory-detail/MemoryInspector";
+import { ProjectInspector } from "../features/project/ProjectInspector";
+import { ProjectInspectorDetail } from "../features/project/ProjectInspectorDetail";
+import { ProjectPage } from "../features/project/ProjectPage";
+import { SettingsPage } from "../features/settings/SettingsPage";
+
+export function App() {
+  const [activeNav, setActiveNav] = useState<NavKey>("inbox");
+  const [detailMode, setDetailMode] = useState<DetailMode>(null);
+  const [selectedMemory, setSelectedMemory] = useState<MemoryItem>(memories[0]);
+  const [selectedMaintenance, setSelectedMaintenance] = useState<MaintenanceItem>(maintenanceItems[0]);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorSize, setInspectorSize] = useState<InspectorSize>("regular");
+
+  function openNav(next: NavKey) {
+    setActiveNav(next);
+    setDetailMode(null);
+    setInspectorOpen(false);
+  }
+
+  function narrowInspector() {
+    setInspectorSize((size) => (size === "wide" ? "regular" : "compact"));
+  }
+
+  function widenInspector() {
+    setInspectorOpen(true);
+    setInspectorSize((size) => (size === "compact" ? "regular" : "wide"));
+  }
+
+  const inspectorControls = {
+    onClose: () => setInspectorOpen(false),
+    onNarrow: narrowInspector,
+    onWiden: widenInspector,
+  };
+
+  const splitProps = {
+    inspectorOpen,
+    inspectorSize,
+    onReopenInspector: () => setInspectorOpen(true),
+  };
+
+  const content = useMemo(() => {
+    if (detailMode === "memory") {
+      return <MemoryDetailPage memory={selectedMemory} onBack={() => setDetailMode(null)} />;
+    }
+
+    if (detailMode === "project") {
+      return <ProjectInspectorDetail onBack={() => setDetailMode(null)} />;
+    }
+
+    if (detailMode === "maintenance") {
+      return <MaintenanceDetailPage onBack={() => setDetailMode(null)} />;
+    }
+
+    if (activeNav === "inbox") {
+      return (
+        <SplitSurface
+          {...splitProps}
+          main={<InboxPage selected={selectedMemory} onSelect={setSelectedMemory} />}
+          inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} {...inspectorControls} />}
+        />
+      );
+    }
+
+    if (activeNav === "library") {
+      return (
+        <SplitSurface
+          {...splitProps}
+          main={<LibraryPage selected={selectedMemory} onSelect={setSelectedMemory} />}
+          inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} libraryMode {...inspectorControls} />}
+        />
+      );
+    }
+
+    if (activeNav === "project") {
+      return (
+        <SplitSurface
+          {...splitProps}
+          main={<ProjectPage />}
+          inspector={<ProjectInspector onOpenDetail={() => setDetailMode("project")} {...inspectorControls} />}
+        />
+      );
+    }
+
+    if (activeNav === "maintenance") {
+      return (
+        <SplitSurface
+          {...splitProps}
+          main={<MaintenancePage selected={selectedMaintenance} onSelect={setSelectedMaintenance} />}
+          inspector={<MaintenanceInspector item={selectedMaintenance} onOpenDetail={() => setDetailMode("maintenance")} {...inspectorControls} />}
+        />
+      );
+    }
+
+    return <SettingsPage />;
+  }, [activeNav, detailMode, inspectorOpen, inspectorSize, selectedMaintenance, selectedMemory]);
+
+  return (
+    <AppShell activeNav={activeNav} shellMode={detailMode ? "detail" : "split"} onSelectNav={openNav}>
+      {content}
+    </AppShell>
+  );
+}
