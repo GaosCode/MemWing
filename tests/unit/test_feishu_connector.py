@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from memwing.api.platform import PlatformRef, PushCandidate
+from memwing.infrastructure.platforms import feishu_connector as feishu_connector_module
 from memwing.infrastructure.platforms.feishu_connector import (
     FeishuAuditRecord,
     FeishuConnector,
@@ -111,6 +112,117 @@ def test_bad_signature_is_audited_and_not_decrypted() -> None:
     assert [record.reason_code for record in audit.records] == ["signature_mismatch"]
     assert decryptor.calls == []
     assert "cipher_event" not in str(audit.records[0].details)
+
+
+def test_oversized_body_checks_size_before_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit = FakeAuditSink()
+    order: list[str] = []
+
+    class OversizedBody:
+        def __len__(self) -> int:
+            order.append("len")
+            return 2
+
+    def fake_raw_payload_hash(body: object) -> str:
+        order.append("hash")
+        return "oversized_hash"
+
+    monkeypatch.setattr(feishu_connector_module, "raw_payload_hash", fake_raw_payload_hash)
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        max_body_bytes=1,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="body_too_large"):
+        asyncio.run(
+            connector.handle_webhook(headers={}, body=OversizedBody(), received_at=RECEIVED_AT)
+        )
+
+    assert order == ["len", "hash"]
+    assert audit.records[0].reason_code == "body_too_large"
+    assert audit.records[0].raw_payload_hash == "oversized_hash"
+
+
+def test_empty_body_with_bad_signature_audits_signature_before_dto_or_schema() -> None:
+    audit = FakeAuditSink()
+    body = b""
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="signature_mismatch"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={
+                    "X-Lark-Request-Timestamp": str(int(RECEIVED_AT.timestamp())),
+                    "X-Lark-Request-Nonce": "nonce_001",
+                    "X-Lark-Signature": "bad",
+                },
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert [record.reason_code for record in audit.records] == ["signature_mismatch"]
+
+
+def test_empty_body_with_valid_signature_schemas_after_replay() -> None:
+    audit = FakeAuditSink()
+    calls: list[str] = []
+    replay = RecordingReplayProtector(calls)
+    body = b""
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        replay_protector=replay,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="schema_invalid"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers=_signed_headers(body),
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert calls == ["replay"]
+    assert [record.reason_code for record in audit.records] == ["schema_invalid"]
+
+
+@pytest.mark.parametrize(
+    ("header_name", "reason_code"),
+    (
+        ("X-Lark-Request-Timestamp", "timestamp_missing"),
+        ("X-Lark-Request-Nonce", "nonce_missing"),
+        ("X-Lark-Signature", "signature_missing"),
+    ),
+)
+def test_empty_formal_header_values_are_audited_by_required_header(
+    header_name: str,
+    reason_code: str,
+) -> None:
+    audit = FakeAuditSink()
+    body = json.dumps(_message_payload()).encode()
+    headers = _signed_headers(body)
+    headers[header_name] = ""
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match=reason_code):
+        asyncio.run(
+            connector.handle_webhook(headers=headers, body=body, received_at=RECEIVED_AT)
+        )
+
+    assert [record.reason_code for record in audit.records] == [reason_code]
 
 
 def test_signed_invalid_json_with_bad_signature_audits_signature_before_schema() -> None:

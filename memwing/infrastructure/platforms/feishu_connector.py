@@ -110,10 +110,11 @@ class FeishuConnector:
         received_at: datetime | None = None,
     ) -> FeishuWebhookResult:
         received_at = received_at or datetime.now(tz=UTC)
-        raw_hash = raw_payload_hash(body)
         if len(body) > self._max_body_bytes:
+            raw_hash = raw_payload_hash(body)
             await self._fail("body_too_large", raw_hash, 413)
 
+        raw_hash = raw_payload_hash(body)
         request_headers = normalize_headers(headers)
         challenge_payload = self._decode_body_for_challenge(body)
         if challenge_payload is not None:
@@ -130,6 +131,13 @@ class FeishuConnector:
                     raw_payload_hash=raw_hash,
                 )
 
+        await self._verify_formal_request_data(
+            headers=request_headers,
+            body=body,
+            received_at=received_at,
+            raw_payload_hash=raw_hash,
+        )
+        payload = await self._parse_body(body, raw_hash)
         raw_request = PlatformRawRequest(
             platform="feishu",
             headers=request_headers,
@@ -137,8 +145,6 @@ class FeishuConnector:
             received_at=received_at,
             raw_payload_hash=raw_hash,
         )
-        await self._verify_formal_request(raw_request)
-        payload = await self._parse_body(body, raw_hash)
         if "encrypt" in payload:
             payload = await self._decrypt_payload(payload["encrypt"], raw_hash)
 
@@ -249,18 +255,39 @@ class FeishuConnector:
             await self._fail("challenge_token_invalid", raw_payload_hash, 401)
 
     async def _verify_formal_request(self, raw_request: PlatformRawRequest) -> None:
-        raw_payload_hash = raw_request.raw_payload_hash
+        await self._verify_formal_request_data(
+            headers=raw_request.headers,
+            body=raw_request.body,
+            received_at=raw_request.received_at,
+            raw_payload_hash=raw_request.raw_payload_hash,
+        )
+
+    async def _verify_formal_request_data(
+        self,
+        *,
+        headers: Mapping[str, str],
+        body: bytes,
+        received_at: datetime,
+        raw_payload_hash: str,
+    ) -> None:
         if self._signing_secret is None or not self._signing_secret.strip():
             await self._fail("signature_secret_missing", raw_payload_hash, 401)
 
         timestamp = await self._required_header(
-            raw_request,
+            headers,
+            raw_payload_hash,
             "x-lark-request-timestamp",
             "timestamp_missing",
         )
-        nonce = await self._required_header(raw_request, "x-lark-request-nonce", "nonce_missing")
+        nonce = await self._required_header(
+            headers,
+            raw_payload_hash,
+            "x-lark-request-nonce",
+            "nonce_missing",
+        )
         signature = await self._required_header(
-            raw_request,
+            headers,
+            raw_payload_hash,
             "x-lark-signature",
             "signature_missing",
         )
@@ -268,7 +295,7 @@ class FeishuConnector:
         if request_timestamp is None:
             await self._fail("timestamp_invalid", raw_payload_hash, 401)
 
-        age_seconds = abs(raw_request.received_at.timestamp() - request_timestamp.timestamp())
+        age_seconds = abs(received_at.timestamp() - request_timestamp.timestamp())
         if age_seconds > self._max_timestamp_skew_seconds:
             await self._fail("timestamp_expired", raw_payload_hash, 401)
 
@@ -276,7 +303,7 @@ class FeishuConnector:
             signing_secret=self._signing_secret or "",
             timestamp=timestamp,
             nonce=nonce,
-            body=raw_request.body,
+            body=body,
         )
         if not hmac.compare_digest(signature, expected):
             await self._fail("signature_mismatch", raw_payload_hash, 401)
@@ -287,13 +314,14 @@ class FeishuConnector:
 
     async def _required_header(
         self,
-        raw_request: PlatformRawRequest,
+        headers: Mapping[str, str],
+        raw_payload_hash: str,
         header_name: str,
         reason_code: str,
     ) -> str:
-        value = text_value(raw_request.headers.get(header_name))
+        value = text_value(headers.get(header_name))
         if value is None:
-            await self._fail(reason_code, raw_request.raw_payload_hash, 401)
+            await self._fail(reason_code, raw_payload_hash, 401)
         return value
 
     async def _decrypt_payload(self, encrypted_value: JsonValue, raw_payload_hash: str) -> JsonObject:
