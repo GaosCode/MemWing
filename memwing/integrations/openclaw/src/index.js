@@ -4,10 +4,16 @@ const {
   OpenClawToolSchemaError,
   toolParameters,
   validateMemoryIdParams,
-  validateNativeSearchParams,
   validateProjectContextParams,
   validateSearchParams
 } = require("./toolSchemas.js");
+const {
+  nativeToolParameters,
+  validateNativeGetParams,
+  validateNativeIndexParams,
+  validateNativeSearchParams,
+  validateNativeStatusParams
+} = require("./nativeSchemas.js");
 
 const REQUIRED_HOOKS = [
   "after_tool_call",
@@ -52,7 +58,7 @@ function createContextEngine(api, client) {
       return client.ingest(params);
     },
     async ingestBatch(params) {
-      const events = Array.isArray(params && params.events) ? params.events : [];
+      const events = validateIngestBatchParams(params);
       const results = [];
       for (const event of events) {
         results.push(await client.ingest(event));
@@ -125,9 +131,7 @@ function registerNativeMemoryShim(api, client) {
   api.registerTool("memory_search", {
     name: "memory_search",
     description: "Compatibility shim for OpenClaw native memory_search.",
-    parameters: {
-      type: "object"
-    },
+    parameters: nativeToolParameters("memory_search"),
     async execute(params) {
       return client.searchMemory(validateNativeSearchParams(params));
     }
@@ -135,24 +139,21 @@ function registerNativeMemoryShim(api, client) {
   api.registerTool("memory_get", {
     name: "memory_get",
     description: "Compatibility shim for OpenClaw native memory_get.",
-    parameters: {
-      type: "object"
-    },
+    parameters: nativeToolParameters("memory_get"),
     async execute(params) {
-      return client.getMemory(params);
+      return client.getMemory(validateNativeGetParams(params));
     }
   });
   api.registerTool("memory_index", {
     name: "memory_index",
     description: "Compatibility shim for OpenClaw native memory_index.",
-    parameters: {
-      type: "object"
-    },
+    parameters: nativeToolParameters("memory_index"),
     async execute(params) {
+      const indexParams = validateNativeIndexParams(params);
       return {
         accepted: true,
         indexed: false,
-        force: Boolean(params && params.force),
+        force: indexParams.force,
         traceId: "memwing:native-memory-index:mock"
       };
     }
@@ -160,13 +161,26 @@ function registerNativeMemoryShim(api, client) {
   api.registerTool("memory_status", {
     name: "memory_status",
     description: "Compatibility shim for OpenClaw native memory_status.",
-    parameters: {
-      type: "object"
-    },
+    parameters: nativeToolParameters("memory_status"),
     async execute(params) {
-      return client.status(params);
+      return client.status(validateNativeStatusParams(params));
     }
   });
+}
+
+function validateIngestBatchParams(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new OpenClawToolSchemaError("params", "params must be an object");
+  }
+  if (!Array.isArray(params.events)) {
+    throw new OpenClawToolSchemaError("events", "events must be an array");
+  }
+  for (const event of params.events) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      throw new OpenClawToolSchemaError("events", "events must contain objects");
+    }
+  }
+  return params.events;
 }
 
 function createMockMemWingClient() {

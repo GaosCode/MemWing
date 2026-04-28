@@ -27,6 +27,31 @@ test("registers MemWing context engine, hooks, tools, and native shims", async (
   assert.equal(registered.delegateCalls.length, 1);
 });
 
+test("ingestBatch rejects malformed batch shapes", async () => {
+  const registered = captureRegistrations();
+
+  plugin.register(registered.api);
+
+  const engine = registered.contextEngines[0].factory();
+  await assert.rejects(() => engine.ingestBatch(), { name: "OpenClawToolSchemaError" });
+  await assert.rejects(
+    () => engine.ingestBatch({ events: "not-array" }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "events");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => engine.ingestBatch({ events: ["bad-event"] }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "events");
+      return true;
+    }
+  );
+});
+
 test("memwing_search_memory rejects invalid input and returns explicit empty envelope for valid input", async () => {
   const registered = captureRegistrations();
   const searchCalls = [];
@@ -174,7 +199,9 @@ test("native memory_search converts max_results before calling MemWing client", 
   await registered.tools.get("memory_search").execute({
     agent_id: "main",
     query: "demo",
+    mode: "history",
     max_results: 4,
+    min_score: 0.25,
     scope: scope()
   });
 
@@ -182,12 +209,154 @@ test("native memory_search converts max_results before calling MemWing client", 
     agent_id: "main",
     query: "demo",
     scope: scope(),
-    mode: "current",
+    mode: "history",
     limit: 4,
     sort: "relevance",
-    min_score: 0
+    min_score: 0.25
   });
   assert.equal(Object.hasOwn(searchCalls[0], "max_results"), false);
+});
+
+test("native memory shims reject bad input before returning mock success", async () => {
+  const registered = captureRegistrations();
+  const getCalls = [];
+  const statusCalls = [];
+  const client = {
+    ...plugin.createMockMemWingClient(),
+    async getMemory(params) {
+      getCalls.push(params);
+      return {
+        item: null,
+        evidence: [],
+        traceId: "trace"
+      };
+    },
+    async status(params) {
+      statusCalls.push(params);
+      return {
+        healthy: true,
+        traceId: "trace"
+      };
+    }
+  };
+
+  plugin.register(registered.api, { client });
+
+  await assert.rejects(
+    () => registered.tools.get("memory_search").execute({
+      agent_id: "main",
+      query: "demo",
+      max_results: 4,
+      unexpected: "accepted",
+      scope: scope()
+    }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "unexpected");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_search").execute({
+      agent_id: "main",
+      query: "demo",
+      mode: "unknown",
+      max_results: 4,
+      scope: scope()
+    }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "mode");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_search").execute({
+      agent_id: "main",
+      query: "demo",
+      max_results: 4,
+      min_score: "0.25",
+      scope: scope()
+    }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "min_score");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_get").execute({
+      agent_id: "main",
+      memory_id: "memory_001",
+      unexpected: "accepted",
+      scope: scope()
+    }),
+    { name: "OpenClawToolSchemaError" }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_index").execute({ force: "yes" }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "force");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_index").execute({
+      force: "yes",
+      unexpected: "accepted"
+    }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "unexpected");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_index").execute({ force: true, unexpected: "accepted" }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "unexpected");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => registered.tools.get("memory_status").execute({ agent_id: "main", deep: "yes" }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.field, "deep");
+      return true;
+    }
+  );
+
+  const indexResult = await registered.tools.get("memory_index").execute({ force: true });
+  const getResult = await registered.tools.get("memory_get").execute({
+    agent_id: "main",
+    memory_id: "memory_001",
+    include_evidence: true,
+    scope: scope()
+  });
+  const statusResult = await registered.tools.get("memory_status").execute({
+    agent_id: "main",
+    project_memory_space_id: "project_001",
+    deep: true
+  });
+
+  assert.equal(indexResult.accepted, true);
+  assert.equal(indexResult.force, true);
+  assert.equal(getResult.traceId, "trace");
+  assert.deepEqual(getCalls[0], {
+    agent_id: "main",
+    memory_id: "memory_001",
+    include_evidence: true,
+    scope: scope()
+  });
+  assert.equal(statusResult.traceId, "trace");
+  assert.deepEqual(statusCalls[0], {
+    agent_id: "main",
+    project_memory_space_id: "project_001",
+    deep: true
+  });
 });
 
 function scope() {
