@@ -1,0 +1,1 @@
+"""MemWing infrastructure adapter package."""

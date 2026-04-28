@@ -1,0 +1,1 @@
+"""MemWing domain contract package."""

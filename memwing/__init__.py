@@ -1,0 +1,1 @@
+"""MemWing core package."""

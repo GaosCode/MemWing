@@ -1,0 +1,1 @@
+"""MemWing application service package."""
