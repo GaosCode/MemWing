@@ -40,6 +40,9 @@ openclaw plugin unlink memwing
 npm run typecheck
 npm test
 npm run smoke
+npm run smoke:link
 ```
 
-The smoke test loads `dist/index.js`, registers against a mock OpenClaw API, verifies `registerContextEngine("memwing", ...)`, verifies all required `memwing_*` tools, and checks that `compact()` delegates to the runtime seam instead of returning a no-op.
+`npm run smoke` builds the package, loads `dist/index.js`, registers against a mock OpenClaw API, verifies `registerContextEngine("memwing", ...)`, verifies all required `memwing_*` tools, and checks that `compact()` delegates to the runtime seam instead of returning a no-op.
+
+`npm run smoke:link` builds the package and runs `openclaw plugin link <packageRoot>` with isolated OpenClaw home/config directories. If the OpenClaw CLI is not installed, the Node test reports a skip with the missing CLI reason. If the CLI is present but link fails, the test fails.

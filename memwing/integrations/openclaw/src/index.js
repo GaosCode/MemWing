@@ -1,5 +1,14 @@
 "use strict";
 
+const {
+  OpenClawToolSchemaError,
+  toolParameters,
+  validateMemoryIdParams,
+  validateNativeSearchParams,
+  validateProjectContextParams,
+  validateSearchParams
+} = require("./toolSchemas.js");
+
 const REQUIRED_HOOKS = [
   "after_tool_call",
   "agent_end",
@@ -93,23 +102,21 @@ function createTool(toolName, client) {
   return {
     name: toolName,
     description: `MemWing ${toolName.replaceAll("_", " ")} skeleton tool.`,
-    parameters: {
-      type: "object"
-    },
+    parameters: toolParameters(toolName),
     async execute(params) {
       if (toolName === "memwing_search_memory") {
-        return client.searchMemory(params);
+        return client.searchMemory(validateSearchParams(params, { modeDefault: "current" }));
       }
       if (toolName === "memwing_get_memory") {
-        return client.getMemory(params);
+        return client.getMemory(validateMemoryIdParams(params, { includeEvidence: true }));
       }
       if (toolName === "memwing_explain_memory") {
-        return client.explainMemory(params);
+        return client.explainMemory(validateMemoryIdParams(params, { includeEvidence: false }));
       }
       if (toolName === "memwing_search_sources") {
-        return client.searchSources(params);
+        return client.searchSources(validateSearchParams(params, { modeDefault: "history" }));
       }
-      return client.getProjectContext(params);
+      return client.getProjectContext(validateProjectContextParams(params));
     }
   };
 }
@@ -122,13 +129,7 @@ function registerNativeMemoryShim(api, client) {
       type: "object"
     },
     async execute(params) {
-      const limit = Number.isInteger(params && params.max_results) ? params.max_results : 20;
-      const canonicalParams = { ...(params || {}) };
-      delete canonicalParams.max_results;
-      return client.searchMemory({
-        ...canonicalParams,
-        limit
-      });
+      return client.searchMemory(validateNativeSearchParams(params));
     }
   });
   api.registerTool("memory_get", {
@@ -281,6 +282,7 @@ function assertOpenClawApi(api) {
 }
 
 module.exports = {
+  OpenClawToolSchemaError,
   REQUIRED_HOOKS,
   REQUIRED_TOOLS,
   createContextEngine,

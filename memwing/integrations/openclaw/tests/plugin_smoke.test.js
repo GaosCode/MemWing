@@ -27,6 +27,78 @@ test("registers MemWing context engine, hooks, tools, and native shims", async (
   assert.equal(registered.delegateCalls.length, 1);
 });
 
+test("memwing_search_memory rejects invalid input and returns explicit empty envelope for valid input", async () => {
+  const registered = captureRegistrations();
+
+  plugin.register(registered.api);
+
+  const tool = registered.tools.get("memwing_search_memory");
+  assert.deepEqual(tool.parameters.required, ["agent_id", "query", "scope"]);
+  await assert.rejects(
+    () => tool.execute({ agent_id: "main" }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.code, "schema_validation_failed");
+      assert.equal(error.field, "scope");
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => tool.execute({ agent_id: "main", scope: scope() }),
+    (error) => {
+      assert.equal(error.name, "OpenClawToolSchemaError");
+      assert.equal(error.code, "schema_validation_failed");
+      assert.equal(error.field, "query");
+      return true;
+    }
+  );
+
+  const result = await tool.execute({
+    agent_id: "main",
+    query: "demo scope",
+    limit: 3,
+    cursor: "cursor_001",
+    sort: "event_time",
+    min_score: 0.25,
+    scope: {
+      project_memory_space_id: "project_001",
+      group_id: "group_001"
+    }
+  });
+
+  assert.deepEqual(result, {
+    content: "",
+    contexts: [],
+    results: [],
+    nextCursor: null,
+    traceId: "memwing:search-memory:mock"
+  });
+});
+
+test("all memwing tools reject missing required fields before calling the client", async () => {
+  const registered = captureRegistrations();
+
+  plugin.register(registered.api);
+
+  const invalidCalls = [
+    ["memwing_get_memory", { agent_id: "main", scope: scope() }, "memory_id"],
+    ["memwing_explain_memory", { agent_id: "main", scope: scope() }, "memory_id"],
+    ["memwing_search_sources", { agent_id: "main", scope: scope() }, "query"],
+    ["memwing_get_project_context", { agent_id: "main" }, "scope"]
+  ];
+
+  for (const [toolName, payload, field] of invalidCalls) {
+    await assert.rejects(
+      () => registered.tools.get(toolName).execute(payload),
+      (error) => {
+        assert.equal(error.name, "OpenClawToolSchemaError");
+        assert.equal(error.field, field);
+        return true;
+      }
+    );
+  }
+});
+
 test("native memory_search converts max_results before calling MemWing client", async () => {
   const registered = captureRegistrations();
   const searchCalls = [];
@@ -44,10 +116,29 @@ test("native memory_search converts max_results before calling MemWing client", 
   };
 
   plugin.register(registered.api, { client });
-  await registered.tools.get("memory_search").execute({ query: "demo", max_results: 4 });
+  await registered.tools.get("memory_search").execute({
+    agent_id: "main",
+    query: "demo",
+    max_results: 4,
+    scope: scope()
+  });
 
-  assert.deepEqual(searchCalls[0], { query: "demo", limit: 4 });
+  assert.deepEqual(searchCalls[0], {
+    agent_id: "main",
+    query: "demo",
+    scope: scope(),
+    mode: "current",
+    limit: 4,
+    sort: "relevance",
+    min_score: 0
+  });
 });
+
+function scope() {
+  return {
+    project_memory_space_id: "project_001"
+  };
+}
 
 function captureRegistrations() {
   const contextEngines = [];

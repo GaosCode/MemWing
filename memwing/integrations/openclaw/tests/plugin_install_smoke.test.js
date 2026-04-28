@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-test("loads from build artifact and follows manifest entry", async () => {
+test("loads from build artifact and follows manifest entry without CLI link", async () => {
   const packageRoot = path.resolve(__dirname, "..");
   const manifestPath = path.join(packageRoot, "dist", "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));

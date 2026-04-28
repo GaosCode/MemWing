@@ -5,10 +5,11 @@
   "description": "MemWing OpenClaw context engine, hooks, tools, and native memory shim skeleton.",
   "main": "dist/index.js",
   "scripts": {
-    "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/index.js','dist/index.js');fs.copyFileSync('openclaw.plugin.json','dist/openclaw.plugin.json');\"",
-    "typecheck": "node --check src/index.js",
+    "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});fs.cpSync('src','dist',{recursive:true});fs.copyFileSync('openclaw.plugin.json','dist/openclaw.plugin.json');\"",
+    "typecheck": "node --check src/index.js && node --check src/toolSchemas.js",
     "test": "node --test tests/plugin_smoke.test.js",
-    "smoke": "npm run build && node --test tests/plugin_install_smoke.test.js"
+    "smoke": "npm run build && node --test tests/plugin_install_smoke.test.js",
+    "smoke:link": "npm run build && node --test tests/plugin_link_smoke.test.js"
   },
   "files": [
     "dist",
