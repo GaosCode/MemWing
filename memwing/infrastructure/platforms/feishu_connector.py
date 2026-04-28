@@ -41,6 +41,11 @@ from memwing.infrastructure.platforms.feishu_security import (
 
 
 FeishuWebhookKind = Literal["challenge", "event"]
+FORMAL_SIGNATURE_HEADER_NAMES = (
+    "x-lark-request-timestamp",
+    "x-lark-request-nonce",
+    "x-lark-signature",
+)
 
 
 class FeishuDecryptor(Protocol):
@@ -116,7 +121,10 @@ class FeishuConnector:
 
         raw_hash = raw_payload_hash(body)
         request_headers = normalize_headers(headers)
-        challenge_payload = self._decode_body_for_challenge(body)
+        if not _has_formal_signature_header(request_headers):
+            challenge_payload = self._decode_body_for_challenge(body)
+        else:
+            challenge_payload = None
         if challenge_payload is not None:
             challenge = await self._challenge_from_payload(
                 challenge_payload,
@@ -368,3 +376,7 @@ class FeishuConnector:
         )
         if inspect.isawaitable(result):
             await result
+
+
+def _has_formal_signature_header(headers: Mapping[str, str]) -> bool:
+    return any(header_name in headers for header_name in FORMAL_SIGNATURE_HEADER_NAMES)

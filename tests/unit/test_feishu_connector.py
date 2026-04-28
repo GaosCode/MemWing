@@ -114,6 +114,41 @@ def test_bad_signature_is_audited_and_not_decrypted() -> None:
     assert "cipher_event" not in str(audit.records[0].details)
 
 
+@pytest.mark.parametrize("body", (b'{"encrypt":"cipher_event"}', b"{not-json"))
+def test_full_formal_headers_bad_signature_does_not_parse_json_before_signature(
+    body: bytes,
+) -> None:
+    audit = FakeAuditSink()
+    parse_calls: list[bytes] = []
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    def fail_if_parsed(candidate: bytes) -> dict[str, object]:
+        parse_calls.append(candidate)
+        return {}
+
+    connector._decode_body = fail_if_parsed
+
+    with pytest.raises(FeishuConnectorError, match="signature_mismatch"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={
+                    "X-Lark-Request-Timestamp": str(int(RECEIVED_AT.timestamp())),
+                    "X-Lark-Request-Nonce": "nonce_001",
+                    "X-Lark-Signature": "bad",
+                },
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert parse_calls == []
+    assert [record.reason_code for record in audit.records] == ["signature_mismatch"]
+
+
 def test_oversized_body_checks_size_before_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
     audit = FakeAuditSink()
     order: list[str] = []
