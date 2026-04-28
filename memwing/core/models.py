@@ -36,13 +36,14 @@ class MemoryStatus(StrEnum):
 PurgeLevel = Literal["none", "memwing_redaction"]
 MemoryCreatedBy = Literal["system", "user", "agent"]
 GraphWriteJobStatus = Literal["pending", "processing", "succeeded", "retry", "dead_letter"]
+OutboxJobStatus = Literal["pending", "processing", "succeeded", "dead_letter"]
 
 
 @dataclass(frozen=True, slots=True)
 class SourceEvent:
     id: str
     project_memory_space_id: str
-    group_id: str
+    group_id: str | None
     thread_id: str | None
     shared_group_id: str | None
     author_id: str | None
@@ -60,6 +61,47 @@ class SourceEvent:
     purge_level: PurgeLevel
     graph_backend_raw_retained: bool
     created_at: datetime
+    runtime_event_idempotency_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEvent:
+    id: str
+    trace_id: str
+    entity_type: str
+    entity_id: str
+    stage: str
+    input_ref: str | None
+    output_ref: str | None
+    decision: str
+    reason_code: str | None
+    reason_text: str | None
+    source_event_ids: tuple[str, ...]
+    latency_ms: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxJob:
+    id: str
+    project_memory_space_id: str
+    source_event_id: str
+    job_type: str
+    payload_json: dict[str, object]
+    status: OutboxJobStatus
+    idempotency_key: str
+    aggregate_key: str | None
+    attempts: int
+    max_attempts: int
+    priority: int
+    next_run_at: datetime
+    locked_at: datetime | None
+    locked_by: str | None
+    lock_expires_at: datetime | None
+    last_error: str | None
+    dead_letter_reason: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

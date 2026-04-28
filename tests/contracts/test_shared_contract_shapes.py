@@ -253,6 +253,7 @@ def test_source_event_and_memory_item_are_core_neutral_contracts() -> None:
         purge_level="none",
         graph_backend_raw_retained=False,
         created_at=event_time,
+        runtime_event_idempotency_key=None,
     )
     memory_item = MemoryItem(
         id="memory_001",
