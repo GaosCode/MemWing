@@ -1,5 +1,4 @@
 import asyncio
-import fnmatch
 
 import pytest
 
@@ -13,6 +12,7 @@ from memwing.core.scope import (
     ProjectMemorySpace,
     RuntimeScopeBinding,
 )
+from memwing.core.scope_patterns import session_pattern_matches
 
 
 class ScopeBindingFixture:
@@ -54,7 +54,7 @@ class ScopeBindingFixture:
             if binding.runtime == runtime
             and binding.agent_id == agent_id
             and binding.workspace_id == workspace_id
-            and fnmatch.fnmatchcase(session_key, binding.session_key_pattern)
+            and session_pattern_matches(binding.session_key_pattern, session_key)
         ]
         return matches[0] if matches else None
 

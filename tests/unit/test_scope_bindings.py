@@ -9,6 +9,7 @@ from memwing.core.scope import (
     ProjectMemorySpace,
     RuntimeScopeBinding,
 )
+from memwing.core.scope_patterns import session_pattern_to_sql_like
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 
 
@@ -95,3 +96,49 @@ def test_runtime_session_key_pattern_matches_session_id() -> None:
 
     assert resolved.effective_scope.project_memory_space_id == "project_001"
     assert resolved.source_group_id is None
+
+
+def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Demo",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id="workspace_001",
+            session_key_pattern="session_100%_*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    missing = asyncio.run(
+        store.find_runtime_scope_binding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id="workspace_001",
+            session_id="sessionX100Z_more",
+        )
+    )
+    matched = asyncio.run(
+        store.find_runtime_scope_binding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id="workspace_001",
+            session_id="session_100%_more",
+        )
+    )
+
+    assert missing is None
+    assert matched is not None
+
+
+def test_runtime_session_key_pattern_sql_like_escapes_only_sql_wildcards() -> None:
+    assert session_pattern_to_sql_like("feature/*") == "feature/%"
+    assert session_pattern_to_sql_like("session_100%_*") == "session!_100!%!_%"
+    assert session_pattern_to_sql_like("bang!_*") == "bang!!!_%"

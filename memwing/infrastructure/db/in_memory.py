@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import fnmatch
 
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.core.scope_patterns import session_pattern_matches
 from memwing.core.scope import (
     GroupMemorySettings,
     PlatformScopeBinding,
@@ -78,7 +78,7 @@ class InMemoryDataStore:
             if binding.runtime == runtime
             and binding.agent_id == agent_id
             and binding.workspace_id == workspace_id
-            and fnmatch.fnmatchcase(session_key, binding.session_key_pattern)
+            and session_pattern_matches(binding.session_key_pattern, session_key)
         ]
         matches.sort(key=lambda binding: len(binding.session_key_pattern), reverse=True)
         return matches[0] if matches else None
