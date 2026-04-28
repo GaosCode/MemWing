@@ -1,0 +1,26 @@
+{
+  "id": "memwing",
+  "name": "MemWing",
+  "version": "0.1.0",
+  "entry": "dist/index.js",
+  "openclaw": {
+    "supportedVersions": ">=0.0.0"
+  },
+  "permissions": {
+    "allowConversationAccess": true,
+    "network": [
+      "http://localhost:*",
+      "https://localhost:*"
+    ]
+  },
+  "contextEngines": [
+    "memwing"
+  ],
+  "tools": [
+    "memwing_search_memory",
+    "memwing_get_memory",
+    "memwing_explain_memory",
+    "memwing_search_sources",
+    "memwing_get_project_context"
+  ]
+}
