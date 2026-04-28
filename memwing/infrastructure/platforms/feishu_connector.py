@@ -30,7 +30,6 @@ from memwing.infrastructure.platforms.feishu_security import (
     InMemoryFeishuReplayProtector,
     NoopFeishuAuditSink,
     compute_feishu_signature,
-    has_formal_signature_headers,
     normalize_headers,
     parse_timestamp,
     payload_from_decrypted,
@@ -128,7 +127,6 @@ class FeishuConnector:
         if challenge_payload is not None:
             challenge = await self._challenge_from_payload(
                 challenge_payload,
-                request_headers,
                 raw_hash,
             )
             if challenge is not None:
@@ -155,6 +153,15 @@ class FeishuConnector:
         )
         if "encrypt" in payload:
             payload = await self._decrypt_payload(payload["encrypt"], raw_hash)
+
+        challenge = await self._challenge_from_payload(payload, raw_hash)
+        if challenge is not None:
+            return FeishuWebhookResult(
+                kind="challenge",
+                status_code=200,
+                body={"challenge": challenge},
+                raw_payload_hash=raw_hash,
+            )
 
         try:
             raw_event = build_feishu_raw_event(raw_request, payload)
@@ -232,24 +239,13 @@ class FeishuConnector:
     async def _challenge_from_payload(
         self,
         payload: JsonObject,
-        headers: Mapping[str, str],
         raw_payload_hash: str,
     ) -> str | None:
         challenge = text_value(payload.get("challenge"))
         if challenge is not None:
             await self._verify_challenge_token(payload, raw_payload_hash)
             return challenge
-
-        encrypted_text = text_value(payload.get("encrypt"))
-        if encrypted_text is None or has_formal_signature_headers(headers):
-            return None
-
-        decrypted_payload = await self._decrypt_payload(encrypted_text, raw_payload_hash)
-        challenge = text_value(decrypted_payload.get("challenge"))
-        if challenge is None:
-            return None
-        await self._verify_challenge_token(decrypted_payload, raw_payload_hash)
-        return challenge
+        return None
 
     async def _verify_challenge_token(
         self,

@@ -9,16 +9,18 @@ from memwing.infrastructure.platforms.feishu_connector import FeishuConnector
 RECEIVED_AT = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)
 
 
-def test_feishu_webhook_api_returns_encrypted_challenge_without_formal_signature() -> None:
+def test_feishu_webhook_api_returns_signed_encrypted_challenge() -> None:
+    body = b'{"encrypt":"cipher_challenge"}'
     connector = FeishuConnector(
         project_memory_space_id="project_001",
+        signing_secret="secret_001",
         decryptor=StaticDecryptor({"challenge": "challenge_001"}),
     )
 
     response = asyncio.run(
         handle_feishu_webhook(
-            headers={},
-            body=b'{"encrypt":"cipher_challenge"}',
+            headers=_signed_headers(body),
+            body=body,
             connector=connector,
             received_at=RECEIVED_AT,
         )

@@ -39,24 +39,50 @@ def test_plain_challenge_bypasses_formal_signature_headers() -> None:
     assert audit.records == []
 
 
-def test_encrypted_challenge_uses_decryptor_without_formal_signature_headers() -> None:
+def test_signed_encrypted_challenge_uses_decryptor_after_formal_signature() -> None:
     decryptor = FakeDecryptor({"challenge": "challenge_002", "token": "token_001"})
+    body = b'{"encrypt":"cipher_challenge"}'
     connector = FeishuConnector(
         project_memory_space_id="project_001",
+        signing_secret=SECRET,
         verification_token="token_001",
         decryptor=decryptor,
     )
 
     result = asyncio.run(
         connector.handle_webhook(
-            headers={},
-            body=b'{"encrypt":"cipher_challenge"}',
+            headers=_signed_headers(body),
+            body=body,
             received_at=RECEIVED_AT,
         )
     )
 
     assert result.body == {"challenge": "challenge_002"}
     assert decryptor.calls == ["decrypt:cipher_challenge"]
+
+
+def test_unsigned_encrypted_event_fails_before_decrypting() -> None:
+    audit = FakeAuditSink()
+    decryptor = FakeDecryptor(_message_payload())
+    body = b'{"encrypt":"cipher_event"}'
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        decryptor=decryptor,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="timestamp_missing"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers={},
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert decryptor.calls == []
+    assert [record.reason_code for record in audit.records] == ["timestamp_missing"]
 
 
 def test_formal_event_verifies_signature_then_replay_then_decrypts() -> None:
