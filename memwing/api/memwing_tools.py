@@ -28,6 +28,21 @@ MEMWING_TOOL_NAMES = (
     "memwing_get_project_context",
 )
 
+_MEMORY_QUERY_FIELDS = frozenset(
+    (
+        "agent_id",
+        "workspace_id",
+        "session_id",
+        "query",
+        "mode",
+        "limit",
+        "cursor",
+        "sort",
+        "min_score",
+        "scope",
+    )
+)
+
 
 async def memwing_search_memory(
     payload: Mapping[str, object],
@@ -89,6 +104,7 @@ def _memory_query_from_payload(
     *,
     default_mode: str = "current",
 ) -> AgentMemoryQuery:
+    _reject_unknown_fields(payload, _MEMORY_QUERY_FIELDS)
     return AgentMemoryQuery(
         runtime_ref=openclaw_runtime_ref_from_payload(payload),
         query=_required_text(payload.get("query"), "query"),
@@ -99,6 +115,12 @@ def _memory_query_from_payload(
         sort=_sort(payload.get("sort")),
         min_score=_min_score(payload.get("min_score")),
     )
+
+
+def _reject_unknown_fields(payload: Mapping[str, object], allowed_fields: frozenset[str]) -> None:
+    for field_name in payload:
+        if field_name not in allowed_fields:
+            raise SchemaValidationError(f"{field_name} is not supported")
 
 
 def _mode(value: object, default: str) -> str:

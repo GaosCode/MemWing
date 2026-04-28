@@ -102,6 +102,25 @@ def test_memwing_search_memory_uses_empty_envelope_and_canonical_limit() -> None
     asyncio.run(run())
 
 
+def test_memwing_search_memory_rejects_native_max_results() -> None:
+    async def run() -> None:
+        runtime = RecordingRuntime()
+        with pytest.raises(SchemaValidationError, match="max_results"):
+            await memwing_search_memory(
+                {
+                    "agent_id": "main",
+                    "query": "demo scope",
+                    "max_results": 9,
+                    "scope": {"project_memory_space_id": "project_001"},
+                },
+                runtime,
+            )
+
+        assert runtime.queries == []
+
+    asyncio.run(run())
+
+
 def test_native_memory_search_converts_max_results_at_boundary() -> None:
     async def run() -> None:
         runtime = RecordingRuntime()
@@ -117,6 +136,7 @@ def test_native_memory_search_converts_max_results_at_boundary() -> None:
 
         assert result["contexts"] == ()
         assert runtime.queries[0].limit == 3
+        assert not hasattr(runtime.queries[0], "max_results")
 
     asyncio.run(run())
 
