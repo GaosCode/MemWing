@@ -32,6 +32,12 @@ node_modules/
 .next/
 .turbo/
 coverage/
+frontend/package.json
+frontend/package-lock.json
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Local runtime data
 *.db
