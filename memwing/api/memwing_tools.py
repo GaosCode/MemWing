@@ -42,6 +42,34 @@ _MEMORY_QUERY_FIELDS = frozenset(
         "scope",
     )
 )
+_MEMORY_GET_FIELDS = frozenset(
+    (
+        "agent_id",
+        "workspace_id",
+        "session_id",
+        "memory_id",
+        "include_evidence",
+        "scope",
+    )
+)
+_MEMORY_EXPLAIN_FIELDS = frozenset(
+    (
+        "agent_id",
+        "workspace_id",
+        "session_id",
+        "memory_id",
+        "scope",
+    )
+)
+_PROJECT_CONTEXT_FIELDS = frozenset(
+    (
+        "agent_id",
+        "workspace_id",
+        "session_id",
+        "token_budget",
+        "scope",
+    )
+)
 
 
 async def memwing_search_memory(
@@ -55,6 +83,7 @@ async def memwing_get_memory(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
 ) -> AgentKnowledgeGetResult:
+    _reject_unknown_fields(payload, _MEMORY_GET_FIELDS)
     request = AgentKnowledgeGetRequest(
         runtime_ref=openclaw_runtime_ref_from_payload(payload),
         memory_id=_required_text(payload.get("memory_id"), "memory_id"),
@@ -68,6 +97,7 @@ async def memwing_explain_memory(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
 ) -> AgentKnowledgeExplainResult:
+    _reject_unknown_fields(payload, _MEMORY_EXPLAIN_FIELDS)
     request = AgentKnowledgeExplainRequest(
         runtime_ref=openclaw_runtime_ref_from_payload(payload),
         memory_id=_required_text(payload.get("memory_id"), "memory_id"),
@@ -88,6 +118,7 @@ async def memwing_get_project_context(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
 ) -> AgentContextResult:
+    _reject_unknown_fields(payload, _PROJECT_CONTEXT_FIELDS)
     request = AgentContextRequest(
         runtime_ref=openclaw_runtime_ref_from_payload(payload),
         scope=memory_scope_from_payload(payload),
