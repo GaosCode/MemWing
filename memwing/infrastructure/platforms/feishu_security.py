@@ -100,7 +100,7 @@ def has_formal_signature_headers(headers: Mapping[str, str]) -> bool:
 def parse_timestamp(value: str) -> datetime | None:
     try:
         return datetime.fromtimestamp(int(value), tz=UTC)
-    except ValueError:
+    except (OSError, OverflowError, ValueError):
         return None
 
 

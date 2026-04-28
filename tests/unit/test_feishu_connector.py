@@ -260,6 +260,27 @@ def test_empty_formal_header_values_are_audited_by_required_header(
     assert [record.reason_code for record in audit.records] == [reason_code]
 
 
+def test_oversized_timestamp_is_audited_as_timestamp_invalid() -> None:
+    audit = FakeAuditSink()
+    body = json.dumps(_message_payload()).encode()
+    connector = FeishuConnector(
+        project_memory_space_id="project_001",
+        signing_secret=SECRET,
+        audit_sink=audit,
+    )
+
+    with pytest.raises(FeishuConnectorError, match="timestamp_invalid"):
+        asyncio.run(
+            connector.handle_webhook(
+                headers=_signed_headers(body, timestamp="9" * 400),
+                body=body,
+                received_at=RECEIVED_AT,
+            )
+        )
+
+    assert [record.reason_code for record in audit.records] == ["timestamp_invalid"]
+
+
 def test_signed_invalid_json_with_bad_signature_audits_signature_before_schema() -> None:
     audit = FakeAuditSink()
     body = b"{not-json"
