@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from memwing.api.agent_knowledge import AgentRuntimeStatusRequest
-from memwing.api.agent_memory import AgentMemoryResultItem, OpenClawNativeMemorySearchRequest
+from memwing.api.agent_memory import AgentMemoryQuery, AgentMemoryResultItem
 from memwing.api.memwing_tools import memwing_get_memory
 from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError, require_text
@@ -15,6 +15,20 @@ from memwing.infrastructure.agents.openclaw_event_mapper import (
     openclaw_runtime_ref_from_payload,
 )
 from memwing.ports.agent_runtime import AgentRuntimePort
+
+
+_NATIVE_SEARCH_FIELDS = frozenset(
+    (
+        "agent_id",
+        "workspace_id",
+        "session_id",
+        "query",
+        "mode",
+        "max_results",
+        "min_score",
+        "scope",
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,13 +80,16 @@ async def native_memory_search(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
 ) -> JsonObject:
-    request = OpenClawNativeMemorySearchRequest(
+    _reject_unknown_fields(payload, _NATIVE_SEARCH_FIELDS)
+    query = AgentMemoryQuery(
         runtime_ref=openclaw_runtime_ref_from_payload(payload),
         query=_required_text(payload.get("query"), "query"),
         scope=memory_scope_from_payload(payload),
-        max_results=_max_results(payload.get("max_results")),
+        mode=_mode(payload.get("mode")),
+        limit=_max_results(payload.get("max_results")),
+        min_score=_min_score(payload.get("min_score")),
     )
-    result = await _runtime(runtime).knowledge_search(request.to_agent_memory_query())
+    result = await _runtime(runtime).knowledge_search(query)
     return {
         "contexts": result.contexts,
         "results": tuple(_result_item_to_json(item) for item in result.results),
@@ -133,12 +150,34 @@ def _max_results(value: object) -> int:
     return value
 
 
+def _mode(value: object) -> str:
+    if value is None:
+        return "current"
+    if value not in ("current", "history"):
+        raise SchemaValidationError("mode must be current or history")
+    return value
+
+
+def _min_score(value: object) -> float:
+    if value is None:
+        return 0
+    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+        raise SchemaValidationError("min_score must be a non-negative number")
+    return float(value)
+
+
 def _force(value: object) -> bool:
     if value is None:
         return False
     if not isinstance(value, bool):
         raise SchemaValidationError("force must be a boolean")
     return value
+
+
+def _reject_unknown_fields(payload: Mapping[str, object], allowed_fields: frozenset[str]) -> None:
+    for field_name in payload:
+        if field_name not in allowed_fields:
+            raise SchemaValidationError(f"{field_name} is not supported")
 
 
 def _result_item_to_json(item: AgentMemoryResultItem) -> JsonObject:

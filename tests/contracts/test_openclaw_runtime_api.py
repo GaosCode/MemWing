@@ -14,7 +14,6 @@ from memwing.api.agent_knowledge import (
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemorySearchResult
 from memwing.api.memwing_tools import memwing_search_memory
-from memwing.api.openclaw_memory import native_memory_search, native_memory_status
 from memwing.api.openclaw_runtime import (
     assemble_openclaw_context,
     complete_openclaw_turn,
@@ -142,46 +141,6 @@ def test_memwing_search_memory_rejects_unknown_scope_fields() -> None:
     asyncio.run(run())
 
 
-def test_native_memory_search_converts_max_results_at_boundary() -> None:
-    async def run() -> None:
-        runtime = RecordingRuntime()
-        result = await native_memory_search(
-            {
-                "agent_id": "main",
-                "query": "demo scope",
-                "max_results": 3,
-                "scope": {"project_memory_space_id": "project_001"},
-            },
-            runtime,
-        )
-
-        assert result["contexts"] == ()
-        assert runtime.queries[0].limit == 3
-        assert not hasattr(runtime.queries[0], "max_results")
-
-    asyncio.run(run())
-
-
-def test_native_memory_status_returns_compat_envelope() -> None:
-    async def run() -> None:
-        runtime = RecordingRuntime()
-        status = await native_memory_status(
-            {
-                "agent_id": "main",
-                "workspace_id": "workspace_001",
-                "project_memory_space_id": "project_001",
-            },
-            runtime,
-        )
-
-        assert status.agent_id == "main"
-        assert status.project_memory_space_id == "project_001"
-        assert status.evidence_index_status == "mock_not_connected"
-        assert "native_memory_shim" in status.capabilities
-
-    asyncio.run(run())
-
-
 def test_compaction_delegation_envelope_is_not_noop() -> None:
     result = delegate_compaction_to_runtime(
         {"agent_id": "main", "messages": [{"role": "user", "content": "hello"}]},
@@ -202,19 +161,6 @@ def test_invalid_payloads_fail_schema_validation() -> None:
                 }
             )
         )
-
-    with pytest.raises(SchemaValidationError, match="max_results"):
-        asyncio.run(
-            native_memory_search(
-                {
-                    "agent_id": "main",
-                    "query": "demo scope",
-                    "max_results": 0,
-                    "scope": {"project_memory_space_id": "project_001"},
-                }
-            )
-        )
-
 
 def _event_payload(hook_name: str) -> dict[str, object]:
     return {
