@@ -497,6 +497,10 @@ export function ScrollableTabs({
       return;
     }
 
+    if (event.target instanceof Element && event.target.closest("button")) {
+      return;
+    }
+
     const container = containerRef.current;
     if (!container) {
       return;
@@ -508,6 +512,7 @@ export function ScrollableTabs({
       scrollLeft: container.scrollLeft,
     };
     container.setPointerCapture(event.pointerId);
+    event.preventDefault();
   }
 
   function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -517,6 +522,7 @@ export function ScrollableTabs({
     }
 
     container.scrollLeft = dragRef.current.scrollLeft - (event.clientX - dragRef.current.startX);
+    event.preventDefault();
   }
 
   function endDrag(event: PointerEvent<HTMLDivElement>) {
