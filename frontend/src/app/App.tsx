@@ -74,7 +74,7 @@ export function App() {
     }
 
     if (detailMode === "maintenance") {
-      return <MaintenanceDetailPage onBack={() => setDetailMode(null)} />;
+      return <MaintenanceDetailPage item={selectedMaintenance} onBack={() => setDetailMode(null)} />;
     }
 
     if (activeNav === "inbox") {
