@@ -282,6 +282,13 @@ def test_source_event_and_memory_item_are_core_neutral_contracts() -> None:
         last_decay_computed_at=None,
         pinned=False,
         created_by="system",
+        created_at=event_time,
+        activated_at=None,
+        updated_at=event_time,
+        archived_at=None,
+        hidden_at=None,
+        invalidated_at=None,
+        removed_at=None,
     )
 
     assert source_event.purge_level == "none"
@@ -289,3 +296,4 @@ def test_source_event_and_memory_item_are_core_neutral_contracts() -> None:
     assert memory_item.route is MemoryRoute.MANUAL
     assert memory_item.status is MemoryStatus.CANDIDATE
     assert memory_item.source_event_ids == ("source_001",)
+    assert memory_item.updated_at is event_time

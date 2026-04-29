@@ -19,7 +19,7 @@ from memwing.api.schemas import (
     PushCandidate,
     RememberEventResult,
 )
-from memwing.core.models import GraphWriteJob, GraphWriteResult
+from memwing.core.models import GraphWriteJob, GraphWriteResult, LongTermFilterItem
 from memwing.core.scope import EffectiveScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
@@ -119,6 +119,16 @@ def test_graph_backend_port_uses_graph_write_job_contract() -> None:
     assert hints[parameters[1].name] is GraphWriteJob
     assert hints["return"] is GraphWriteResult
     assert not hasattr(GraphBackendPort, "write_facts")
+
+
+def test_long_term_filter_port_returns_candidates_not_persisted_memory_items() -> None:
+    signature = inspect.signature(LongTermFilterPort.filter_events)
+    parameters = list(signature.parameters.values())
+    hints = get_type_hints(LongTermFilterPort.filter_events)
+
+    assert parameters[1].name == "events"
+    assert parameters[2].name == "scope"
+    assert hints["return"] == tuple[LongTermFilterItem, ...]
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:

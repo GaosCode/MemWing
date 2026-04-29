@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 
@@ -35,6 +35,9 @@ class MemoryStatus(StrEnum):
 
 PurgeLevel = Literal["none", "memwing_redaction"]
 MemoryCreatedBy = Literal["system", "user", "agent"]
+MemoryChangedBy = Literal["system", "user", "agent"]
+PageMemoryScopeType = Literal["project", "group", "thread", "meeting"]
+MemoryGraphLinkType = Literal["fact", "episode", "entity", "redaction_marker"]
 GraphWriteJobStatus = Literal["pending", "processing", "succeeded", "retry", "dead_letter"]
 OutboxJobStatus = Literal["pending", "processing", "succeeded", "dead_letter"]
 
@@ -105,6 +108,38 @@ class OutboxJob:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceChunk:
+    id: str
+    source_event_id: str
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    shared_group_id: str | None
+    chunk_text: str
+    chunk_index: int
+    embedding_model: str | None
+    embedding_ref: str | None
+    embedding_vector: tuple[float, ...] | None
+    invalidated_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class WorkingMemoryEntry:
+    id: str
+    source_event_id: str
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    shared_group_id: str | None
+    content: str
+    token_count: int
+    sequence: int
+    flushed_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryItem:
     id: str
     project_memory_space_id: str
@@ -132,6 +167,78 @@ class MemoryItem:
     last_decay_computed_at: datetime | None
     pinned: bool
     created_by: MemoryCreatedBy
+    created_at: datetime
+    activated_at: datetime | None
+    updated_at: datetime
+    archived_at: datetime | None
+    hidden_at: datetime | None
+    invalidated_at: datetime | None
+    removed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryVersion:
+    id: str
+    memory_id: str
+    version: int
+    title: str
+    content: str
+    summary: str | None
+    status: MemoryStatus
+    source_event_ids: tuple[str, ...]
+    changed_by: MemoryChangedBy
+    change_reason: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PageMemory:
+    id: str
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    shared_group_id: str | None
+    scope_type: PageMemoryScopeType
+    scope_id: str
+    title: str
+    brief: str
+    source_event_ids: tuple[str, ...]
+    linked_memory_item_ids: tuple[str, ...]
+    version: int
+    needs_rebuild: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPageVersion:
+    id: str
+    page_id: str
+    version: int
+    title: str
+    brief: str
+    source_event_ids: tuple[str, ...]
+    linked_memory_item_ids: tuple[str, ...]
+    changed_by: MemoryChangedBy
+    change_reason: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LongTermFilterItem:
+    title: str
+    content: str
+    route: MemoryRoute
+    display_type: MemoryDisplayType
+    original_score: float
+    half_life_days: int
+    source_event_ids: tuple[str, ...]
+    primary_source_event_id: str | None
+    reason: str
+    confidence: float
+    event_time: datetime | None
+    valid_from: datetime | None
+    valid_to: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +271,20 @@ class GraphWriteResult:
     invalidated_facts: tuple[GraphFact, ...]
     backend_episode_refs: tuple[str, ...]
     backend_fact_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryGraphLink:
+    id: str
+    backend: str
+    memory_id: str
+    source_event_id: str
+    project_memory_space_id: str
+    backend_space_id: str
+    backend_object_type: str
+    backend_object_id: str
+    link_type: MemoryGraphLinkType
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

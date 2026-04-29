@@ -164,6 +164,50 @@ CREATE INDEX IF NOT EXISTS idx_outbox_jobs_project_aggregate_status
 CREATE INDEX IF NOT EXISTS idx_outbox_jobs_source_event
     ON outbox_jobs (source_event_id);
 
+CREATE TABLE IF NOT EXISTS evidence_chunks (
+    id text PRIMARY KEY,
+    source_event_id text NOT NULL REFERENCES source_events(id),
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    group_id text,
+    thread_id text,
+    shared_group_id text,
+    chunk_text text NOT NULL,
+    chunk_index integer NOT NULL,
+    embedding_model text,
+    embedding_ref text,
+    embedding_vector double precision[],
+    invalidated_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (source_event_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_chunks_scope
+    ON evidence_chunks (project_memory_space_id, group_id, thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_chunks_invalidated_at
+    ON evidence_chunks (invalidated_at);
+
+CREATE TABLE IF NOT EXISTS working_memory_entries (
+    id text PRIMARY KEY,
+    source_event_id text NOT NULL REFERENCES source_events(id),
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    group_id text,
+    thread_id text,
+    shared_group_id text,
+    content text NOT NULL,
+    token_count integer NOT NULL,
+    sequence integer NOT NULL,
+    flushed_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (project_memory_space_id, thread_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_working_memory_entries_scope_sequence
+    ON working_memory_entries (project_memory_space_id, group_id, thread_id, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_working_memory_entries_flushed
+    ON working_memory_entries (project_memory_space_id, thread_id, flushed_at);
+
 CREATE TABLE IF NOT EXISTS memory_items (
     id text PRIMARY KEY,
     project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
@@ -191,12 +235,139 @@ CREATE TABLE IF NOT EXISTS memory_items (
     last_decay_computed_at timestamptz,
     pinned boolean NOT NULL DEFAULT false,
     created_by text NOT NULL,
+    activated_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    archived_at timestamptz,
+    hidden_at timestamptz,
+    invalidated_at timestamptz,
+    removed_at timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_items_scope_status
     ON memory_items (project_memory_space_id, group_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_memory_items_project_status_display_updated
+    ON memory_items (project_memory_space_id, status, display_type, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_memory_items_project_group_status_updated
+    ON memory_items (project_memory_space_id, group_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_memory_items_review_touch
+    ON memory_items (last_reviewed_at, last_confirmed_at);
+
+CREATE TABLE IF NOT EXISTS memory_versions (
+    id text PRIMARY KEY,
+    memory_id text NOT NULL REFERENCES memory_items(id),
+    version integer NOT NULL,
+    title text NOT NULL,
+    content text NOT NULL,
+    summary text,
+    status text NOT NULL,
+    source_event_ids text[] NOT NULL DEFAULT '{}',
+    changed_by text NOT NULL,
+    change_reason text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (memory_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS memory_pages (
+    id text PRIMARY KEY,
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    group_id text,
+    thread_id text,
+    shared_group_id text,
+    scope_type text NOT NULL,
+    scope_id text NOT NULL,
+    title text NOT NULL,
+    brief text NOT NULL,
+    source_event_ids text[] NOT NULL DEFAULT '{}',
+    linked_memory_item_ids text[] NOT NULL DEFAULT '{}',
+    version integer NOT NULL,
+    needs_rebuild boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (project_memory_space_id, scope_type, scope_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_pages_scope
+    ON memory_pages (project_memory_space_id, group_id, thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_memory_pages_needs_rebuild
+    ON memory_pages (project_memory_space_id, needs_rebuild, updated_at);
+
+CREATE TABLE IF NOT EXISTS memory_page_versions (
+    id text PRIMARY KEY,
+    page_id text NOT NULL REFERENCES memory_pages(id),
+    version integer NOT NULL,
+    title text NOT NULL,
+    brief text NOT NULL,
+    source_event_ids text[] NOT NULL DEFAULT '{}',
+    linked_memory_item_ids text[] NOT NULL DEFAULT '{}',
+    changed_by text NOT NULL,
+    change_reason text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (page_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS graph_write_jobs (
+    id text PRIMARY KEY,
+    backend text NOT NULL,
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    thread_id text,
+    saga_id text,
+    source_event_ids text[] NOT NULL DEFAULT '{}',
+    route text NOT NULL,
+    status text NOT NULL,
+    idempotency_key text NOT NULL,
+    attempts integer NOT NULL DEFAULT 0,
+    max_attempts integer NOT NULL DEFAULT 3,
+    priority integer NOT NULL DEFAULT 100,
+    next_run_at timestamptz NOT NULL DEFAULT now(),
+    dead_letter_reason text,
+    last_error text,
+    locked_at timestamptz,
+    locked_by text,
+    lock_expires_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_lock
+    ON graph_write_jobs (status, locked_at);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_lock_expires
+    ON graph_write_jobs (status, lock_expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_run_priority
+    ON graph_write_jobs (status, next_run_at, priority);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_project_thread_saga
+    ON graph_write_jobs (project_memory_space_id, thread_id, saga_id);
+
+CREATE TABLE IF NOT EXISTS memory_graph_links (
+    id text PRIMARY KEY,
+    backend text NOT NULL,
+    memory_id text NOT NULL REFERENCES memory_items(id),
+    source_event_id text NOT NULL REFERENCES source_events(id),
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    backend_space_id text NOT NULL,
+    backend_object_type text NOT NULL,
+    backend_object_id text NOT NULL,
+    link_type text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (backend, backend_object_type, backend_object_id, memory_id, link_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_graph_links_memory
+    ON memory_graph_links (memory_id);
+
+CREATE INDEX IF NOT EXISTS idx_memory_graph_links_source_event
+    ON memory_graph_links (source_event_id);
+
+CREATE INDEX IF NOT EXISTS idx_memory_graph_links_project_backend
+    ON memory_graph_links (project_memory_space_id, backend);
 
 CREATE TABLE IF NOT EXISTS memory_recall_events (
     id text PRIMARY KEY,
