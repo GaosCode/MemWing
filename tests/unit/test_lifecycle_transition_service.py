@@ -287,6 +287,90 @@ def test_successful_transition_replay_is_side_effect_idempotent() -> None:
     asyncio.run(scenario())
 
 
+def test_successful_transition_replay_after_later_status_change_fails_without_side_effects() -> None:
+    store = InMemoryDataStore()
+    service = LifecycleTransitionService(store)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(_memory_item(status=MemoryStatus.CANDIDATE))
+
+        original_request = _request(
+            action=LifecycleAction.APPROVE,
+            idempotency_key="lifecycle:memory_001:approve:stale-replay",
+        )
+        await service.transition(original_request)
+        archived = await service.transition(
+            _request(
+                action=LifecycleAction.ARCHIVE,
+                idempotency_key="lifecycle:memory_001:archive:before-stale-replay",
+                reason="Archive before stale replay",
+            )
+        )
+        audit_count_before_replay = len(store.audit_events)
+        async with store.transaction() as tx:
+            latest_version_before_replay = await tx.memory_versions.get_latest("memory_001")
+
+        with pytest.raises(
+            DomainRuleViolation,
+            match="idempotent lifecycle replay no longer matches memory status",
+        ):
+            await service.transition(original_request)
+
+        async with store.transaction() as tx:
+            memory = await tx.memory_items.get("memory_001")
+            latest_version_after_replay = await tx.memory_versions.get_latest("memory_001")
+
+        assert memory == archived.memory_item
+        assert latest_version_before_replay is not None
+        assert latest_version_after_replay == latest_version_before_replay
+        assert latest_version_after_replay.version == 2
+        assert len(store.audit_events) == audit_count_before_replay
+
+    asyncio.run(scenario())
+
+
+def test_replay_with_same_idempotency_key_and_different_action_fails_without_side_effects() -> None:
+    store = InMemoryDataStore()
+    service = LifecycleTransitionService(store)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(_memory_item(status=MemoryStatus.CANDIDATE))
+
+        idempotency_key = "lifecycle:memory_001:reused-key"
+        approved = await service.transition(
+            _request(action=LifecycleAction.APPROVE, idempotency_key=idempotency_key)
+        )
+        audit_count_before_replay = len(store.audit_events)
+        async with store.transaction() as tx:
+            latest_version_before_replay = await tx.memory_versions.get_latest("memory_001")
+
+        with pytest.raises(
+            DomainRuleViolation,
+            match="idempotency key was already used for approve",
+        ):
+            await service.transition(
+                _request(
+                    action=LifecycleAction.ARCHIVE,
+                    idempotency_key=idempotency_key,
+                    reason="Archive with reused key",
+                )
+            )
+
+        async with store.transaction() as tx:
+            memory = await tx.memory_items.get("memory_001")
+            latest_version_after_replay = await tx.memory_versions.get_latest("memory_001")
+
+        assert memory == approved.memory_item
+        assert latest_version_before_replay is not None
+        assert latest_version_after_replay == latest_version_before_replay
+        assert latest_version_after_replay.version == 1
+        assert len(store.audit_events) == audit_count_before_replay
+
+    asyncio.run(scenario())
+
+
 def test_failed_transition_replay_is_side_effect_idempotent() -> None:
     store = InMemoryDataStore()
     service = LifecycleTransitionService(store)
