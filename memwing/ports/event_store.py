@@ -56,6 +56,15 @@ class AuditEventRepositoryPort(Protocol):
     async def record(self, event: AuditEvent) -> AuditEvent:
         ...
 
+    async def get_by_idempotency_key(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        idempotency_key: str,
+    ) -> AuditEvent | None:
+        ...
+
 
 class OutboxJobRepositoryPort(Protocol):
     async def enqueue(self, job: OutboxJob) -> OutboxJob:

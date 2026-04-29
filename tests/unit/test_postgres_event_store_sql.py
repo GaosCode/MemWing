@@ -51,6 +51,32 @@ def test_postgres_remember_event_repositories_execute_transactional_insert_paths
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in queries
     audit_call = next(call for call in connection.calls if "INSERT INTO audit_events" in call[1])
     assert audit_call[2]["actor_id"] == "system"
+    assert audit_call[2]["idempotency_key"] == "audit:source_001"
+
+
+def test_postgres_audit_record_loads_existing_idempotent_event() -> None:
+    source = source_event()
+    audit = audit_event(source)
+    connection = FakePostgresConnection(
+        fetchrow_results=(
+            None,
+            audit_event_row(audit),
+        )
+    )
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            recorded = await tx.audit_events.record(audit)
+
+        assert recorded == audit
+
+    asyncio.run(scenario())
+
+    queries = "\n".join(call[1] for call in connection.calls)
+    assert "ON CONFLICT (entity_type, entity_id, idempotency_key)" in queries
+    assert "WHERE idempotency_key IS NOT NULL" in queries
+    assert "FROM audit_events" in connection.calls[1][1]
+    assert connection.calls[1][2]["idempotency_key"] == "audit:source_001"
 
 
 def test_postgres_source_insert_if_absent_loads_existing_conflict_row() -> None:

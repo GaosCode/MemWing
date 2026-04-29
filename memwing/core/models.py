@@ -83,6 +83,7 @@ class AuditEvent:
     latency_ms: int | None
     created_at: datetime
     actor_id: str | None = None
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

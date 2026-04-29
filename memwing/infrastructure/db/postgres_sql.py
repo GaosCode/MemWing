@@ -66,13 +66,26 @@ _INSERT_AUDIT_EVENT_SQL = """
 INSERT INTO audit_events (
     id, trace_id, entity_type, entity_id, stage, input_ref, output_ref,
     decision, reason_code, reason_text, source_event_ids, latency_ms, created_at,
-    actor_id
+    actor_id, idempotency_key
 ) VALUES (
     %(id)s, %(trace_id)s, %(entity_type)s, %(entity_id)s, %(stage)s, %(input_ref)s,
     %(output_ref)s, %(decision)s, %(reason_code)s, %(reason_text)s,
-    %(source_event_ids)s, %(latency_ms)s, %(created_at)s, %(actor_id)s
+    %(source_event_ids)s, %(latency_ms)s, %(created_at)s, %(actor_id)s,
+    %(idempotency_key)s
 )
+ON CONFLICT (entity_type, entity_id, idempotency_key)
+WHERE idempotency_key IS NOT NULL
+DO NOTHING
 RETURNING *
+"""
+
+_SELECT_AUDIT_EVENT_BY_IDEMPOTENCY_SQL = """
+SELECT *
+FROM audit_events
+WHERE entity_type = %(entity_type)s
+  AND entity_id = %(entity_id)s
+  AND idempotency_key = %(idempotency_key)s
+LIMIT 1
 """
 
 _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL = """

@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS audit_events (
     source_event_ids text[] NOT NULL DEFAULT '{}',
     latency_ms integer,
     created_at timestamptz NOT NULL DEFAULT now(),
-    actor_id text
+    actor_id text,
+    idempotency_key text
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_trace
@@ -129,6 +130,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_entity_created
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_created
     ON audit_events (created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_entity_idempotency
+    ON audit_events (entity_type, entity_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS outbox_jobs (
     id text PRIMARY KEY,

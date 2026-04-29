@@ -21,6 +21,7 @@ from .postgres_sql import (
     _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
     _MARK_OUTBOX_SUCCEEDED_SQL,
+    _SELECT_AUDIT_EVENT_BY_IDEMPOTENCY_SQL,
     _SELECT_EXISTING_SOURCE_EVENT_SQL,
 )
 
@@ -103,11 +104,38 @@ class PostgresAuditEventRepository:
                 "latency_ms": event.latency_ms,
                 "created_at": event.created_at,
                 "actor_id": event.actor_id,
+                "idempotency_key": event.idempotency_key,
             },
         )
         if row is None:
-            raise RuntimeError("audit event insert did not return a row")
+            if event.idempotency_key is None:
+                raise RuntimeError("audit event insert did not return a row")
+            existing = await self.get_by_idempotency_key(
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+                idempotency_key=event.idempotency_key,
+            )
+            if existing is None:
+                raise RuntimeError("audit event insert conflict did not resolve to an existing row")
+            return existing
         return audit_event_from_row(row)
+
+    async def get_by_idempotency_key(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        idempotency_key: str,
+    ) -> AuditEvent | None:
+        row = await self._executor.fetchrow(
+            _SELECT_AUDIT_EVENT_BY_IDEMPOTENCY_SQL,
+            {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        return audit_event_from_row(row) if row is not None else None
 
 
 class PostgresOutboxJobRepository:

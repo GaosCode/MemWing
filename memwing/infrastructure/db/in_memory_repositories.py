@@ -74,8 +74,32 @@ class InMemoryAuditEventRepository:
         self._tx = tx
 
     async def record(self, event: AuditEvent) -> AuditEvent:
+        if event.idempotency_key is not None:
+            existing = await self.get_by_idempotency_key(
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+                idempotency_key=event.idempotency_key,
+            )
+            if existing is not None:
+                return existing
         self._tx.state.audit_events[event.id] = event
         return event
+
+    async def get_by_idempotency_key(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        idempotency_key: str,
+    ) -> AuditEvent | None:
+        for event in self._tx.state.audit_events.values():
+            if (
+                event.entity_type == entity_type
+                and event.entity_id == entity_id
+                and event.idempotency_key == idempotency_key
+            ):
+                return event
+        return None
 
 
 class InMemoryOutboxJobRepository:

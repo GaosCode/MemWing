@@ -48,6 +48,8 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
     assert "memory_id text NOT NULL REFERENCES memory_items(id)" in migration
     assert "idx_graph_write_jobs_memory" in migration
     assert "actor_id text" in migration
+    assert "idempotency_key text" in migration
+    assert "idx_audit_events_entity_idempotency" in migration
     assert "idx_memory_pages_needs_rebuild" in migration
     assert "topics_json jsonb NOT NULL DEFAULT '[]'::jsonb" in migration
     assert "open_questions text[] NOT NULL DEFAULT '{}'" in migration

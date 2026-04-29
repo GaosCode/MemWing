@@ -109,6 +109,7 @@ def audit_event(source: SourceEvent) -> AuditEvent:
         latency_ms=None,
         created_at=source.created_at,
         actor_id="system",
+        idempotency_key="audit:source_001",
     )
 
 

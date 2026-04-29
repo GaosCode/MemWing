@@ -29,6 +29,7 @@ from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
 from memwing.ports.evidence_index import EvidenceIndexPort
 from memwing.ports.event_store import (
+    AuditEventRepositoryPort,
     EventStorePort,
     EventStoreTransactionPort,
     EvidenceChunkRepositoryPort,
@@ -209,6 +210,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
 
     assert hasattr(SourceEventRepositoryPort, "list_for_scope")
+    assert hasattr(AuditEventRepositoryPort, "get_by_idempotency_key")
     assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
     assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
     assert hasattr(MemoryItemRepositoryPort, "list_for_scope")
