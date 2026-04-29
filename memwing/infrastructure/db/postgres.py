@@ -12,15 +12,19 @@ from memwing.core.scope import (
 )
 
 from .postgres_sql import SESSION_KEY_PATTERN_LIKE_SQL
-from .postgres_derived_repositories import (
+from .postgres_evidence_repositories import (
     PostgresEvidenceChunkRepository,
+    PostgresWorkingMemoryRepository,
+)
+from .postgres_graph_repositories import (
     PostgresGraphWriteJobRepository,
     PostgresMemoryGraphLinkRepository,
+)
+from .postgres_memory_repositories import (
     PostgresMemoryItemRepository,
     PostgresMemoryPageRepository,
     PostgresMemoryPageVersionRepository,
     PostgresMemoryVersionRepository,
-    PostgresWorkingMemoryRepository,
 )
 from .postgres_repositories import (
     PostgresAuditEventRepository,

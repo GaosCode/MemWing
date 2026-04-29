@@ -12,20 +12,24 @@ from memwing.core.scope import (
     RuntimeScopeBinding,
 )
 
-from .in_memory_repositories import (
-    InMemoryAuditEventRepository,
-    InMemoryOutboxJobRepository,
-    InMemorySourceEventRepository,
-)
-from .in_memory_derived_repositories import (
+from .in_memory_evidence_repositories import (
     InMemoryEvidenceChunkRepository,
+    InMemoryWorkingMemoryRepository,
+)
+from .in_memory_graph_repositories import (
     InMemoryGraphWriteJobRepository,
     InMemoryMemoryGraphLinkRepository,
+)
+from .in_memory_memory_repositories import (
     InMemoryMemoryItemRepository,
     InMemoryMemoryPageRepository,
     InMemoryMemoryPageVersionRepository,
     InMemoryMemoryVersionRepository,
-    InMemoryWorkingMemoryRepository,
+)
+from .in_memory_repositories import (
+    InMemoryAuditEventRepository,
+    InMemoryOutboxJobRepository,
+    InMemorySourceEventRepository,
 )
 from .in_memory_state import InMemoryState
 
