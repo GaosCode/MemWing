@@ -7,6 +7,10 @@ def session_pattern_matches(pattern: str, session_key: str) -> bool:
     return re.fullmatch(_session_pattern_regex(pattern), session_key) is not None
 
 
+def session_pattern_specificity(pattern: str) -> int:
+    return len(pattern)
+
+
 def _session_pattern_regex(pattern: str) -> str:
     parts: list[str] = []
     for char in pattern:

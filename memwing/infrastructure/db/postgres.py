@@ -59,15 +59,15 @@ class PostgresDataStore:
         )
         return project_memory_space_from_row(row) if row is not None else None
 
-    async def find_runtime_scope_binding(
+    async def list_runtime_scope_binding_candidates(
         self,
         *,
         runtime: str,
         agent_id: str,
         workspace_id: str | None,
         session_id: str | None,
-    ) -> RuntimeScopeBinding | None:
-        row = await self._connection.fetchrow(
+    ) -> tuple[RuntimeScopeBinding, ...]:
+        rows = await self._connection.fetch(
             f"""
             SELECT runtime, agent_id, workspace_id, session_key_pattern, project_memory_space_id
             FROM runtime_scope_bindings
@@ -75,8 +75,6 @@ class PostgresDataStore:
               AND agent_id = %(agent_id)s
               AND workspace_id IS NOT DISTINCT FROM %(workspace_id)s
               AND COALESCE(%(session_id)s, '') LIKE {SESSION_KEY_PATTERN_LIKE_SQL}
-            ORDER BY length(session_key_pattern) DESC
-            LIMIT 1
             """,
             {
                 "runtime": runtime,
@@ -85,17 +83,17 @@ class PostgresDataStore:
                 "session_id": session_id,
             },
         )
-        return runtime_scope_binding_from_row(row) if row is not None else None
+        return tuple(runtime_scope_binding_from_row(row) for row in rows)
 
-    async def find_platform_scope_binding(
+    async def list_platform_scope_binding_candidates(
         self,
         *,
         platform: str,
         tenant_id: str | None,
         channel_id: str,
         thread_id: str | None,
-    ) -> PlatformScopeBinding | None:
-        row = await self._connection.fetchrow(
+    ) -> tuple[PlatformScopeBinding, ...]:
+        rows = await self._connection.fetch(
             """
             SELECT platform, tenant_id, channel_id, thread_id, project_memory_space_id, group_id
             FROM platform_scope_bindings
@@ -103,8 +101,6 @@ class PostgresDataStore:
               AND tenant_id IS NOT DISTINCT FROM %(tenant_id)s
               AND channel_id = %(channel_id)s
               AND (thread_id IS NOT DISTINCT FROM %(thread_id)s OR thread_id IS NULL)
-            ORDER BY (thread_id IS NOT NULL) DESC
-            LIMIT 1
             """,
             {
                 "platform": platform,
@@ -113,7 +109,7 @@ class PostgresDataStore:
                 "thread_id": thread_id,
             },
         )
-        return platform_scope_binding_from_row(row) if row is not None else None
+        return tuple(platform_scope_binding_from_row(row) for row in rows)
 
     async def get_group_memory_settings(
         self,

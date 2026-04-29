@@ -1,8 +1,10 @@
 import asyncio
 
+import pytest
+
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.platform import PlatformRef
-from memwing.application.scope_resolver import ScopeResolver
+from memwing.application.scope_resolver import ScopeResolutionError, ScopeResolver
 from memwing.core.scope import (
     MemoryScope,
     PlatformScopeBinding,
@@ -98,6 +100,55 @@ def test_runtime_session_key_pattern_matches_session_id() -> None:
     assert resolved.source_group_id is None
 
 
+def test_runtime_highest_specificity_conflict_fails_explicitly() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_a",
+            name="Project A",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_b",
+            name="Project B",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id="workspace_001",
+            session_key_pattern="feature/*",
+            project_memory_space_id="project_a",
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id="workspace_001",
+            session_key_pattern="feature/a",
+            project_memory_space_id="project_b",
+        )
+    )
+
+    with pytest.raises(ScopeResolutionError, match="runtime scope binding conflict"):
+        asyncio.run(
+            ScopeResolver(store).resolve_runtime(
+                AgentRuntimeRef(
+                    runtime="openclaw",
+                    agent_id="agent_001",
+                    workspace_id="workspace_001",
+                    session_id="feature/a",
+                ),
+                MemoryScope(project_memory_space_id="project_a"),
+            )
+        )
+
+
 def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals() -> None:
     store = InMemoryDataStore()
     store.add_project_memory_space(
@@ -118,7 +169,7 @@ def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals()
     )
 
     missing = asyncio.run(
-        store.find_runtime_scope_binding(
+        store.list_runtime_scope_binding_candidates(
             runtime="openclaw",
             agent_id="agent_001",
             workspace_id="workspace_001",
@@ -126,7 +177,7 @@ def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals()
         )
     )
     matched = asyncio.run(
-        store.find_runtime_scope_binding(
+        store.list_runtime_scope_binding_candidates(
             runtime="openclaw",
             agent_id="agent_001",
             workspace_id="workspace_001",
@@ -134,8 +185,8 @@ def test_runtime_session_key_pattern_treats_percent_and_underscore_as_literals()
         )
     )
 
-    assert missing is None
-    assert matched is not None
+    assert missing == ()
+    assert matched != ()
 
 
 def test_runtime_session_key_pattern_treats_only_star_as_wildcard() -> None:

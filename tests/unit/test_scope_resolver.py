@@ -39,42 +39,42 @@ class ScopeBindingFixture:
     ) -> ProjectMemorySpace | None:
         return self.projects.get(project_memory_space_id)
 
-    async def find_runtime_scope_binding(
+    async def list_runtime_scope_binding_candidates(
         self,
         *,
         runtime: str,
         agent_id: str,
         workspace_id: str | None,
         session_id: str | None,
-    ) -> RuntimeScopeBinding | None:
+    ) -> tuple[RuntimeScopeBinding, ...]:
         session_key = session_id or ""
-        matches = [
+        return tuple(
             binding
             for binding in self.runtime_bindings
             if binding.runtime == runtime
             and binding.agent_id == agent_id
             and binding.workspace_id == workspace_id
             and session_pattern_matches(binding.session_key_pattern, session_key)
-        ]
-        return matches[0] if matches else None
+        )
 
-    async def find_platform_scope_binding(
+    async def list_platform_scope_binding_candidates(
         self,
         *,
         platform: str,
         tenant_id: str | None,
         channel_id: str,
         thread_id: str | None,
-    ) -> PlatformScopeBinding | None:
-        for binding in self.platform_bindings:
+    ) -> tuple[PlatformScopeBinding, ...]:
+        return tuple(
+            binding
+            for binding in self.platform_bindings
             if (
                 binding.platform == platform
                 and binding.tenant_id == tenant_id
                 and binding.channel_id == channel_id
                 and binding.thread_id in (thread_id, None)
-            ):
-                return binding
-        return None
+            )
+        )
 
     async def get_group_memory_settings(
         self,

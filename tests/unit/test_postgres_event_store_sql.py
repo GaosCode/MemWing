@@ -84,48 +84,54 @@ def test_postgres_scope_binding_queries_preserve_authoritative_server_lookup() -
                 "default_safe_mode_enabled": False,
             },
             {
-                "runtime": "openclaw",
-                "agent_id": "agent_001",
-                "workspace_id": None,
-                "session_key_pattern": "session_*",
-                "project_memory_space_id": "project_001",
-            },
-            {
-                "platform": "feishu",
-                "tenant_id": "tenant_001",
-                "channel_id": "chat_001",
-                "thread_id": None,
-                "project_memory_space_id": "project_001",
-                "group_id": "group_001",
-            },
-            {
                 "project_memory_space_id": "project_001",
                 "group_id": "group_001",
                 "safe_mode_enabled": True,
                 "shared_group_id": "shared_001",
             },
-        )
+        ),
+        fetch_results=(
+            (
+                {
+                    "runtime": "openclaw",
+                    "agent_id": "agent_001",
+                    "workspace_id": None,
+                    "session_key_pattern": "session_*",
+                    "project_memory_space_id": "project_001",
+                },
+            ),
+            (
+                {
+                    "platform": "feishu",
+                    "tenant_id": "tenant_001",
+                    "channel_id": "chat_001",
+                    "thread_id": None,
+                    "project_memory_space_id": "project_001",
+                    "group_id": "group_001",
+                },
+            ),
+        ),
     )
     store = PostgresDataStore(connection)
 
     async def scenario() -> None:
         assert await store.get_project_memory_space("project_001") is not None
         assert (
-            await store.find_runtime_scope_binding(
+            await store.list_runtime_scope_binding_candidates(
                 runtime="openclaw",
                 agent_id="agent_001",
                 workspace_id=None,
                 session_id="session_001",
             )
-        ) is not None
+        ) != ()
         assert (
-            await store.find_platform_scope_binding(
+            await store.list_platform_scope_binding_candidates(
                 platform="feishu",
                 tenant_id="tenant_001",
                 channel_id="chat_001",
                 thread_id="thread_001",
             )
-        ) is not None
+        ) != ()
         assert (
             await store.get_group_memory_settings(
                 project_memory_space_id="project_001",
@@ -143,6 +149,7 @@ def test_postgres_scope_binding_queries_preserve_authoritative_server_lookup() -
     assert "'_', '!_'" in normalized_queries
     assert "'*', '%'" in normalized_queries
     assert "ESCAPE '!'" in normalized_queries
-    assert "ORDER BY length(session_key_pattern) DESC" in queries
+    assert "ORDER BY length(session_key_pattern) DESC" not in queries
+    assert "LIMIT 1" not in queries
     assert "thread_id IS NOT DISTINCT FROM %(thread_id)s OR thread_id IS NULL" in queries
-    assert "ORDER BY (thread_id IS NOT NULL) DESC" in queries
+    assert "ORDER BY (thread_id IS NOT NULL) DESC" not in queries

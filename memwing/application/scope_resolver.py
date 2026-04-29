@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.platform import PlatformRef
-from memwing.core.scope import EffectiveScope, MemoryScope
+from memwing.core.scope import EffectiveScope, MemoryScope, PlatformScopeBinding, RuntimeScopeBinding
+from memwing.core.scope_patterns import session_pattern_matches, session_pattern_specificity
 from memwing.ports.event_store import ScopeBindingStorePort
 
 
@@ -29,12 +30,13 @@ class ScopeResolver:
         runtime_ref: AgentRuntimeRef,
         scope_hint: MemoryScope,
     ) -> ResolvedScope:
-        binding = await self._bindings.find_runtime_scope_binding(
+        candidates = await self._bindings.list_runtime_scope_binding_candidates(
             runtime=runtime_ref.runtime,
             agent_id=runtime_ref.agent_id,
             workspace_id=runtime_ref.workspace_id,
             session_id=runtime_ref.session_id,
         )
+        binding = self._select_runtime_binding(candidates, runtime_ref.session_id or "")
         if binding is None:
             raise ScopeResolutionError("runtime scope binding was not found")
 
@@ -51,12 +53,13 @@ class ScopeResolver:
         platform_ref: PlatformRef,
         scope_hint: MemoryScope,
     ) -> ResolvedScope:
-        binding = await self._bindings.find_platform_scope_binding(
+        candidates = await self._bindings.list_platform_scope_binding_candidates(
             platform=platform_ref.platform,
             tenant_id=platform_ref.tenant_id,
             channel_id=platform_ref.channel_id,
             thread_id=platform_ref.thread_id,
         )
+        binding = self._select_platform_binding(candidates, platform_ref.thread_id)
         if binding is None:
             raise ScopeResolutionError("platform scope binding was not found")
 
@@ -122,6 +125,53 @@ class ScopeResolver:
     def _require_project_match(scope_hint: MemoryScope, bound_project_id: str) -> None:
         if scope_hint.project_memory_space_id != bound_project_id:
             raise ScopeResolutionError("scope_hint project_memory_space_id conflicts with binding")
+
+    @staticmethod
+    def _select_runtime_binding(
+        candidates: tuple[RuntimeScopeBinding, ...],
+        session_key: str,
+    ) -> RuntimeScopeBinding | None:
+        matching = [
+            candidate
+            for candidate in candidates
+            if session_pattern_matches(candidate.session_key_pattern, session_key)
+        ]
+        if not matching:
+            return None
+        highest_specificity = max(
+            session_pattern_specificity(candidate.session_key_pattern)
+            for candidate in matching
+        )
+        winners = [
+            candidate
+            for candidate in matching
+            if session_pattern_specificity(candidate.session_key_pattern) == highest_specificity
+        ]
+        if len(winners) > 1:
+            raise ScopeResolutionError("runtime scope binding conflict")
+        return winners[0]
+
+    @staticmethod
+    def _select_platform_binding(
+        candidates: tuple[PlatformScopeBinding, ...],
+        request_thread_id: str | None,
+    ) -> PlatformScopeBinding | None:
+        eligible = [
+            candidate
+            for candidate in candidates
+            if candidate.thread_id is None
+            or (request_thread_id is not None and candidate.thread_id == request_thread_id)
+        ]
+        if request_thread_id is None:
+            eligible = [candidate for candidate in eligible if candidate.thread_id is None]
+        if not eligible:
+            return None
+
+        thread_specific = [candidate for candidate in eligible if candidate.thread_id is not None]
+        winners = thread_specific or [candidate for candidate in eligible if candidate.thread_id is None]
+        if len(winners) > 1:
+            raise ScopeResolutionError("platform scope binding conflict")
+        return winners[0]
 
     @staticmethod
     def _resolve_group_id(bound_group_id: str | None, hint_group_id: str | None) -> str | None:

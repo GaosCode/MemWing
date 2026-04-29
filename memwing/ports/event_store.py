@@ -88,24 +88,24 @@ class ScopeBindingStorePort(Protocol):
     ) -> ProjectMemorySpace | None:
         ...
 
-    async def find_runtime_scope_binding(
+    async def list_runtime_scope_binding_candidates(
         self,
         *,
         runtime: str,
         agent_id: str,
         workspace_id: str | None,
         session_id: str | None,
-    ) -> RuntimeScopeBinding | None:
+    ) -> tuple[RuntimeScopeBinding, ...]:
         ...
 
-    async def find_platform_scope_binding(
+    async def list_platform_scope_binding_candidates(
         self,
         *,
         platform: str,
         tenant_id: str | None,
         channel_id: str,
         thread_id: str | None,
-    ) -> PlatformScopeBinding | None:
+    ) -> tuple[PlatformScopeBinding, ...]:
         ...
 
     async def get_group_memory_settings(
