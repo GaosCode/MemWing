@@ -8,6 +8,7 @@ from memwing.core.models import (
     MemoryVersion,
     PageMemory,
     PageMemoryScopeType,
+    PageMemoryTopic,
 )
 
 from .postgres_derived_rows import (
@@ -214,6 +215,9 @@ def _page_memory_params(page: PageMemory) -> dict[str, object]:
         "scope_id": page.scope_id,
         "title": page.title,
         "brief": page.brief,
+        "topics_json": _page_memory_topics_json(page.topics),
+        "open_questions": page.open_questions,
+        "next_steps": page.next_steps,
         "source_event_ids": page.source_event_ids,
         "linked_memory_item_ids": page.linked_memory_item_ids,
         "version": page.version,
@@ -230,9 +234,24 @@ def _memory_page_version_params(version: MemoryPageVersion) -> dict[str, object]
         "version": version.version,
         "title": version.title,
         "brief": version.brief,
+        "topics_json": _page_memory_topics_json(version.topics),
+        "open_questions": version.open_questions,
+        "next_steps": version.next_steps,
         "source_event_ids": version.source_event_ids,
         "linked_memory_item_ids": version.linked_memory_item_ids,
         "changed_by": version.changed_by,
         "change_reason": version.change_reason,
         "created_at": version.created_at,
     }
+
+
+def _page_memory_topics_json(topics: tuple[PageMemoryTopic, ...]) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "title": topic.title,
+            "summary": topic.summary,
+            "source_event_ids": topic.source_event_ids,
+            "linked_memory_item_ids": topic.linked_memory_item_ids,
+        }
+        for topic in topics
+    )

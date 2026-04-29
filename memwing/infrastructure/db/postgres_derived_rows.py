@@ -11,6 +11,7 @@ from memwing.core.models import (
     MemoryStatus,
     MemoryVersion,
     PageMemory,
+    PageMemoryTopic,
     WorkingMemoryEntry,
 )
 
@@ -23,9 +24,9 @@ from .postgres_rows import (
     _optional_datetime,
     _optional_float,
     _optional_text,
+    _float_sequence_or_none,
     _sequence,
     _text,
-    _float_sequence_or_none,
 )
 
 
@@ -128,6 +129,9 @@ def page_memory_from_row(row: Row) -> PageMemory:
         scope_id=_text(row, "scope_id"),
         title=_text(row, "title"),
         brief=_text(row, "brief"),
+        topics=_page_memory_topics(row, "topics_json"),
+        open_questions=_sequence(row, "open_questions"),
+        next_steps=_sequence(row, "next_steps"),
         source_event_ids=_sequence(row, "source_event_ids"),
         linked_memory_item_ids=_sequence(row, "linked_memory_item_ids"),
         version=_int(row, "version"),
@@ -144,12 +148,51 @@ def memory_page_version_from_row(row: Row) -> MemoryPageVersion:
         version=_int(row, "version"),
         title=_text(row, "title"),
         brief=_text(row, "brief"),
+        topics=_page_memory_topics(row, "topics_json"),
+        open_questions=_sequence(row, "open_questions"),
+        next_steps=_sequence(row, "next_steps"),
         source_event_ids=_sequence(row, "source_event_ids"),
         linked_memory_item_ids=_sequence(row, "linked_memory_item_ids"),
         changed_by=_text(row, "changed_by"),
         change_reason=_text(row, "change_reason"),
         created_at=_datetime(row, "created_at"),
     )
+
+
+def _page_memory_topics(row: Row, key: str) -> tuple[PageMemoryTopic, ...]:
+    value = row[key]
+    if not isinstance(value, tuple | list):
+        raise TypeError(f"{key} must be a sequence of page memory topic objects")
+
+    topics: list[PageMemoryTopic] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise TypeError(f"{key} items must be page memory topic objects")
+        topics.append(
+            PageMemoryTopic(
+                title=_topic_text(item, "title"),
+                summary=_topic_text(item, "summary"),
+                source_event_ids=_topic_sequence(item, "source_event_ids"),
+                linked_memory_item_ids=_topic_sequence(item, "linked_memory_item_ids"),
+            )
+        )
+    return tuple(topics)
+
+
+def _topic_text(topic: dict[object, object], key: str) -> str:
+    value = topic[key]
+    if not isinstance(value, str):
+        raise TypeError(f"page memory topic {key} must be str")
+    return value
+
+
+def _topic_sequence(topic: dict[object, object], key: str) -> tuple[str, ...]:
+    value = topic[key]
+    if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return tuple(value)
+    raise TypeError(f"page memory topic {key} must be a sequence of str")
 
 
 def graph_write_job_from_row(row: Row) -> GraphWriteJob:

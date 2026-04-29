@@ -19,7 +19,12 @@ from memwing.api.schemas import (
     PushCandidate,
     RememberEventResult,
 )
-from memwing.core.models import GraphWriteJob, GraphWriteResult, LongTermFilterItem
+from memwing.core.models import (
+    GraphWriteJob,
+    GraphWriteResult,
+    LongTermFilterItem,
+    PageMemorySynthesis,
+)
 from memwing.core.scope import EffectiveScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
@@ -38,6 +43,10 @@ from memwing.ports.event_store import (
 )
 from memwing.ports.graph_backend import GraphBackendPort
 from memwing.ports.llm_filter import LongTermFilterPort
+from memwing.ports.page_memory_synthesis import (
+    PageMemorySynthesisPort,
+    PageMemorySynthesisRequest,
+)
 from memwing.ports.platform_connector import PlatformConnectorPort
 
 
@@ -49,6 +58,7 @@ def test_lane_zero_ports_are_runtime_checkable_contracts() -> None:
         EventStorePort,
         GraphBackendPort,
         LongTermFilterPort,
+        PageMemorySynthesisPort,
         PlatformConnectorPort,
     ):
         assert getattr(port, "_is_runtime_protocol") is True
@@ -142,6 +152,24 @@ def test_long_term_filter_port_returns_candidates_not_persisted_memory_items() -
     assert hints["return"] == tuple[LongTermFilterItem, ...]
 
 
+def test_page_memory_synthesis_port_returns_structured_page_memory() -> None:
+    class FakePageMemorySynthesis:
+        async def synthesize(
+            self,
+            request: PageMemorySynthesisRequest,
+        ) -> PageMemorySynthesis:
+            raise NotImplementedError
+
+    assert isinstance(FakePageMemorySynthesis(), PageMemorySynthesisPort)
+
+    signature = inspect.signature(PageMemorySynthesisPort.synthesize)
+    parameters = list(signature.parameters.values())
+    hints = get_type_hints(PageMemorySynthesisPort.synthesize)
+
+    assert hints[parameters[1].name] is PageMemorySynthesisRequest
+    assert hints["return"] is PageMemorySynthesis
+
+
 def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     hints = get_type_hints(EventStoreTransactionPort)
 
@@ -194,6 +222,7 @@ def test_ports_do_not_use_object_placeholders() -> None:
         EventStorePort,
         GraphBackendPort,
         LongTermFilterPort,
+        PageMemorySynthesisPort,
         PlatformConnectorPort,
     )
 

@@ -46,6 +46,9 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
     assert "idx_memory_items_project_group_status_updated" in migration
     assert "idx_graph_write_jobs_project_thread_saga" in migration
     assert "idx_memory_pages_needs_rebuild" in migration
+    assert "topics_json jsonb NOT NULL DEFAULT '[]'::jsonb" in migration
+    assert "open_questions text[] NOT NULL DEFAULT '{}'" in migration
+    assert "next_steps text[] NOT NULL DEFAULT '{}'" in migration
     assert "UNIQUE (runtime, agent_id, workspace_id, session_key_pattern)" not in migration
     assert "UNIQUE (platform, tenant_id, channel_id, thread_id)" not in migration
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_runtime_scope_bindings_key" in migration

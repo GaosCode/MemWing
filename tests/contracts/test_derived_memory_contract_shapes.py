@@ -10,6 +10,8 @@ from memwing.core.models import (
     MemoryStatus,
     MemoryVersion,
     PageMemory,
+    PageMemorySynthesis,
+    PageMemoryTopic,
     WorkingMemoryEntry,
 )
 
@@ -44,6 +46,12 @@ def test_lane_d_derived_memory_contracts_preserve_source_event_authority() -> No
         flushed_at=None,
         created_at=event_time,
     )
+    topic = PageMemoryTopic(
+        title="OpenClaw ingest",
+        summary="The team is validating OpenClaw ingest before recall.",
+        source_event_ids=("source_001",),
+        linked_memory_item_ids=("memory_001",),
+    )
     page = PageMemory(
         id="page_001",
         project_memory_space_id="project_001",
@@ -54,6 +62,9 @@ def test_lane_d_derived_memory_contracts_preserve_source_event_authority() -> No
         scope_id="thread_001",
         title="OpenClaw integration",
         brief="The project is validating OpenClaw ingest before recall.",
+        topics=(topic,),
+        open_questions=("How should recall warnings surface?",),
+        next_steps=("Run the OpenClaw ingest smoke.",),
         source_event_ids=("source_001",),
         linked_memory_item_ids=("memory_001",),
         version=1,
@@ -67,6 +78,9 @@ def test_lane_d_derived_memory_contracts_preserve_source_event_authority() -> No
         version=1,
         title=page.title,
         brief=page.brief,
+        topics=page.topics,
+        open_questions=page.open_questions,
+        next_steps=page.next_steps,
         source_event_ids=page.source_event_ids,
         linked_memory_item_ids=page.linked_memory_item_ids,
         changed_by="system",
@@ -77,9 +91,37 @@ def test_lane_d_derived_memory_contracts_preserve_source_event_authority() -> No
     assert evidence.source_event_id == "source_001"
     assert evidence.invalidated_at is None
     assert working.source_event_id == "source_001"
+    assert page.topics == (topic,)
+    assert page.open_questions == ("How should recall warnings surface?",)
+    assert page.next_steps == ("Run the OpenClaw ingest smoke.",)
     assert page.source_event_ids == ("source_001",)
     assert page.linked_memory_item_ids == ("memory_001",)
+    assert version.topics == page.topics
     assert version.version == page.version
+
+
+def test_page_memory_synthesis_contract_requires_structured_topics() -> None:
+    synthesis = PageMemorySynthesis(
+        title="Thread mainline",
+        brief="The thread is validating memory lanes.",
+        topics=(
+            PageMemoryTopic(
+                title="Persistence contract",
+                summary="Derived repositories are available for lane workers.",
+                source_event_ids=("source_001",),
+                linked_memory_item_ids=("memory_001",),
+            ),
+        ),
+        open_questions=("Which warning belongs in recall?",),
+        next_steps=("Wire the page memory worker.",),
+        source_event_ids=("source_001",),
+        linked_memory_item_ids=("memory_001",),
+    )
+
+    assert synthesis.topics[0].title == "Persistence contract"
+    assert synthesis.topics[0].source_event_ids == ("source_001",)
+    assert synthesis.open_questions == ("Which warning belongs in recall?",)
+    assert synthesis.next_steps == ("Wire the page memory worker.",)
 
 
 def test_lane_e_graph_link_contract_is_backend_neutral() -> None:

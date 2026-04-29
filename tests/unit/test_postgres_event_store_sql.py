@@ -213,6 +213,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_insert_paths() -> None
     assert "INSERT INTO memory_items" in queries
     assert "INSERT INTO memory_versions" in queries
     assert "INSERT INTO memory_pages" in queries
+    assert "topics_json" in queries
     assert "INSERT INTO memory_page_versions" in queries
     assert "INSERT INTO graph_write_jobs" in queries
     assert "ON CONFLICT (idempotency_key)" in queries

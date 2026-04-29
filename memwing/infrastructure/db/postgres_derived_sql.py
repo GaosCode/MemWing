@@ -143,13 +143,14 @@ RETURNING *
 _UPSERT_MEMORY_PAGE_SQL = """
 INSERT INTO memory_pages (
     id, project_memory_space_id, group_id, thread_id, shared_group_id, scope_type,
-    scope_id, title, brief, source_event_ids, linked_memory_item_ids, version,
-    needs_rebuild, created_at, updated_at
+    scope_id, title, brief, topics_json, open_questions, next_steps, source_event_ids,
+    linked_memory_item_ids, version, needs_rebuild, created_at, updated_at
 ) VALUES (
     %(id)s, %(project_memory_space_id)s, %(group_id)s, %(thread_id)s,
     %(shared_group_id)s, %(scope_type)s, %(scope_id)s, %(title)s, %(brief)s,
-    %(source_event_ids)s, %(linked_memory_item_ids)s, %(version)s,
-    %(needs_rebuild)s, %(created_at)s, %(updated_at)s
+    %(topics_json)s, %(open_questions)s, %(next_steps)s, %(source_event_ids)s,
+    %(linked_memory_item_ids)s, %(version)s, %(needs_rebuild)s, %(created_at)s,
+    %(updated_at)s
 )
 ON CONFLICT (project_memory_space_id, scope_type, scope_id) DO UPDATE
 SET group_id = EXCLUDED.group_id,
@@ -157,6 +158,9 @@ SET group_id = EXCLUDED.group_id,
     shared_group_id = EXCLUDED.shared_group_id,
     title = EXCLUDED.title,
     brief = EXCLUDED.brief,
+    topics_json = EXCLUDED.topics_json,
+    open_questions = EXCLUDED.open_questions,
+    next_steps = EXCLUDED.next_steps,
     source_event_ids = EXCLUDED.source_event_ids,
     linked_memory_item_ids = EXCLUDED.linked_memory_item_ids,
     version = EXCLUDED.version,
@@ -185,12 +189,12 @@ RETURNING id
 
 _INSERT_MEMORY_PAGE_VERSION_SQL = """
 INSERT INTO memory_page_versions (
-    id, page_id, version, title, brief, source_event_ids, linked_memory_item_ids,
-    changed_by, change_reason, created_at
+    id, page_id, version, title, brief, topics_json, open_questions, next_steps,
+    source_event_ids, linked_memory_item_ids, changed_by, change_reason, created_at
 ) VALUES (
     %(id)s, %(page_id)s, %(version)s, %(title)s, %(brief)s,
-    %(source_event_ids)s, %(linked_memory_item_ids)s, %(changed_by)s,
-    %(change_reason)s, %(created_at)s
+    %(topics_json)s, %(open_questions)s, %(next_steps)s, %(source_event_ids)s,
+    %(linked_memory_item_ids)s, %(changed_by)s, %(change_reason)s, %(created_at)s
 )
 ON CONFLICT (page_id, version) DO NOTHING
 RETURNING *

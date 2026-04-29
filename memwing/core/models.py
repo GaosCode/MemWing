@@ -192,6 +192,25 @@ class MemoryVersion:
 
 
 @dataclass(frozen=True, slots=True)
+class PageMemoryTopic:
+    title: str
+    summary: str
+    source_event_ids: tuple[str, ...]
+    linked_memory_item_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PageMemorySynthesis:
+    title: str
+    brief: str
+    topics: tuple[PageMemoryTopic, ...]
+    open_questions: tuple[str, ...]
+    next_steps: tuple[str, ...]
+    source_event_ids: tuple[str, ...]
+    linked_memory_item_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PageMemory:
     id: str
     project_memory_space_id: str
@@ -202,6 +221,9 @@ class PageMemory:
     scope_id: str
     title: str
     brief: str
+    topics: tuple[PageMemoryTopic, ...]
+    open_questions: tuple[str, ...]
+    next_steps: tuple[str, ...]
     source_event_ids: tuple[str, ...]
     linked_memory_item_ids: tuple[str, ...]
     version: int
@@ -217,6 +239,9 @@ class MemoryPageVersion:
     version: int
     title: str
     brief: str
+    topics: tuple[PageMemoryTopic, ...]
+    open_questions: tuple[str, ...]
+    next_steps: tuple[str, ...]
     source_event_ids: tuple[str, ...]
     linked_memory_item_ids: tuple[str, ...]
     changed_by: MemoryChangedBy

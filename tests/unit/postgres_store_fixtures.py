@@ -19,6 +19,7 @@ from memwing.core.models import (
     MemoryVersion,
     OutboxJob,
     PageMemory,
+    PageMemoryTopic,
     SourceEvent,
     WorkingMemoryEntry,
 )
@@ -166,11 +167,15 @@ def memory_version_row(version: MemoryVersion) -> dict[str, object]:
 
 
 def page_memory_row(page: PageMemory) -> dict[str, object]:
-    return asdict(page)
+    row = asdict(page)
+    row["topics_json"] = row.pop("topics")
+    return row
 
 
 def memory_page_version_row(version: MemoryPageVersion) -> dict[str, object]:
-    return asdict(version)
+    row = asdict(version)
+    row["topics_json"] = row.pop("topics")
+    return row
 
 
 def graph_write_job_row(job: GraphWriteJob) -> dict[str, object]:
@@ -285,6 +290,9 @@ def page_memory() -> PageMemory:
         scope_id="thread_001",
         title="Thread mainline",
         brief="The thread is validating memory lanes.",
+        topics=(page_memory_topic(),),
+        open_questions=("Which lane owns recall warnings?",),
+        next_steps=("Wire the page memory worker.",),
         source_event_ids=("source_001",),
         linked_memory_item_ids=("memory_001",),
         version=1,
@@ -302,11 +310,23 @@ def memory_page_version() -> MemoryPageVersion:
         version=1,
         title="Thread mainline",
         brief="The thread is validating memory lanes.",
+        topics=(page_memory_topic(),),
+        open_questions=("Which lane owns recall warnings?",),
+        next_steps=("Wire the page memory worker.",),
         source_event_ids=("source_001",),
         linked_memory_item_ids=("memory_001",),
         changed_by="system",
         change_reason="initial_rebuild",
         created_at=now,
+    )
+
+
+def page_memory_topic() -> PageMemoryTopic:
+    return PageMemoryTopic(
+        title="Memory lane validation",
+        summary="The thread is validating derived memory lanes.",
+        source_event_ids=("source_001",),
+        linked_memory_item_ids=("memory_001",),
     )
 
 

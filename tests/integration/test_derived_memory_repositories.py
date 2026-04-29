@@ -13,6 +13,7 @@ from memwing.core.models import (
     MemoryStatus,
     MemoryVersion,
     PageMemory,
+    PageMemoryTopic,
     WorkingMemoryEntry,
 )
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -192,6 +193,9 @@ def _page_memory() -> PageMemory:
         scope_id="thread_001",
         title="Thread mainline",
         brief="The thread is validating memory lanes.",
+        topics=(_page_topic(),),
+        open_questions=("Which lane owns recall warnings?",),
+        next_steps=("Wire the page memory worker.",),
         source_event_ids=("source_001",),
         linked_memory_item_ids=("memory_001",),
         version=1,
@@ -208,11 +212,23 @@ def _page_version() -> MemoryPageVersion:
         version=1,
         title="Thread mainline",
         brief="The thread is validating memory lanes.",
+        topics=(_page_topic(),),
+        open_questions=("Which lane owns recall warnings?",),
+        next_steps=("Wire the page memory worker.",),
         source_event_ids=("source_001",),
         linked_memory_item_ids=("memory_001",),
         changed_by="system",
         change_reason="initial_rebuild",
         created_at=NOW,
+    )
+
+
+def _page_topic() -> PageMemoryTopic:
+    return PageMemoryTopic(
+        title="Memory lane validation",
+        summary="The thread is validating derived memory lanes.",
+        source_event_ids=("source_001",),
+        linked_memory_item_ids=("memory_001",),
     )
 
 
