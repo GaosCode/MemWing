@@ -12,7 +12,7 @@ test("loads from build artifact and follows manifest entry without CLI link", as
   const plugin = require(path.join(packageRoot, manifest.entry.replace(/^dist\//, "dist/")));
   const registered = captureRegistrations();
 
-  plugin.register(registered.api);
+  plugin.register(registered.api, { client: plugin.createMockMemWingClient() });
 
   assert.equal(manifest.id, "memwing");
   assert.equal(registered.contextEngines[0].id, "memwing");

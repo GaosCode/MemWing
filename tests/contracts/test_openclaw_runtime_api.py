@@ -15,6 +15,7 @@ from memwing.api.agent_knowledge import (
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemorySearchResult
 from memwing.api.memwing_tools import memwing_search_memory
 from memwing.api.openclaw_runtime import (
+    OpenClawRuntimeUnavailableError,
     assemble_openclaw_context,
     complete_openclaw_turn,
     delegate_compaction_to_runtime,
@@ -72,6 +73,20 @@ def test_openclaw_event_endpoints_validate_and_route() -> None:
             "turn_completed",
             "tool_call_completed",
         ]
+
+    asyncio.run(run())
+
+
+def test_openclaw_event_endpoint_requires_runtime_unless_mock_is_explicit() -> None:
+    async def run() -> None:
+        with pytest.raises(OpenClawRuntimeUnavailableError, match="OpenClaw runtime is not configured"):
+            await ingest_openclaw_event(_event_payload("ingest"))
+
+        result = await ingest_openclaw_event(
+            _event_payload("ingest"),
+            allow_mock_runtime=True,
+        )
+        assert result.source_event_id.startswith("mock-openclaw-source:")
 
     asyncio.run(run())
 

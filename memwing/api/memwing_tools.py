@@ -10,11 +10,11 @@ from memwing.api.agent_knowledge import (
     AgentKnowledgeGetResult,
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemorySearchResult
-from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
 from memwing.api.openclaw_payloads import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.runtime_config import resolve_openclaw_runtime
 from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
 from memwing.ports.agent_runtime import AgentRuntimePort
 
@@ -74,13 +74,20 @@ _PROJECT_CONTEXT_FIELDS = frozenset(
 async def memwing_search_memory(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentMemorySearchResult:
-    return await _runtime(runtime).knowledge_search(_memory_query_from_payload(payload))
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).knowledge_search(_memory_query_from_payload(payload))
 
 
 async def memwing_get_memory(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentKnowledgeGetResult:
     _reject_unknown_fields(payload, _MEMORY_GET_FIELDS)
     request = AgentKnowledgeGetRequest(
@@ -89,12 +96,17 @@ async def memwing_get_memory(
         include_evidence=_include_evidence(payload.get("include_evidence")),
         scope=memory_scope_from_payload(payload),
     )
-    return await _runtime(runtime).knowledge_get(request)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).knowledge_get(request)
 
 
 async def memwing_explain_memory(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentKnowledgeExplainResult:
     _reject_unknown_fields(payload, _MEMORY_EXPLAIN_FIELDS)
     request = AgentKnowledgeExplainRequest(
@@ -102,20 +114,30 @@ async def memwing_explain_memory(
         memory_id=_required_text(payload.get("memory_id"), "memory_id"),
         scope=memory_scope_from_payload(payload),
     )
-    return await _runtime(runtime).knowledge_explain(request)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).knowledge_explain(request)
 
 
 async def memwing_search_sources(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentMemorySearchResult:
     query = _memory_query_from_payload(payload, default_mode="history")
-    return await _runtime(runtime).knowledge_search(query)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).knowledge_search(query)
 
 
 async def memwing_get_project_context(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentContextResult:
     _reject_unknown_fields(payload, _PROJECT_CONTEXT_FIELDS)
     request = AgentContextRequest(
@@ -126,7 +148,10 @@ async def memwing_get_project_context(
         token_budget=_optional_positive_int(payload.get("token_budget"), "token_budget"),
         available_tools=MEMWING_TOOL_NAMES,
     )
-    return await _runtime(runtime).build_context(request)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).build_context(request)
 
 
 def _memory_query_from_payload(
@@ -203,7 +228,3 @@ def _include_evidence(value: object) -> bool:
     if not isinstance(value, bool):
         raise SchemaValidationError("include_evidence must be a boolean")
     return value
-
-
-def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawMockRuntime()

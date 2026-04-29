@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from typing import cast
 
 from memwing.api.agent_context import AgentContextRequest, AgentContextResult, RememberEventResult
-from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
 from memwing.api.openclaw_payloads import (
     json_object_from_mapping,
     map_openclaw_after_turn_event,
@@ -13,6 +12,7 @@ from memwing.api.openclaw_payloads import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.runtime_config import OpenClawRuntimeUnavailableError, resolve_openclaw_runtime
 from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
 from memwing.ports.agent_runtime import AgentRuntimePort
@@ -21,33 +21,53 @@ from memwing.ports.agent_runtime import AgentRuntimePort
 async def assemble_openclaw_context(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> AgentContextResult:
     request = _context_request_from_payload(payload)
-    return await _runtime(runtime).build_context(request)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).build_context(request)
 
 
 async def ingest_openclaw_event(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> RememberEventResult:
     event = map_openclaw_ingest_event(payload)
-    return await _runtime(runtime).remember_runtime_event(event)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).remember_runtime_event(event)
 
 
 async def complete_openclaw_turn(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> RememberEventResult:
     event = map_openclaw_after_turn_event(payload)
-    return await _runtime(runtime).remember_runtime_event(event)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).remember_runtime_event(event)
 
 
 async def observe_openclaw_hook(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> RememberEventResult:
     event = map_openclaw_hook_event(payload)
-    return await _runtime(runtime).remember_runtime_event(event)
+    return await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).remember_runtime_event(event)
 
 
 def delegate_compaction_to_runtime(
@@ -114,5 +134,4 @@ def _optional_positive_int(value: object, field_name: str) -> int | None:
     return require_positive_int(value, field_name)
 
 
-def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawMockRuntime()
+__all__ = ("OpenClawRuntimeUnavailableError",)

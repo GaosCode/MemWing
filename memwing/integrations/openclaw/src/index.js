@@ -14,6 +14,7 @@ const {
   validateNativeSearchParams,
   validateNativeStatusParams
 } = require("./nativeSchemas.js");
+const { createMemWingHttpClient } = require("./httpClient.js");
 
 const REQUIRED_HOOKS = [
   "after_tool_call",
@@ -36,7 +37,7 @@ const REQUIRED_TOOLS = [
 
 function register(api, options = {}) {
   assertOpenClawApi(api);
-  const client = options.client || createMockMemWingClient(options);
+  const client = options.client || createMemWingHttpClient(options);
   api.registerContextEngine("memwing", () => createContextEngine(api, client));
 
   for (const hookName of REQUIRED_HOOKS) {
@@ -66,7 +67,7 @@ function createContextEngine(api, client) {
       return {
         accepted: true,
         results,
-        traceId: "memwing:ingestBatch:mock"
+        traceId: results.find((result) => result && result.traceId)?.traceId || "memwing:ingestBatch"
       };
     },
     async assemble(params) {
@@ -150,12 +151,7 @@ function registerNativeMemoryShim(api, client) {
     parameters: nativeToolParameters("memory_index"),
     async execute(params) {
       const indexParams = validateNativeIndexParams(params);
-      return {
-        accepted: true,
-        indexed: false,
-        force: indexParams.force,
-        traceId: "memwing:native-memory-index:mock"
-      };
+      return client.indexMemory(indexParams);
     }
   });
   api.registerTool({
@@ -260,6 +256,14 @@ function createMockMemWingClient() {
         ],
         traceId: "memwing:status:mock"
       };
+    },
+    async indexMemory(params) {
+      return {
+        accepted: true,
+        indexed: false,
+        force: params && params.force === true,
+        traceId: "memwing:native-memory-index:mock"
+      };
     }
   };
 }
@@ -300,6 +304,7 @@ module.exports = {
   REQUIRED_HOOKS,
   REQUIRED_TOOLS,
   createContextEngine,
+  createMemWingHttpClient,
   createMockMemWingClient,
   delegateCompactionToRuntime,
   register

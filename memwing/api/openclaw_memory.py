@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from memwing.api.agent_knowledge import AgentRuntimeStatusRequest
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemoryResultItem
 from memwing.api.memwing_tools import memwing_get_memory
-from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
 from memwing.api.openclaw_payloads import (
     memory_scope_from_payload,
     openclaw_runtime_ref_from_payload,
 )
+from memwing.api.runtime_config import resolve_openclaw_runtime
 from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError, require_text
 from memwing.core.scope import MemoryScope
@@ -79,6 +79,8 @@ class OpenClawNativeMemoryStatusEnvelope:
 async def native_memory_search(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> JsonObject:
     _reject_unknown_fields(payload, _NATIVE_SEARCH_FIELDS)
     query = AgentMemoryQuery(
@@ -89,7 +91,10 @@ async def native_memory_search(
         limit=_max_results(payload.get("max_results")),
         min_score=_min_score(payload.get("min_score")),
     )
-    result = await _runtime(runtime).knowledge_search(query)
+    result = await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).knowledge_search(query)
     return {
         "contexts": result.contexts,
         "results": tuple(_result_item_to_json(item) for item in result.results),
@@ -101,8 +106,14 @@ async def native_memory_search(
 async def native_memory_get(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> object:
-    return await memwing_get_memory(payload, runtime)
+    return await memwing_get_memory(
+        payload,
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    )
 
 
 async def native_memory_index(payload: Mapping[str, object]) -> OpenClawNativeMemoryIndexResult:
@@ -117,10 +128,15 @@ async def native_memory_index(payload: Mapping[str, object]) -> OpenClawNativeMe
 async def native_memory_status(
     payload: Mapping[str, object],
     runtime: AgentRuntimePort | None = None,
+    *,
+    allow_mock_runtime: bool = False,
 ) -> OpenClawNativeMemoryStatusEnvelope:
     runtime_ref = openclaw_runtime_ref_from_payload(payload)
     scope = _scope_from_status_payload(payload)
-    status = await _runtime(runtime).runtime_status(AgentRuntimeStatusRequest(runtime_ref))
+    status = await resolve_openclaw_runtime(
+        runtime,
+        allow_mock_runtime=allow_mock_runtime,
+    ).runtime_status(AgentRuntimeStatusRequest(runtime_ref))
     return OpenClawNativeMemoryStatusEnvelope(
         agent_id=runtime_ref.agent_id,
         project_memory_space_id=scope.project_memory_space_id,
@@ -206,7 +222,3 @@ def _scope_from_status_payload(payload: Mapping[str, object]) -> MemoryScope:
         thread_id=None,
         shared_group_id=None,
     )
-
-
-def _runtime(runtime: AgentRuntimePort | None) -> AgentRuntimePort:
-    return runtime if runtime is not None else OpenClawMockRuntime()

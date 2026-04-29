@@ -22,7 +22,7 @@ test("manifest config schema accepts documented MemWing base URL", () => {
 test("registers MemWing context engine, hooks, tools, and native shims", async () => {
   const registered = captureRegistrations();
 
-  plugin.register(registered.api);
+  plugin.register(registered.api, { client: plugin.createMockMemWingClient() });
 
   assert.equal(registered.contextEngines[0].id, "memwing");
   assert.deepEqual(registered.hooks.map((hook) => hook.name), plugin.REQUIRED_HOOKS);
@@ -44,7 +44,7 @@ test("registers MemWing context engine, hooks, tools, and native shims", async (
 test("ingestBatch rejects malformed batch shapes", async () => {
   const registered = captureRegistrations();
 
-  plugin.register(registered.api);
+  plugin.register(registered.api, { client: plugin.createMockMemWingClient() });
 
   const engine = registered.contextEngines[0].factory();
   await assert.rejects(() => engine.ingestBatch(), { name: "OpenClawToolSchemaError" });
@@ -172,7 +172,7 @@ test("memwing_search_memory rejects invalid input and returns explicit empty env
 test("all memwing tools reject missing required fields before calling the client", async () => {
   const registered = captureRegistrations();
 
-  plugin.register(registered.api);
+  plugin.register(registered.api, { client: plugin.createMockMemWingClient() });
 
   const invalidCalls = [
     ["memwing_get_memory", { agent_id: "main", scope: scope() }, "memory_id"],
@@ -191,6 +191,18 @@ test("all memwing tools reject missing required fields before calling the client
       }
     );
   }
+});
+
+test("register requires backend config unless a test client is explicit", () => {
+  assert.throws(
+    () => plugin.register(captureRegistrations().api),
+    /memwingBaseUrl is required/
+  );
+
+  const registered = captureRegistrations();
+  plugin.register(registered.api, { memwingBaseUrl: "http://localhost:8000" });
+
+  assert.equal(registered.contextEngines[0].id, "memwing");
 });
 
 test("native memory_search converts max_results before calling MemWing client", async () => {
