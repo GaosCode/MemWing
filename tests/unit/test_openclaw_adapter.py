@@ -1,8 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
 
-import pytest
-
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.agent_context import AgentContextRequest, AgentRuntimeEvent
 from memwing.api.agent_knowledge import (
@@ -11,6 +9,7 @@ from memwing.api.agent_knowledge import (
     AgentRuntimeStatusRequest,
 )
 from memwing.api.agent_memory import AgentMemoryQuery
+from memwing.application.access_service import MemoryAccessService
 from memwing.application.gateway_service import MemoryGateway
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.scope import MemoryScope, ProjectMemorySpace, RuntimeScopeBinding
@@ -21,7 +20,7 @@ from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 def test_openclaw_adapter_returns_empty_context_envelope() -> None:
     async def run() -> None:
         adapter, _store = _make_adapter()
-        runtime_ref = AgentRuntimeRef(runtime="openclaw", agent_id="main")
+        runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
         context = await adapter.build_context(
@@ -42,20 +41,23 @@ def test_openclaw_adapter_returns_empty_context_envelope() -> None:
     asyncio.run(run())
 
 
-def test_openclaw_adapter_fails_memory_search_when_access_service_is_missing() -> None:
+def test_openclaw_adapter_routes_memory_search_through_access_service() -> None:
     async def run() -> None:
         adapter, _store = _make_adapter()
-        runtime_ref = AgentRuntimeRef(runtime="openclaw", agent_id="main")
+        runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
-        with pytest.raises(RuntimeError, match="MemoryAccessService is not configured"):
-            await adapter.knowledge_search(
-                AgentMemoryQuery(
-                    runtime_ref=runtime_ref,
-                    query="demo scope",
-                    scope=scope,
-                )
+        result = await adapter.knowledge_search(
+            AgentMemoryQuery(
+                runtime_ref=runtime_ref,
+                query="demo scope",
+                scope=scope,
             )
+        )
+
+        assert result.results == ()
+        assert result.contexts == ()
+        assert result.trace_id == "memory_access:search:main"
 
     asyncio.run(run())
 
@@ -121,36 +123,39 @@ def test_openclaw_adapter_records_runtime_event_through_real_gateway_once() -> N
     asyncio.run(run())
 
 
-def test_openclaw_adapter_fails_memory_detail_access_when_service_is_missing() -> None:
+def test_openclaw_adapter_routes_memory_detail_access_through_access_service() -> None:
     async def run() -> None:
         adapter, _store = _make_adapter()
-        runtime_ref = AgentRuntimeRef(runtime="openclaw", agent_id="main")
+        runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
-        with pytest.raises(RuntimeError, match="MemoryAccessService is not configured"):
-            await adapter.knowledge_get(
-                AgentKnowledgeGetRequest(
-                    runtime_ref=runtime_ref,
-                    memory_id="memory_001",
-                    include_evidence=True,
-                    scope=scope,
-                )
+        get_result = await adapter.knowledge_get(
+            AgentKnowledgeGetRequest(
+                runtime_ref=runtime_ref,
+                memory_id="memory_001",
+                include_evidence=True,
+                scope=scope,
             )
-        with pytest.raises(RuntimeError, match="MemoryAccessService is not configured"):
-            await adapter.knowledge_explain(
-                AgentKnowledgeExplainRequest(
-                    runtime_ref=runtime_ref,
-                    memory_id="memory_001",
-                    scope=scope,
-                )
+        )
+        explain_result = await adapter.knowledge_explain(
+            AgentKnowledgeExplainRequest(
+                runtime_ref=runtime_ref,
+                memory_id="memory_001",
+                scope=scope,
             )
+        )
         status = await adapter.runtime_status(AgentRuntimeStatusRequest(runtime_ref))
 
-        assert status.healthy is False
+        assert get_result.item is None
+        assert get_result.evidence == ()
+        assert explain_result.memory_id == "memory_001"
+        assert explain_result.source_event_ids == ()
+        assert status.healthy is True
         assert "mock" not in status.trace_id
         assert all("mock" not in capability for capability in status.capabilities)
         assert "memwing_tools_empty_envelope" not in status.capabilities
-        assert "memory_access_unavailable" in status.capabilities
+        assert "memory_access_empty_result" in status.capabilities
+        assert "memory_access_unavailable" not in status.capabilities
         assert "native_memory_shim" in status.capabilities
         assert "runtime_compaction_delegation" in status.capabilities
 
@@ -175,4 +180,14 @@ def _make_adapter() -> tuple[OpenClawAdapter, InMemoryDataStore]:
             project_memory_space_id="project_001",
         )
     )
-    return OpenClawAdapter(MemoryGateway(store, ScopeResolver(store))), store
+    resolver = ScopeResolver(store)
+    return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver)), store
+
+
+def _bound_runtime_ref() -> AgentRuntimeRef:
+    return AgentRuntimeRef(
+        runtime="openclaw",
+        agent_id="main",
+        workspace_id="workspace_001",
+        session_id="session_001",
+    )
