@@ -1,9 +1,121 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
+import hashlib
+import json
 import uuid
 
+from memwing.application.remember_event_command import RememberEventCommand
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.application.scope_resolver import ResolvedScope
+
+
+@dataclass(frozen=True, slots=True)
+class RememberEventPlan:
+    source_event: SourceEvent
+    audit_events: tuple[AuditEvent, ...]
+    outbox_jobs: tuple[OutboxJob, ...]
+
+
+class SourceEventIdentity:
+    @staticmethod
+    def dedupe_hash(payload: object) -> str:
+        if isinstance(payload, bytes):
+            encoded = payload
+        else:
+            encoded = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def deterministic_id(
+        *,
+        project_memory_space_id: str,
+        dedupe_hash: str,
+        runtime_event_idempotency_key: str | None,
+    ) -> str:
+        return source_event_id(
+            project_memory_space_id=project_memory_space_id,
+            raw_payload_hash=dedupe_hash,
+            runtime_event_idempotency_key=runtime_event_idempotency_key,
+        )
+
+
+class SourceEventNormalizer:
+    def normalize(
+        self,
+        command: RememberEventCommand,
+        resolved_scope: ResolvedScope,
+        *,
+        now: datetime,
+    ) -> SourceEvent:
+        dedupe_hash = SourceEventIdentity.dedupe_hash(command.payload_for_dedupe_hash)
+        runtime_key = (
+            command.idempotency_key if command.source_ref.kind == "agent_runtime" else None
+        )
+        return SourceEvent(
+            id=SourceEventIdentity.deterministic_id(
+                project_memory_space_id=resolved_scope.effective_scope.project_memory_space_id,
+                dedupe_hash=dedupe_hash,
+                runtime_event_idempotency_key=runtime_key,
+            ),
+            project_memory_space_id=resolved_scope.effective_scope.project_memory_space_id,
+            group_id=resolved_scope.source_group_id,
+            thread_id=resolved_scope.thread_id,
+            shared_group_id=resolved_scope.shared_group_id,
+            author_id=command.author.id,
+            author_name=command.author.name,
+            source_type=command.source_type,
+            content=command.content,
+            content_preview=_content_preview(command.content),
+            source_url=command.source_url,
+            event_time=command.event_time,
+            raw_payload_hash=dedupe_hash,
+            metadata={
+                "source_ref": command.source_ref.to_metadata(),
+                "adapter_metadata": command.adapter_metadata,
+            },
+            purged_at=None,
+            purged_by=None,
+            purge_reason=None,
+            purge_level="none",
+            graph_backend_raw_retained=False,
+            created_at=now,
+            runtime_event_idempotency_key=runtime_key,
+        )
+
+
+class RememberEventRecordFactory:
+    def build_plan(
+        self,
+        *,
+        source_event: SourceEvent,
+        trace_id: str,
+        outbox_job_types: tuple[str, ...],
+    ) -> RememberEventPlan:
+        return RememberEventPlan(
+            source_event=source_event,
+            audit_events=(
+                capture_audit_event(
+                    source_event=source_event,
+                    trace_id=trace_id,
+                    now=source_event.created_at,
+                ),
+            ),
+            outbox_jobs=tuple(
+                outbox_job(
+                    source_event=source_event,
+                    job_type=job_type,
+                    now=source_event.created_at,
+                )
+                for job_type in outbox_job_types
+            ),
+        )
 
 
 def capture_audit_event(
@@ -88,3 +200,7 @@ def source_event_id(
 
 def _uuid(*parts: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, ":".join(parts)))
+
+
+def _content_preview(content: str) -> str:
+    return content[:240]

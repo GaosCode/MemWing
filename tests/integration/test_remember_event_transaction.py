@@ -5,6 +5,10 @@ import pytest
 
 from memwing.api.platform import PlatformEvent, PlatformRef
 from memwing.application.gateway_service import MemoryGateway
+from memwing.application.remember_event_command import (
+    RememberEventCommand,
+    platform_event_to_remember_command,
+)
 from memwing.application.scope_resolver import ScopeResolutionError, ScopeResolver
 from memwing.core.scope import PlatformScopeBinding, ProjectMemorySpace
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -58,17 +62,17 @@ def _store(*, fail_on_outbox_job_type: str | None = None) -> InMemoryDataStore:
 def test_remember_event_commits_source_audit_and_generic_outbox_atomically() -> None:
     store = _store()
     gateway = MemoryGateway(store, ScopeResolver(store))
-
-    result = asyncio.run(
-        gateway.remember_event(
-            _platform_event(
-                "This week prioritizes Feishu docs memory.",
-                {"message_id": "message_001", "text": "This week prioritizes Feishu docs memory."},
-            )
+    command = platform_event_to_remember_command(
+        _platform_event(
+            "This week prioritizes Feishu docs memory.",
+            {"message_id": "message_001", "text": "This week prioritizes Feishu docs memory."},
         )
     )
 
+    result = asyncio.run(gateway.remember_event(command))
+
     assert result.accepted is True
+    assert isinstance(command, RememberEventCommand)
     assert len(store.source_events) == 1
     assert len(store.audit_events) == 1
     assert len(store.outbox_jobs) == 4
@@ -80,6 +84,29 @@ def test_remember_event_commits_source_audit_and_generic_outbox_atomically() -> 
         "long_term_filter.classify",
     }
     assert all("graph" not in job.job_type for job in store.outbox_jobs)
+    assert store.source_events[0].metadata["source_ref"] == {
+        "kind": "platform",
+        "platform": "feishu",
+        "tenant_id": "tenant_001",
+        "channel_id": "chat_001",
+        "thread_id": "thread_001",
+        "message_id": "message_001",
+    }
+
+
+def test_memory_gateway_rejects_adapter_events_before_normalization() -> None:
+    store = _store()
+    gateway = MemoryGateway(store, ScopeResolver(store))
+
+    with pytest.raises(TypeError, match="RememberEventCommand"):
+        asyncio.run(
+            gateway.remember_event(
+                _platform_event(
+                    "Adapter events must be normalized before gateway.",
+                    {"message_id": "message_adapter"},
+                )
+            )
+        )
 
 
 def test_raw_payload_hash_dedupes_source_and_outbox() -> None:
@@ -87,8 +114,16 @@ def test_raw_payload_hash_dedupes_source_and_outbox() -> None:
     gateway = MemoryGateway(store, ScopeResolver(store))
     payload = {"message_id": "message_001", "text": "Same raw event."}
 
-    first = asyncio.run(gateway.remember_event(_platform_event("Same raw event.", payload)))
-    second = asyncio.run(gateway.remember_event(_platform_event("Changed content", payload)))
+    first = asyncio.run(
+        gateway.remember_event(
+            platform_event_to_remember_command(_platform_event("Same raw event.", payload))
+        )
+    )
+    second = asyncio.run(
+        gateway.remember_event(
+            platform_event_to_remember_command(_platform_event("Changed content", payload))
+        )
+    )
 
     assert second.duplicate_of == first.source_event_id
     assert len(store.source_events) == 1
@@ -103,9 +138,11 @@ def test_transaction_rollback_leaves_no_partial_source_outbox_or_audit() -> None
     with pytest.raises(RuntimeError, match="working_memory.append"):
         asyncio.run(
             gateway.remember_event(
-                _platform_event(
-                    "Rollback must remove partial writes.",
-                    {"message_id": "message_rollback"},
+                platform_event_to_remember_command(
+                    _platform_event(
+                        "Rollback must remove partial writes.",
+                        {"message_id": "message_rollback"},
+                    )
                 )
             )
         )
@@ -122,9 +159,11 @@ def test_scope_failure_records_rejected_audit_without_source_or_outbox() -> None
     with pytest.raises(ScopeResolutionError):
         asyncio.run(
             gateway.remember_event(
-                _platform_event(
-                    "Missing binding should be audited.",
-                    {"message_id": "message_missing_binding"},
+                platform_event_to_remember_command(
+                    _platform_event(
+                        "Missing binding should be audited.",
+                        {"message_id": "message_missing_binding"},
+                    )
                 )
             )
         )

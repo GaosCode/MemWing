@@ -1,23 +1,19 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
-from memwing.api.agent_context import AgentRuntimeEvent, RememberEventResult
-from memwing.api.platform import PlatformEvent
+from memwing.api.agent_context import RememberEventResult
+from memwing.application.remember_event_command import RememberEventCommand
 from memwing.core.models import SourceEvent
-from memwing.core.scope import MemoryScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 from .remember_event_records import (
-    capture_audit_event,
-    outbox_job,
+    RememberEventRecordFactory,
+    SourceEventNormalizer,
     rejected_audit_event,
-    source_event_id,
 )
 from .scope_resolver import ScopeResolutionError, ScopeResolver
 
@@ -50,14 +46,19 @@ class MemoryGateway:
         self._unit_of_work = unit_of_work
         self._scope_resolver = scope_resolver
         self._outbox_job_types = outbox_job_types
+        self._normalizer = SourceEventNormalizer()
+        self._record_factory = RememberEventRecordFactory()
 
     async def remember_event(
         self,
-        event: PlatformEvent | AgentRuntimeEvent,
+        command: RememberEventCommand,
     ) -> RememberEventResult:
+        if not isinstance(command, RememberEventCommand):
+            raise TypeError("MemoryGateway.remember_event requires RememberEventCommand")
+
         trace_id = _new_trace_id()
         try:
-            normalized = await self._normalize_event(event)
+            normalized = await self._normalize_event(command)
         except ScopeResolutionError as exc:
             async with self._unit_of_work.transaction() as tx:
                 await tx.audit_events.record(
@@ -81,21 +82,15 @@ class MemoryGateway:
                     duplicate_of=source_event.id,
                 )
 
-            await tx.audit_events.record(
-                capture_audit_event(
-                    source_event=source_event,
-                    trace_id=trace_id,
-                    now=source_event.created_at,
-                )
+            plan = self._record_factory.build_plan(
+                source_event=source_event,
+                trace_id=trace_id,
+                outbox_job_types=self._outbox_job_types,
             )
-            for job_type in self._outbox_job_types:
-                await tx.outbox_jobs.enqueue(
-                    outbox_job(
-                        source_event=source_event,
-                        job_type=job_type,
-                        now=source_event.created_at,
-                    )
-                )
+            for audit_event in plan.audit_events:
+                await tx.audit_events.record(audit_event)
+            for job in plan.outbox_jobs:
+                await tx.outbox_jobs.enqueue(job)
 
         return RememberEventResult(
             source_event_id=normalized.source_event.id,
@@ -105,139 +100,27 @@ class MemoryGateway:
 
     async def _normalize_event(
         self,
-        event: PlatformEvent | AgentRuntimeEvent,
+        command: RememberEventCommand,
     ) -> _NormalizedEvent:
-        if isinstance(event, PlatformEvent):
-            return await self._normalize_platform_event(event)
-        return await self._normalize_runtime_event(event)
-
-    async def _normalize_platform_event(
-        self,
-        event: PlatformEvent,
-    ) -> _NormalizedEvent:
-        scope_hint = MemoryScope(
-            project_memory_space_id=event.project_memory_space_id,
-            group_id=event.group_id,
-            thread_id=event.thread_id,
-            shared_group_id=event.shared_group_id,
-        )
-        resolved = await self._scope_resolver.resolve_platform(event.platform_ref, scope_hint)
-        raw_payload_hash = _stable_hash(event.raw_payload)
+        if command.source_ref.kind == "platform":
+            if command.source_ref.platform_ref is None:
+                raise RememberEventError("platform source_ref is required for remember_event")
+            resolved = await self._scope_resolver.resolve_platform(
+                command.source_ref.platform_ref,
+                command.scope_hint,
+            )
+        else:
+            if command.source_ref.runtime_ref is None:
+                raise RememberEventError("runtime source_ref is required for remember_event")
+            resolved = await self._scope_resolver.resolve_runtime(
+                command.source_ref.runtime_ref,
+                command.scope_hint,
+            )
         now = datetime.now(UTC)
         return _NormalizedEvent(
-            source_event=SourceEvent(
-                id=source_event_id(
-                    project_memory_space_id=resolved.effective_scope.project_memory_space_id,
-                    raw_payload_hash=raw_payload_hash,
-                    runtime_event_idempotency_key=None,
-                ),
-                project_memory_space_id=resolved.effective_scope.project_memory_space_id,
-                group_id=resolved.source_group_id,
-                thread_id=resolved.thread_id,
-                shared_group_id=resolved.shared_group_id,
-                author_id=event.author_id,
-                author_name=event.author_name,
-                source_type=event.source_type,
-                content=event.content,
-                content_preview=_content_preview(event.content),
-                source_url=event.source_url,
-                event_time=event.event_time,
-                raw_payload_hash=raw_payload_hash,
-                metadata={
-                    "source_ref_kind": "platform",
-                    "platform": event.platform_ref.platform,
-                    "tenant_id": event.platform_ref.tenant_id,
-                    "channel_id": event.platform_ref.channel_id,
-                    "message_id": event.platform_ref.message_id,
-                    "raw_payload": event.raw_payload,
-                },
-                purged_at=None,
-                purged_by=None,
-                purge_reason=None,
-                purge_level="none",
-                graph_backend_raw_retained=False,
-                created_at=now,
-                runtime_event_idempotency_key=None,
-            )
+            source_event=self._normalizer.normalize(command, resolved, now=now)
         )
-
-    async def _normalize_runtime_event(
-        self,
-        event: AgentRuntimeEvent,
-    ) -> _NormalizedEvent:
-        if event.content is None:
-            raise RememberEventError("AgentRuntimeEvent content is required for remember_event")
-
-        resolved = await self._scope_resolver.resolve_runtime(event.runtime_ref, event.scope)
-        raw_payload_hash = _stable_hash(
-            {
-                "runtime": event.runtime_ref.runtime,
-                "agent_id": event.runtime_ref.agent_id,
-                "workspace_id": event.runtime_ref.workspace_id,
-                "session_id": event.runtime_ref.session_id,
-                "run_id": event.run_id,
-                "message_id": event.message_id,
-                "tool_call_id": event.tool_call_id,
-                "hook_name": event.hook_name,
-                "sequence": event.sequence,
-                "idempotency_key": event.idempotency_key,
-                "event_type": event.event_type,
-                "content": event.content,
-                "payload": event.payload,
-                "event_time": event.event_time.isoformat(),
-            }
-        )
-        now = datetime.now(UTC)
-        return _NormalizedEvent(
-            source_event=SourceEvent(
-                id=source_event_id(
-                    project_memory_space_id=resolved.effective_scope.project_memory_space_id,
-                    raw_payload_hash=raw_payload_hash,
-                    runtime_event_idempotency_key=event.idempotency_key,
-                ),
-                project_memory_space_id=resolved.effective_scope.project_memory_space_id,
-                group_id=resolved.source_group_id,
-                thread_id=resolved.thread_id,
-                shared_group_id=resolved.shared_group_id,
-                author_id=None,
-                author_name=None,
-                source_type=f"agent_runtime.{event.event_type}",
-                content=event.content,
-                content_preview=_content_preview(event.content),
-                source_url=None,
-                event_time=event.event_time,
-                raw_payload_hash=raw_payload_hash,
-                metadata={
-                    "source_ref_kind": "agent_runtime",
-                    "runtime": event.runtime_ref.runtime,
-                    "agent_id": event.runtime_ref.agent_id,
-                    "workspace_id": event.runtime_ref.workspace_id,
-                    "session_id": event.runtime_ref.session_id,
-                    "run_id": event.run_id,
-                    "message_id": event.message_id,
-                    "hook_name": event.hook_name,
-                    "event_type": event.event_type,
-                    "payload": event.payload,
-                },
-                purged_at=None,
-                purged_by=None,
-                purge_reason=None,
-                purge_level="none",
-                graph_backend_raw_retained=False,
-                created_at=now,
-                runtime_event_idempotency_key=event.idempotency_key,
-            )
-        )
-
-
-def _stable_hash(payload: object) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _new_trace_id() -> str:
     return str(uuid.uuid4())
-
-
-def _content_preview(content: str) -> str:
-    return content[:240]

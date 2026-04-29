@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.agent_context import AgentRuntimeEvent
 from memwing.application.gateway_service import MemoryGateway
+from memwing.application.remember_event_command import agent_runtime_event_to_remember_command
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.scope import MemoryScope, ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -48,8 +49,9 @@ def test_agent_runtime_event_idempotency_key_prevents_duplicate_source_events() 
         event_time=datetime(2026, 4, 28, tzinfo=UTC),
     )
 
-    first = asyncio.run(gateway.remember_event(event))
-    second = asyncio.run(gateway.remember_event(event))
+    command = agent_runtime_event_to_remember_command(event)
+    first = asyncio.run(gateway.remember_event(command))
+    second = asyncio.run(gateway.remember_event(command))
 
     assert first.accepted is True
     assert second.accepted is True
