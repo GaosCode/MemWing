@@ -63,7 +63,11 @@ class GraphWriteWorker:
                 graph_result = await self._graph_backend.ingest_graph_job(request)
                 await self._record_success(job=job, graph_result=graph_result, now=run_at)
             except Exception as exc:
-                updated = await self._record_failure(job=job, error=str(exc), now=run_at)
+                updated = await self._record_failure(
+                    job=job,
+                    error=_safe_error_summary(exc),
+                    now=run_at,
+                )
                 if updated.status == "dead_letter":
                     dead_lettered += 1
                 else:
@@ -82,13 +86,13 @@ class GraphWriteWorker:
         async with self._unit_of_work.transaction() as tx:
             memory_item = await tx.memory_items.get(job.memory_id)
             if memory_item is None:
-                raise RuntimeError(f"missing memory item {job.memory_id}")
+                raise GraphWriteWorkerInputError(f"missing memory item {job.memory_id}")
 
             source_events = []
             for source_event_id in job.source_event_ids:
                 source_event = await tx.source_events.get_source_event(source_event_id)
                 if source_event is None:
-                    raise RuntimeError(f"missing source event {source_event_id}")
+                    raise GraphWriteWorkerInputError(f"missing source event {source_event_id}")
                 source_events.append(source_event)
 
         return GraphWriteRequest(
@@ -179,6 +183,16 @@ class GraphWriteWorker:
                 )
             )
             return updated
+
+
+class GraphWriteWorkerInputError(RuntimeError):
+    pass
+
+
+def _safe_error_summary(exc: Exception) -> str:
+    if isinstance(exc, GraphWriteWorkerInputError):
+        return str(exc)
+    return exc.__class__.__name__
 
 
 def _memory_graph_link(
