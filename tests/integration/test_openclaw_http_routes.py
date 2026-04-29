@@ -115,6 +115,70 @@ def test_openclaw_http_boundary_returns_schema_error_envelope() -> None:
     asyncio.run(run())
 
 
+def test_openclaw_http_boundary_returns_scope_error_envelope() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        store.add_project_memory_space(
+            ProjectMemorySpace(
+                id="project_001",
+                name="Demo",
+                default_safe_mode_enabled=False,
+            )
+        )
+        runtime = _runtime(store)
+
+        response = await handle_openclaw_http_request(
+            method="POST",
+            path="/v1/openclaw/events/ingest",
+            payload=_event_payload("ingest"),
+            runtime=runtime,
+        )
+
+        assert response.status_code == 403
+        assert response.body["ok"] is False
+        assert response.body["code"] == "scope_resolution_failed"
+        assert "runtime scope binding" in response.body["message"]
+        assert store.source_events == ()
+        assert len(store.audit_events) == 1
+        assert store.audit_events[0].stage == "remember_event.rejected"
+        assert store.audit_events[0].reason_code == "scope_resolution_failed"
+
+    asyncio.run(run())
+
+
+def test_openclaw_tool_boundary_returns_scope_error_envelope() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        store.add_project_memory_space(
+            ProjectMemorySpace(
+                id="project_001",
+                name="Demo",
+                default_safe_mode_enabled=False,
+            )
+        )
+        runtime = _runtime(store)
+
+        response = await handle_openclaw_http_request(
+            method="POST",
+            path="/v1/memwing/tools/search-memory",
+            payload={
+                "agent_id": "main",
+                "workspace_id": "workspace_001",
+                "session_id": "session_001",
+                "query": "demo scope",
+                "scope": {"project_memory_space_id": "project_001"},
+            },
+            runtime=runtime,
+        )
+
+        assert response.status_code == 403
+        assert response.body["ok"] is False
+        assert response.body["code"] == "scope_resolution_failed"
+        assert "runtime scope binding" in response.body["message"]
+
+    asyncio.run(run())
+
+
 def _runtime(store: InMemoryDataStore) -> OpenClawAdapter:
     resolver = ScopeResolver(store)
     return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver))

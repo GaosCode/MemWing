@@ -28,6 +28,7 @@ from memwing.api.openclaw_runtime import (
 )
 from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError
+from memwing.application.scope_resolver import ScopeResolutionError
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -61,6 +62,11 @@ async def handle_openclaw_http_request(
         return OpenClawHttpResponse(
             status_code=503,
             body={"ok": False, "code": "openclaw_runtime_unavailable", "message": str(exc)},
+        )
+    except ScopeResolutionError as exc:
+        return OpenClawHttpResponse(
+            status_code=403,
+            body={"ok": False, "code": "scope_resolution_failed", "message": str(exc)},
         )
 
 

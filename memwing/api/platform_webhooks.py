@@ -8,6 +8,7 @@ from memwing.api.agent_runtime import RememberEventResult
 from memwing.api.platform import PlatformRawEvent
 from memwing.api.types import JsonObject
 from memwing.application.platform_ingress_service import PlatformIngressService
+from memwing.application.scope_resolver import ScopeResolutionError
 from memwing.ports.platform_webhook import (
     PlatformWebhookError,
     PlatformWebhookHandlerPort,
@@ -80,7 +81,19 @@ async def handle_feishu_webhook(
             raw_event=connector_result.raw_event,
         )
 
-    remember_result = await ingress_service.ingest(connector_result.raw_event)
+    try:
+        remember_result = await ingress_service.ingest(connector_result.raw_event)
+    except ScopeResolutionError as exc:
+        return PlatformWebhookResponse(
+            status_code=403,
+            body={
+                "ok": False,
+                "code": "scope_resolution_failed",
+                "message": str(exc),
+                "raw_payload_hash": connector_result.raw_payload_hash,
+            },
+            raw_event=connector_result.raw_event,
+        )
 
     response_body: JsonObject = {
         "ok": True,

@@ -149,6 +149,42 @@ def test_feishu_webhook_transport_failures_record_unified_audit_events() -> None
         assert audit_event.input_ref == raw_payload_hash(body)
 
 
+def test_feishu_webhook_ingress_scope_failure_returns_error_envelope() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Demo",
+            default_safe_mode_enabled=False,
+        )
+    )
+    ingress_service = PlatformIngressService(
+        normalizer=FeishuConnector(project_memory_space_id="project_001", signing_secret=SECRET),
+        memory_gateway=MemoryGateway(store, ScopeResolver(store)),
+        audit_unit_of_work=store,
+    )
+    body = json.dumps(_message_payload()).encode()
+
+    response = asyncio.run(
+        handle_feishu_webhook(
+            headers=_signed_headers(body),
+            body=body,
+            connector=FeishuConnector(project_memory_space_id="project_001", signing_secret=SECRET),
+            ingress_service=ingress_service,
+            received_at=RECEIVED_AT,
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.body["ok"] is False
+    assert response.body["code"] == "scope_resolution_failed"
+    assert "platform scope binding" in response.body["message"]
+    assert store.source_events == ()
+    assert len(store.audit_events) == 1
+    assert store.audit_events[0].stage == "remember_event.rejected"
+    assert store.audit_events[0].reason_code == "scope_resolution_failed"
+
+
 def _message_payload() -> dict[str, object]:
     return {
         "schema": "2.0",
