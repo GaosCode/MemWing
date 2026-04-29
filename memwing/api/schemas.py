@@ -22,6 +22,7 @@ from memwing.api.agent_runtime import (
     RememberEventResult,
     SortOrder,
 )
+from memwing.api.control import MemoryListItemResponse, MemoryListResponse
 from memwing.api.envelopes import ErrorResponse, ListResponse, MutationEnvelope
 from memwing.api.platform import (
     PlatformEvent,
@@ -60,6 +61,8 @@ __all__ = [
     "JsonValue",
     "ListResponse",
     "MutationEnvelope",
+    "MemoryListItemResponse",
+    "MemoryListResponse",
     "OpenClawNativeMemorySearchRequest",
     "PlatformEvent",
     "PlatformName",
