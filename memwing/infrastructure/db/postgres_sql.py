@@ -65,13 +65,30 @@ LIMIT 1
 _INSERT_AUDIT_EVENT_SQL = """
 INSERT INTO audit_events (
     id, trace_id, entity_type, entity_id, stage, input_ref, output_ref,
-    decision, reason_code, reason_text, source_event_ids, latency_ms, created_at
+    decision, reason_code, reason_text, source_event_ids, latency_ms, created_at,
+    actor_id
 ) VALUES (
     %(id)s, %(trace_id)s, %(entity_type)s, %(entity_id)s, %(stage)s, %(input_ref)s,
     %(output_ref)s, %(decision)s, %(reason_code)s, %(reason_text)s,
-    %(source_event_ids)s, %(latency_ms)s, %(created_at)s
+    %(source_event_ids)s, %(latency_ms)s, %(created_at)s, %(actor_id)s
 )
 RETURNING *
+"""
+
+_LIST_SOURCE_EVENTS_FOR_SCOPE_SQL = """
+SELECT *
+FROM source_events
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND purged_at IS NULL
+  AND purge_level = 'none'
+  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
+  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (
+      %(shared_group_id)s IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+  )
+ORDER BY event_time ASC, id ASC
+LIMIT %(limit)s
 """
 
 _INSERT_OUTBOX_JOB_SQL = """

@@ -108,6 +108,7 @@ def audit_event(source: SourceEvent) -> AuditEvent:
         source_event_ids=(source.id,),
         latency_ms=None,
         created_at=source.created_at,
+        actor_id="system",
     )
 
 
@@ -338,6 +339,7 @@ def graph_write_job() -> GraphWriteJob:
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
+        memory_id="memory_001",
         source_event_ids=("source_001",),
         route=MemoryRoute.GRAPH,
         status="pending",

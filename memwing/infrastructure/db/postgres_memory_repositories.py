@@ -10,6 +10,7 @@ from memwing.core.models import (
     PageMemoryScopeType,
     PageMemoryTopic,
 )
+from memwing.core.scope import EffectiveScope
 
 from .postgres_derived_rows import (
     memory_item_from_row,
@@ -19,10 +20,13 @@ from .postgres_derived_rows import (
 )
 from .postgres_derived_sql import (
     _GET_MEMORY_ITEM_SQL,
+    _GET_LATEST_MEMORY_VERSION_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
     _INSERT_MEMORY_PAGE_VERSION_SQL,
     _INSERT_MEMORY_VERSION_SQL,
+    _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
     _LIST_MEMORY_ITEMS_BY_SOURCE_SQL,
+    _LIST_MEMORY_PAGES_NEEDS_REBUILD_SQL,
     _MARK_MEMORY_PAGES_REBUILD_FOR_SOURCE_SQL,
     _UPSERT_MEMORY_ITEM_SQL,
     _UPSERT_MEMORY_PAGE_SQL,
@@ -51,6 +55,24 @@ class PostgresMemoryItemRepository:
         )
         return tuple(memory_item_from_row(row) for row in rows)
 
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
+            {
+                "project_memory_space_id": scope.project_memory_space_id,
+                "group_ids": scope.group_ids,
+                "thread_id": scope.thread_id,
+                "shared_group_id": scope.shared_group_id,
+                "limit": limit,
+            },
+        )
+        return tuple(memory_item_from_row(row) for row in rows)
+
 
 class PostgresMemoryVersionRepository:
     def __init__(self, executor: PostgresExecutor) -> None:
@@ -76,6 +98,13 @@ class PostgresMemoryVersionRepository:
         if existing is None:
             raise RuntimeError("memory version insert conflict did not resolve to an existing row")
         return memory_version_from_row(existing)
+
+    async def get_latest(self, memory_id: str) -> MemoryVersion | None:
+        row = await self._executor.fetchrow(
+            _GET_LATEST_MEMORY_VERSION_SQL,
+            {"memory_id": memory_id},
+        )
+        return memory_version_from_row(row) if row is not None else None
 
 
 class PostgresMemoryPageRepository:
@@ -119,6 +148,21 @@ class PostgresMemoryPageRepository:
             },
         )
         return len(rows)
+
+    async def list_needs_rebuild(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_PAGES_NEEDS_REBUILD_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "limit": limit,
+            },
+        )
+        return tuple(page_memory_from_row(row) for row in rows)
 
 
 class PostgresMemoryPageVersionRepository:

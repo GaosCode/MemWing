@@ -142,6 +142,7 @@ def _graph_write_job_params(job: GraphWriteJob) -> dict[str, object]:
         "project_memory_space_id": job.project_memory_space_id,
         "thread_id": job.thread_id,
         "saga_id": job.saga_id,
+        "memory_id": job.memory_id,
         "source_event_ids": job.source_event_ids,
         "route": job.route,
         "status": job.status,

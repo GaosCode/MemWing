@@ -202,6 +202,7 @@ def graph_write_job_from_row(row: Row) -> GraphWriteJob:
         project_memory_space_id=_text(row, "project_memory_space_id"),
         thread_id=_optional_text(row, "thread_id"),
         saga_id=_optional_text(row, "saga_id"),
+        memory_id=_text(row, "memory_id"),
         source_event_ids=_sequence(row, "source_event_ids"),
         route=MemoryRoute(_text(row, "route")),
         status=_text(row, "status"),

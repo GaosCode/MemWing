@@ -80,6 +80,36 @@ class InMemoryWorkingMemoryRepository:
         entries.sort(key=lambda entry: entry.sequence, reverse=True)
         return tuple(entries[:limit])
 
+    async def next_sequence(
+        self,
+        *,
+        project_memory_space_id: str,
+        thread_id: str | None,
+    ) -> int:
+        sequences = [
+            entry.sequence
+            for entry in self._tx.state.working_memory_entries.values()
+            if entry.project_memory_space_id == project_memory_space_id
+            and entry.thread_id == thread_id
+        ]
+        return max(sequences, default=0) + 1
+
+    async def sum_unflushed_tokens(
+        self,
+        *,
+        project_memory_space_id: str,
+        group_id: str | None,
+        thread_id: str | None,
+    ) -> int:
+        return sum(
+            entry.token_count
+            for entry in self._tx.state.working_memory_entries.values()
+            if entry.project_memory_space_id == project_memory_space_id
+            and entry.group_id == group_id
+            and entry.thread_id == thread_id
+            and entry.flushed_at is None
+        )
+
     async def mark_flushed(
         self,
         *,

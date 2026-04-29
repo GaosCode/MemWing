@@ -56,6 +56,7 @@ def audit_event_from_row(row: Row) -> AuditEvent:
         source_event_ids=tuple(_sequence(row, "source_event_ids")),
         latency_ms=_optional_int(row, "latency_ms"),
         created_at=_datetime(row, "created_at"),
+        actor_id=_optional_text(row, "actor_id"),
     )
 
 

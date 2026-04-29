@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import OutboxLockOwnershipError
 
+from .in_memory_scope import effective_scope_matches
 from .in_memory_state import InMemoryState
 
 
@@ -43,6 +45,28 @@ class InMemorySourceEventRepository:
 
     async def get_source_event(self, source_event_id: str) -> SourceEvent | None:
         return self._tx.state.source_events.get(source_event_id)
+
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        events = [
+            event
+            for event in self._tx.state.source_events.values()
+            if event.project_memory_space_id == scope.project_memory_space_id
+            and event.purged_at is None
+            and event.purge_level == "none"
+            and effective_scope_matches(
+                group_id=event.group_id,
+                thread_id=event.thread_id,
+                shared_group_id=event.shared_group_id,
+                scope=scope,
+            )
+        ]
+        events.sort(key=lambda event: (event.event_time, event.id))
+        return tuple(events[:limit])
 
 
 class InMemoryAuditEventRepository:

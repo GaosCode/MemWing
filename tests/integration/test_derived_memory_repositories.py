@@ -14,8 +14,10 @@ from memwing.core.models import (
     MemoryVersion,
     PageMemory,
     PageMemoryTopic,
+    SourceEvent,
     WorkingMemoryEntry,
 )
+from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 
 
@@ -27,6 +29,9 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
 
     async def scenario() -> None:
         async with store.transaction() as tx:
+            source_event, inserted_source = await tx.source_events.insert_if_absent(
+                _source_event()
+            )
             chunk = await tx.evidence_chunks.upsert_chunk(_evidence_chunk())
             duplicated_chunk = await tx.evidence_chunks.upsert_chunk(
                 replace(_evidence_chunk(), id="chunk_duplicate")
@@ -42,6 +47,8 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             graph_job = await tx.graph_write_jobs.enqueue(_graph_job())
             graph_link = await tx.memory_graph_links.upsert(_graph_link())
 
+        assert inserted_source is True
+        assert source_event.id == "source_001"
         assert chunk.id == "chunk_001"
         assert duplicated_chunk.id == "chunk_001"
         assert working_entry.source_event_id == "source_001"
@@ -69,14 +76,36 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
                 source_event_id="source_001",
                 updated_at=NOW,
             ) == 1
+            assert await tx.memory_pages.list_needs_rebuild(
+                project_memory_space_id="project_001",
+                limit=10,
+            ) == (replace(duplicated_page, needs_rebuild=True, updated_at=NOW),)
             assert await tx.memory_items.list_by_source_event("source_001") == (memory,)
+            assert await tx.memory_items.list_for_scope(
+                scope=_effective_scope(),
+                limit=10,
+            ) == (memory,)
+            assert await tx.memory_versions.get_latest("memory_001") == version
             assert await tx.memory_graph_links.list_by_memory("memory_001") == (graph_link,)
+            assert await tx.source_events.list_for_scope(
+                scope=_effective_scope(),
+                limit=10,
+            ) == (source_event,)
             assert await tx.working_memory_entries.mark_flushed(
                 project_memory_space_id="project_001",
                 thread_id="thread_001",
                 through_sequence=12,
                 flushed_at=NOW,
             ) == 1
+            assert await tx.working_memory_entries.next_sequence(
+                project_memory_space_id="project_001",
+                thread_id="thread_001",
+            ) == 13
+            assert await tx.working_memory_entries.sum_unflushed_tokens(
+                project_memory_space_id="project_001",
+                group_id="group_001",
+                thread_id="thread_001",
+            ) == 0
             claimed = await tx.graph_write_jobs.claim_pending(
                 now=NOW,
                 worker_id="graph_worker_001",
@@ -92,6 +121,32 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             )
 
     asyncio.run(scenario())
+
+
+def _source_event() -> SourceEvent:
+    return SourceEvent(
+        id="source_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        author_id="user_001",
+        author_name="Ada",
+        source_type="text",
+        content="Decision source text.",
+        content_preview="Decision source text.",
+        source_url=None,
+        event_time=NOW,
+        raw_payload_hash="hash_001",
+        metadata={"message_id": "message_001"},
+        purged_at=None,
+        purged_by=None,
+        purge_reason=None,
+        purge_level="none",
+        graph_backend_raw_retained=False,
+        created_at=NOW,
+        runtime_event_idempotency_key="runtime-key-001",
+    )
 
 
 def _evidence_chunk() -> EvidenceChunk:
@@ -232,6 +287,17 @@ def _page_topic() -> PageMemoryTopic:
     )
 
 
+def _effective_scope() -> EffectiveScope:
+    return EffectiveScope(
+        project_memory_space_id="project_001",
+        group_ids=("group_001",),
+        thread_id="thread_001",
+        shared_group_id=None,
+        safe_mode_enabled=True,
+        cross_group_allowed=False,
+    )
+
+
 def _graph_job() -> GraphWriteJob:
     return GraphWriteJob(
         id="graph_job_001",
@@ -239,6 +305,7 @@ def _graph_job() -> GraphWriteJob:
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
+        memory_id="memory_001",
         source_event_ids=("source_001",),
         route=MemoryRoute.GRAPH,
         status="pending",

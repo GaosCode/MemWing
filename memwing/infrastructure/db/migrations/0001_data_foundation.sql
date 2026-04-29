@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS audit_events (
     reason_text text,
     source_event_ids text[] NOT NULL DEFAULT '{}',
     latency_ms integer,
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    actor_id text
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_trace
@@ -322,6 +323,7 @@ CREATE TABLE IF NOT EXISTS graph_write_jobs (
     project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
     thread_id text,
     saga_id text,
+    memory_id text NOT NULL REFERENCES memory_items(id),
     source_event_ids text[] NOT NULL DEFAULT '{}',
     route text NOT NULL,
     status text NOT NULL,
@@ -351,6 +353,9 @@ CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_run_priority
 
 CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_project_thread_saga
     ON graph_write_jobs (project_memory_space_id, thread_id, saga_id);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_memory
+    ON graph_write_jobs (memory_id);
 
 CREATE TABLE IF NOT EXISTS memory_graph_links (
     id text PRIMARY KEY,

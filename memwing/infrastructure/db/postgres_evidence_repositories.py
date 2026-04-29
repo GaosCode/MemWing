@@ -10,6 +10,8 @@ from .postgres_derived_sql import (
     _LIST_RECENT_WORKING_MEMORY_SQL,
     _MARK_EVIDENCE_SOURCE_REDACTED_SQL,
     _MARK_WORKING_MEMORY_FLUSHED_SQL,
+    _NEXT_WORKING_MEMORY_SEQUENCE_SQL,
+    _SUM_UNFLUSHED_WORKING_MEMORY_TOKENS_SQL,
     _UPSERT_EVIDENCE_CHUNK_SQL,
 )
 from .postgres_repositories import PostgresExecutor
@@ -84,6 +86,42 @@ class PostgresWorkingMemoryRepository:
             },
         )
         return tuple(working_memory_entry_from_row(row) for row in rows)
+
+    async def next_sequence(
+        self,
+        *,
+        project_memory_space_id: str,
+        thread_id: str | None,
+    ) -> int:
+        row = await self._executor.fetchrow(
+            _NEXT_WORKING_MEMORY_SEQUENCE_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "thread_id": thread_id,
+            },
+        )
+        if row is None or not isinstance(row["next_sequence"], int):
+            raise RuntimeError("working memory next sequence query did not return an integer")
+        return row["next_sequence"]
+
+    async def sum_unflushed_tokens(
+        self,
+        *,
+        project_memory_space_id: str,
+        group_id: str | None,
+        thread_id: str | None,
+    ) -> int:
+        row = await self._executor.fetchrow(
+            _SUM_UNFLUSHED_WORKING_MEMORY_TOKENS_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "group_id": group_id,
+                "thread_id": thread_id,
+            },
+        )
+        if row is None or not isinstance(row["token_count"], int):
+            raise RuntimeError("working memory token sum query did not return an integer")
+        return row["token_count"]
 
     async def mark_flushed(
         self,

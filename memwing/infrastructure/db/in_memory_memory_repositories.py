@@ -10,7 +10,9 @@ from memwing.core.models import (
     PageMemory,
     PageMemoryScopeType,
 )
+from memwing.core.scope import EffectiveScope
 
+from .in_memory_scope import effective_scope_matches
 from .in_memory_transaction_view import InMemoryTransactionView
 
 
@@ -32,6 +34,26 @@ class InMemoryMemoryItemRepository:
             if source_event_id in item.source_event_ids
         )
 
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        items = [
+            item
+            for item in self._tx.state.memory_items.values()
+            if item.project_memory_space_id == scope.project_memory_space_id
+            and effective_scope_matches(
+                group_id=item.group_id,
+                thread_id=item.thread_id,
+                shared_group_id=item.shared_group_id,
+                scope=scope,
+            )
+        ]
+        items.sort(key=lambda item: (item.updated_at, item.id), reverse=True)
+        return tuple(items[:limit])
+
 
 class InMemoryMemoryVersionRepository:
     def __init__(self, tx: InMemoryTransactionView) -> None:
@@ -46,6 +68,15 @@ class InMemoryMemoryVersionRepository:
         self._tx.state.memory_versions[version.id] = version
         self._tx.state.memory_version_by_memory_version[key] = version.id
         return version
+
+    async def get_latest(self, memory_id: str) -> MemoryVersion | None:
+        versions = [
+            version
+            for version in self._tx.state.memory_versions.values()
+            if version.memory_id == memory_id
+        ]
+        versions.sort(key=lambda version: version.version, reverse=True)
+        return versions[0] if versions else None
 
 
 class InMemoryMemoryPageRepository:
@@ -111,6 +142,20 @@ class InMemoryMemoryPageRepository:
                 )
                 count += 1
         return count
+
+    async def list_needs_rebuild(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        pages = [
+            page
+            for page in self._tx.state.memory_pages.values()
+            if page.project_memory_space_id == project_memory_space_id and page.needs_rebuild
+        ]
+        pages.sort(key=lambda page: (page.updated_at, page.id))
+        return tuple(pages[:limit])
 
 
 class InMemoryMemoryPageVersionRepository:

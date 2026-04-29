@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import OutboxLockOwnershipError
 
 from .postgres_rows import (
@@ -17,6 +18,7 @@ from .postgres_sql import (
     _INSERT_AUDIT_EVENT_SQL,
     _INSERT_OUTBOX_JOB_SQL,
     _INSERT_SOURCE_EVENT_SQL,
+    _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
     _MARK_OUTBOX_SUCCEEDED_SQL,
     _SELECT_EXISTING_SOURCE_EVENT_SQL,
@@ -60,6 +62,24 @@ class PostgresSourceEventRepository:
         )
         return source_event_from_row(row) if row is not None else None
 
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        rows = await self._executor.fetch(
+            _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
+            {
+                "project_memory_space_id": scope.project_memory_space_id,
+                "group_ids": scope.group_ids,
+                "thread_id": scope.thread_id,
+                "shared_group_id": scope.shared_group_id,
+                "limit": limit,
+            },
+        )
+        return tuple(source_event_from_row(row) for row in rows)
+
 
 class PostgresAuditEventRepository:
     def __init__(self, executor: PostgresExecutor) -> None:
@@ -82,6 +102,7 @@ class PostgresAuditEventRepository:
                 "source_event_ids": event.source_event_ids,
                 "latency_ms": event.latency_ms,
                 "created_at": event.created_at,
+                "actor_id": event.actor_id,
             },
         )
         if row is None:

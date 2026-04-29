@@ -53,6 +53,22 @@ ORDER BY sequence DESC
 LIMIT %(limit)s
 """
 
+_NEXT_WORKING_MEMORY_SEQUENCE_SQL = """
+SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+FROM working_memory_entries
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND thread_id IS NOT DISTINCT FROM %(thread_id)s
+"""
+
+_SUM_UNFLUSHED_WORKING_MEMORY_TOKENS_SQL = """
+SELECT COALESCE(SUM(token_count), 0) AS token_count
+FROM working_memory_entries
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND group_id IS NOT DISTINCT FROM %(group_id)s
+  AND thread_id IS NOT DISTINCT FROM %(thread_id)s
+  AND flushed_at IS NULL
+"""
+
 _MARK_WORKING_MEMORY_FLUSHED_SQL = """
 UPDATE working_memory_entries
 SET flushed_at = %(flushed_at)s
@@ -127,6 +143,20 @@ WHERE %(source_event_id)s = ANY(source_event_ids)
 ORDER BY updated_at DESC, id
 """
 
+_LIST_MEMORY_ITEMS_FOR_SCOPE_SQL = """
+SELECT *
+FROM memory_items
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
+  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (
+      %(shared_group_id)s IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+  )
+ORDER BY updated_at DESC, id
+LIMIT %(limit)s
+"""
+
 _INSERT_MEMORY_VERSION_SQL = """
 INSERT INTO memory_versions (
     id, memory_id, version, title, content, summary, status, source_event_ids,
@@ -138,6 +168,14 @@ INSERT INTO memory_versions (
 )
 ON CONFLICT (memory_id, version) DO NOTHING
 RETURNING *
+"""
+
+_GET_LATEST_MEMORY_VERSION_SQL = """
+SELECT *
+FROM memory_versions
+WHERE memory_id = %(memory_id)s
+ORDER BY version DESC
+LIMIT 1
 """
 
 _UPSERT_MEMORY_PAGE_SQL = """
@@ -187,6 +225,15 @@ WHERE %(source_event_id)s = ANY(source_event_ids)
 RETURNING id
 """
 
+_LIST_MEMORY_PAGES_NEEDS_REBUILD_SQL = """
+SELECT *
+FROM memory_pages
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND needs_rebuild = true
+ORDER BY updated_at ASC, id
+LIMIT %(limit)s
+"""
+
 _INSERT_MEMORY_PAGE_VERSION_SQL = """
 INSERT INTO memory_page_versions (
     id, page_id, version, title, brief, topics_json, open_questions, next_steps,
@@ -202,13 +249,13 @@ RETURNING *
 
 _INSERT_GRAPH_WRITE_JOB_SQL = """
 INSERT INTO graph_write_jobs (
-    id, backend, project_memory_space_id, thread_id, saga_id, source_event_ids,
+    id, backend, project_memory_space_id, thread_id, saga_id, memory_id, source_event_ids,
     route, status, idempotency_key, attempts, max_attempts, priority, next_run_at,
     dead_letter_reason, last_error, locked_at, locked_by, lock_expires_at,
     created_at, updated_at
 ) VALUES (
     %(id)s, %(backend)s, %(project_memory_space_id)s, %(thread_id)s,
-    %(saga_id)s, %(source_event_ids)s, %(route)s, %(status)s,
+    %(saga_id)s, %(memory_id)s, %(source_event_ids)s, %(route)s, %(status)s,
     %(idempotency_key)s, %(attempts)s, %(max_attempts)s, %(priority)s,
     %(next_run_at)s, %(dead_letter_reason)s, %(last_error)s, %(locked_at)s,
     %(locked_by)s, %(lock_expires_at)s, %(created_at)s, %(updated_at)s
