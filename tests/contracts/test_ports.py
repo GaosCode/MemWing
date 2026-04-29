@@ -24,7 +24,18 @@ from memwing.core.scope import EffectiveScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
 from memwing.ports.evidence_index import EvidenceIndexPort
-from memwing.ports.event_store import EventStorePort
+from memwing.ports.event_store import (
+    EventStorePort,
+    EventStoreTransactionPort,
+    EvidenceChunkRepositoryPort,
+    GraphWriteJobRepositoryPort,
+    MemoryGraphLinkRepositoryPort,
+    MemoryItemRepositoryPort,
+    MemoryPageRepositoryPort,
+    MemoryPageVersionRepositoryPort,
+    MemoryVersionRepositoryPort,
+    WorkingMemoryRepositoryPort,
+)
 from memwing.ports.graph_backend import GraphBackendPort
 from memwing.ports.llm_filter import LongTermFilterPort
 from memwing.ports.platform_connector import PlatformConnectorPort
@@ -129,6 +140,19 @@ def test_long_term_filter_port_returns_candidates_not_persisted_memory_items() -
     assert parameters[1].name == "events"
     assert parameters[2].name == "scope"
     assert hints["return"] == tuple[LongTermFilterItem, ...]
+
+
+def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
+    hints = get_type_hints(EventStoreTransactionPort)
+
+    assert hints["evidence_chunks"] is EvidenceChunkRepositoryPort
+    assert hints["working_memory_entries"] is WorkingMemoryRepositoryPort
+    assert hints["memory_items"] is MemoryItemRepositoryPort
+    assert hints["memory_versions"] is MemoryVersionRepositoryPort
+    assert hints["memory_pages"] is MemoryPageRepositoryPort
+    assert hints["memory_page_versions"] is MemoryPageVersionRepositoryPort
+    assert hints["graph_write_jobs"] is GraphWriteJobRepositoryPort
+    assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:

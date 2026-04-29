@@ -170,6 +170,33 @@ def _optional_int(row: Row, key: str) -> int | None:
     raise TypeError(f"{key} must be int or None")
 
 
+def _float(row: Row, key: str) -> float:
+    value = row[key]
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    raise TypeError(f"{key} must be float")
+
+
+def _optional_float(row: Row, key: str) -> float | None:
+    value = row[key]
+    if value is None:
+        return None
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    raise TypeError(f"{key} must be float or None")
+
+
+def _float_sequence_or_none(row: Row, key: str) -> tuple[float, ...] | None:
+    value = row[key]
+    if value is None:
+        return None
+    if isinstance(value, tuple | list) and all(
+        isinstance(item, int | float) and not isinstance(item, bool) for item in value
+    ):
+        return tuple(float(item) for item in value)
+    raise TypeError(f"{key} must be a sequence of float or None")
+
+
 def _dict(row: Row, key: str) -> dict[str, object]:
     value = row[key]
     if not isinstance(value, dict):

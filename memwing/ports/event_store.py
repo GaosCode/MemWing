@@ -5,7 +5,20 @@ from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from memwing.api.agent_runtime import RememberEventResult
-from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.core.models import (
+    AuditEvent,
+    EvidenceChunk,
+    GraphWriteJob,
+    MemoryGraphLink,
+    MemoryItem,
+    MemoryPageVersion,
+    MemoryVersion,
+    OutboxJob,
+    PageMemory,
+    PageMemoryScopeType,
+    SourceEvent,
+    WorkingMemoryEntry,
+)
 from memwing.core.scope import (
     EffectiveScope,
     GroupMemorySettings,
@@ -71,10 +84,141 @@ class OutboxJobRepositoryPort(Protocol):
         ...
 
 
+class EvidenceChunkRepositoryPort(Protocol):
+    async def upsert_chunk(self, chunk: EvidenceChunk) -> EvidenceChunk:
+        ...
+
+    async def mark_source_redacted(
+        self,
+        *,
+        source_event_id: str,
+        invalidated_at: datetime,
+    ) -> int:
+        ...
+
+
+class WorkingMemoryRepositoryPort(Protocol):
+    async def append(self, entry: WorkingMemoryEntry) -> WorkingMemoryEntry:
+        ...
+
+    async def list_recent(
+        self,
+        *,
+        project_memory_space_id: str,
+        thread_id: str | None,
+        limit: int,
+    ) -> tuple[WorkingMemoryEntry, ...]:
+        ...
+
+    async def mark_flushed(
+        self,
+        *,
+        project_memory_space_id: str,
+        thread_id: str | None,
+        through_sequence: int,
+        flushed_at: datetime,
+    ) -> int:
+        ...
+
+
+class MemoryItemRepositoryPort(Protocol):
+    async def upsert(self, item: MemoryItem) -> MemoryItem:
+        ...
+
+    async def get(self, memory_id: str) -> MemoryItem | None:
+        ...
+
+    async def list_by_source_event(self, source_event_id: str) -> tuple[MemoryItem, ...]:
+        ...
+
+
+class MemoryVersionRepositoryPort(Protocol):
+    async def record(self, version: MemoryVersion) -> MemoryVersion:
+        ...
+
+
+class MemoryPageRepositoryPort(Protocol):
+    async def upsert(self, page: PageMemory) -> PageMemory:
+        ...
+
+    async def get_by_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> PageMemory | None:
+        ...
+
+    async def mark_needs_rebuild_for_source(
+        self,
+        *,
+        source_event_id: str,
+        updated_at: datetime,
+    ) -> int:
+        ...
+
+
+class MemoryPageVersionRepositoryPort(Protocol):
+    async def record(self, version: MemoryPageVersion) -> MemoryPageVersion:
+        ...
+
+
+class GraphWriteJobRepositoryPort(Protocol):
+    async def enqueue(self, job: GraphWriteJob) -> GraphWriteJob:
+        ...
+
+    async def claim_pending(
+        self,
+        *,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        ...
+
+    async def mark_succeeded(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+    ) -> GraphWriteJob:
+        ...
+
+    async def mark_failed(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        error: str,
+        retry_delay: timedelta,
+    ) -> GraphWriteJob:
+        ...
+
+
+class MemoryGraphLinkRepositoryPort(Protocol):
+    async def upsert(self, link: MemoryGraphLink) -> MemoryGraphLink:
+        ...
+
+    async def list_by_memory(self, memory_id: str) -> tuple[MemoryGraphLink, ...]:
+        ...
+
+
 class EventStoreTransactionPort(Protocol):
     source_events: SourceEventRepositoryPort
     audit_events: AuditEventRepositoryPort
     outbox_jobs: OutboxJobRepositoryPort
+    evidence_chunks: EvidenceChunkRepositoryPort
+    working_memory_entries: WorkingMemoryRepositoryPort
+    memory_items: MemoryItemRepositoryPort
+    memory_versions: MemoryVersionRepositoryPort
+    memory_pages: MemoryPageRepositoryPort
+    memory_page_versions: MemoryPageVersionRepositoryPort
+    graph_write_jobs: GraphWriteJobRepositoryPort
+    memory_graph_links: MemoryGraphLinkRepositoryPort
 
 
 class EventStoreUnitOfWorkPort(Protocol):

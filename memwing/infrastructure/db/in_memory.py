@@ -17,6 +17,16 @@ from .in_memory_repositories import (
     InMemoryOutboxJobRepository,
     InMemorySourceEventRepository,
 )
+from .in_memory_derived_repositories import (
+    InMemoryEvidenceChunkRepository,
+    InMemoryGraphWriteJobRepository,
+    InMemoryMemoryGraphLinkRepository,
+    InMemoryMemoryItemRepository,
+    InMemoryMemoryPageRepository,
+    InMemoryMemoryPageVersionRepository,
+    InMemoryMemoryVersionRepository,
+    InMemoryWorkingMemoryRepository,
+)
 from .in_memory_state import InMemoryState
 
 
@@ -114,6 +124,14 @@ class _Transaction:
         self.source_events = InMemorySourceEventRepository(self)
         self.audit_events = InMemoryAuditEventRepository(self)
         self.outbox_jobs = InMemoryOutboxJobRepository(self)
+        self.evidence_chunks = InMemoryEvidenceChunkRepository(self)
+        self.working_memory_entries = InMemoryWorkingMemoryRepository(self)
+        self.memory_items = InMemoryMemoryItemRepository(self)
+        self.memory_versions = InMemoryMemoryVersionRepository(self)
+        self.memory_pages = InMemoryMemoryPageRepository(self)
+        self.memory_page_versions = InMemoryMemoryPageVersionRepository(self)
+        self.graph_write_jobs = InMemoryGraphWriteJobRepository(self)
+        self.memory_graph_links = InMemoryMemoryGraphLinkRepository(self)
 
     async def __aenter__(self) -> _Transaction:
         await self._store._lock.acquire()

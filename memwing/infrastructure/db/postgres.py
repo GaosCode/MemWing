@@ -12,6 +12,16 @@ from memwing.core.scope import (
 )
 
 from .postgres_sql import SESSION_KEY_PATTERN_LIKE_SQL
+from .postgres_derived_repositories import (
+    PostgresEvidenceChunkRepository,
+    PostgresGraphWriteJobRepository,
+    PostgresMemoryGraphLinkRepository,
+    PostgresMemoryItemRepository,
+    PostgresMemoryPageRepository,
+    PostgresMemoryPageVersionRepository,
+    PostgresMemoryVersionRepository,
+    PostgresWorkingMemoryRepository,
+)
 from .postgres_repositories import (
     PostgresAuditEventRepository,
     PostgresExecutor,
@@ -136,6 +146,14 @@ class PostgresTransaction(PostgresExecutor):
         self.source_events = PostgresSourceEventRepository(self)
         self.audit_events = PostgresAuditEventRepository(self)
         self.outbox_jobs = PostgresOutboxJobRepository(self)
+        self.evidence_chunks = PostgresEvidenceChunkRepository(self)
+        self.working_memory_entries = PostgresWorkingMemoryRepository(self)
+        self.memory_items = PostgresMemoryItemRepository(self)
+        self.memory_versions = PostgresMemoryVersionRepository(self)
+        self.memory_pages = PostgresMemoryPageRepository(self)
+        self.memory_page_versions = PostgresMemoryPageVersionRepository(self)
+        self.graph_write_jobs = PostgresGraphWriteJobRepository(self)
+        self.memory_graph_links = PostgresMemoryGraphLinkRepository(self)
 
     async def __aenter__(self) -> PostgresTransaction:
         self._context = self._connection.transaction()
