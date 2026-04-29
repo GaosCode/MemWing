@@ -318,7 +318,12 @@ class FeishuWebhookHandler:
         details: JsonObject | None = None,
     ) -> None:
         await self._audit_failure(reason_code, raw_payload_hash, status_code, details or {})
-        raise FeishuConnectorError(reason_code, reason_code, status_code)
+        raise FeishuConnectorError(
+            reason_code,
+            reason_code,
+            status_code,
+            raw_payload_hash=raw_payload_hash,
+        )
 
     async def _audit_failure(
         self,

@@ -37,10 +37,22 @@ class PlatformWebhookResult:
 
 
 class PlatformWebhookError(Exception):
-    def __init__(self, reason_code: str, message: str, status_code: int) -> None:
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        status_code: int,
+        *,
+        raw_payload_hash: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.reason_code = require_text(reason_code, "reason_code")
         self.status_code = require_positive_int(status_code, "status_code")
+        self.raw_payload_hash = (
+            require_text(raw_payload_hash, "raw_payload_hash")
+            if raw_payload_hash is not None
+            else None
+        )
 
 
 class PlatformWebhookHandlerPort(Protocol):

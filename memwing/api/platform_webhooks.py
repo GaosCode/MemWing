@@ -38,6 +38,14 @@ async def handle_feishu_webhook(
             received_at=received_at,
         )
     except PlatformWebhookError as exc:
+        if ingress_service is not None and exc.raw_payload_hash is not None:
+            await ingress_service.record_transport_failure(
+                platform="feishu",
+                reason_code=exc.reason_code,
+                raw_payload_hash=exc.raw_payload_hash,
+                status_code=exc.status_code,
+                received_at=received_at,
+            )
         return PlatformWebhookResponse(
             status_code=exc.status_code,
             body={"ok": False, "code": exc.reason_code, "message": str(exc)},

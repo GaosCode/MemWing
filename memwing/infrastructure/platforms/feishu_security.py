@@ -52,8 +52,20 @@ class FeishuAuditRecord:
 
 
 class FeishuConnectorError(PlatformWebhookError):
-    def __init__(self, reason_code: str, message: str, status_code: int) -> None:
-        super().__init__(reason_code, message, status_code)
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        status_code: int,
+        *,
+        raw_payload_hash: str | None = None,
+    ) -> None:
+        super().__init__(
+            reason_code,
+            message,
+            status_code,
+            raw_payload_hash=raw_payload_hash,
+        )
 
 
 class InMemoryFeishuReplayProtector:
