@@ -14,6 +14,21 @@ export type MemoryItem = {
   strength: number;
   flags: string[];
   reason: string;
+  forgetting: ForgettingCurve;
+};
+
+export type CurveState = "stable" | "fading" | "review_due" | "ready_to_forget" | "pinned";
+
+export type ForgettingCurve = {
+  decayScore: number;
+  originalScore: number;
+  halfLifeDays: number;
+  recallThreshold: number;
+  lastReinforcedAt: string;
+  nextReviewAt: string;
+  retentionReason: string;
+  curveState: CurveState;
+  curvePoints: Array<{ day: number; score: number }>;
 };
 
 export type MaintenanceItem = {

@@ -15,6 +15,10 @@ import { ProjectInspectorDetail } from "../features/project/ProjectInspectorDeta
 import { ProjectPage } from "../features/project/ProjectPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
+function maintenanceKey(item: MaintenanceItem) {
+  return `${item.type}:${item.title}:${item.updated}`;
+}
+
 export function App() {
   const [activeNav, setActiveNav] = useState<NavKey>("inbox");
   const [detailMode, setDetailMode] = useState<DetailMode>(null);
@@ -27,6 +31,26 @@ export function App() {
     setActiveNav(next);
     setDetailMode(null);
     setInspectorOpen(false);
+  }
+
+  function selectMemory(memory: MemoryItem) {
+    if (inspectorOpen && selectedMemory.id === memory.id) {
+      setInspectorOpen(false);
+      return;
+    }
+
+    setSelectedMemory(memory);
+    setInspectorOpen(true);
+  }
+
+  function selectMaintenance(item: MaintenanceItem) {
+    if (inspectorOpen && maintenanceKey(selectedMaintenance) === maintenanceKey(item)) {
+      setInspectorOpen(false);
+      return;
+    }
+
+    setSelectedMaintenance(item);
+    setInspectorOpen(true);
   }
 
   const inspectorControls = {
@@ -57,7 +81,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<InboxPage selected={selectedMemory} onSelect={setSelectedMemory} />}
+          main={<InboxPage selected={selectedMemory} onSelect={selectMemory} />}
           inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} {...inspectorControls} />}
         />
       );
@@ -67,7 +91,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<LibraryPage selected={selectedMemory} onSelect={setSelectedMemory} />}
+          main={<LibraryPage selected={selectedMemory} onSelect={selectMemory} />}
           inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} libraryMode {...inspectorControls} />}
         />
       );
@@ -87,7 +111,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<MaintenancePage selected={selectedMaintenance} onSelect={setSelectedMaintenance} />}
+          main={<MaintenancePage selected={selectedMaintenance} onSelect={selectMaintenance} />}
           inspector={<MaintenanceInspector item={selectedMaintenance} onOpenDetail={() => setDetailMode("maintenance")} {...inspectorControls} />}
         />
       );

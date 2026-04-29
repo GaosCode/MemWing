@@ -12,7 +12,9 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { BrandMark } from "../shared/components/BrandMark";
+import { SelectMenu } from "../shared/components/ui";
 import type { NavKey } from "../shared/types/entities";
 
 const navItems: Array<{ key: NavKey; label: string; icon: LucideIcon }> = [
@@ -34,9 +36,10 @@ export function AppShell({
   children: React.ReactNode;
   onSelectNav: (key: NavKey) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   return (
-    <div className={`app-shell app-shell--${shellMode}`}>
-      <Sidebar active={activeNav} onSelect={onSelectNav} />
+    <div className={`app-shell app-shell--${shellMode} ${collapsed ? "app-shell--nav-collapsed" : ""}`}>
+      <Sidebar active={activeNav} collapsed={collapsed} onToggleCollapse={() => setCollapsed((value) => !value)} onSelect={onSelectNav} />
       <Topbar />
       <main className="workspace" aria-label="MemWing workspace">
         {children}
@@ -46,7 +49,17 @@ export function AppShell({
   );
 }
 
-function Sidebar({ active, onSelect }: { active: NavKey; onSelect: (key: NavKey) => void }) {
+function Sidebar({
+  active,
+  collapsed,
+  onToggleCollapse,
+  onSelect,
+}: {
+  active: NavKey;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onSelect: (key: NavKey) => void;
+}) {
   return (
     <nav className="sidebar" aria-label="Primary navigation">
       <button className="brand" aria-label="MemWing home" onClick={() => onSelect("inbox")}>
@@ -68,53 +81,48 @@ function Sidebar({ active, onSelect }: { active: NavKey; onSelect: (key: NavKey)
         ))}
       </div>
 
-      <button className="collapse-button" type="button">
+      <button className="collapse-button" type="button" onClick={onToggleCollapse}>
         <ArrowLeft size={18} />
-        <span>Collapse</span>
+        <span>{collapsed ? "Expand" : "Collapse"}</span>
       </button>
     </nav>
   );
 }
 
 function Topbar() {
+  const [workspace, setWorkspace] = useState("产品记忆治理");
+  const [group, setGroup] = useState("产品线");
+  const [thread, setThread] = useState("自动化维护");
+  const [search, setSearch] = useState("");
+  const [syncedAt, setSyncedAt] = useState("已同步 2 分钟前");
+
   return (
     <header className="topbar">
       <div className="scope-group" aria-label="Scope selectors">
-        <ScopeButton label="工作区" value="产品记忆治理" />
-        <ScopeButton label="分组" value="产品线" />
-        <ScopeButton label="线程" value="自动化维护" />
+        <SelectMenu className="scope-select" label="工作区" value={workspace} options={["产品记忆治理", "安全群治理", "A3 Calm Ops"]} onChange={setWorkspace} />
+        <SelectMenu className="scope-select" label="分组" value={group} options={["产品线", "安全群", "AI 自动化维护"]} onChange={setGroup} />
+        <SelectMenu className="scope-select" label="线程" value={thread} options={["自动化维护", "项目记忆重建", "遗忘曲线复习"]} onChange={setThread} />
       </div>
 
       <label className="global-search">
         <Search size={18} />
         <span className="sr-only">Search</span>
-        <input placeholder="搜索记忆、来源、标签、ID..." />
+        <input value={search} placeholder="搜索记忆、来源、标签、ID..." onChange={(event) => setSearch(event.target.value)} />
         <kbd>⌘ K</kbd>
+        {search ? <span className="search-result-hint">本地筛选：{search}</span> : null}
       </label>
 
-      <div className="sync-user">
+      <button className="sync-user" type="button" onClick={() => setSyncedAt("刚刚同步")}>
         <RefreshCcw size={20} />
         <span className="status-dot status-dot--green" aria-hidden="true" />
-        <span className="sync-text">已同步 2 分钟前</span>
+        <span className="sync-text">{syncedAt}</span>
         <span className="avatar" aria-hidden="true">
           <User size={16} />
         </span>
         <span className="user-name">swift.gao</span>
         <ChevronDown size={16} />
-      </div>
+      </button>
     </header>
-  );
-}
-
-function ScopeButton({ label, value }: { label: string; value: string }) {
-  return (
-    <button className="scope-button" type="button">
-      <span>
-        <span className="scope-kicker">{label}</span>
-        <span className="scope-value">{value}</span>
-      </span>
-      <ChevronDown size={16} />
-    </button>
   );
 }
 
