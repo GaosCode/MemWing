@@ -1,35 +1,17 @@
 from __future__ import annotations
 
-import inspect
-from collections.abc import Awaitable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
 
 from memwing.api.agent_runtime import RememberEventResult
-from memwing.api.platform import PlatformEvent, PlatformRawEvent
+from memwing.api.platform import PlatformRawEvent
 from memwing.api.types import JsonObject
-from memwing.application.remember_event_command import (
-    RememberEventCommand,
-    platform_event_to_remember_command,
-)
+from memwing.application.platform_ingress_service import PlatformIngressService
 from memwing.ports.platform_webhook import (
     PlatformWebhookError,
     PlatformWebhookHandlerPort,
 )
-
-
-class PlatformRememberClient(Protocol):
-    def remember_event(
-        self,
-        command: RememberEventCommand,
-    ) -> RememberEventResult | Awaitable[RememberEventResult]:
-        ...
-
-
-class PlatformEventNormalizer(Protocol):
-    def normalize_event(self, raw_event: PlatformRawEvent) -> PlatformEvent | Awaitable[PlatformEvent]:
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +27,7 @@ async def handle_feishu_webhook(
     headers: Mapping[str, str],
     body: bytes,
     connector: PlatformWebhookHandlerPort,
-    remember_client: PlatformRememberClient | None = None,
+    ingress_service: PlatformIngressService | None = None,
     received_at: datetime | None = None,
 ) -> PlatformWebhookResponse:
     received_at = received_at or datetime.now(tz=UTC)
@@ -79,15 +61,18 @@ async def handle_feishu_webhook(
             body={"ok": False, "code": "platform_raw_event_missing", "message": "platform raw event missing"},
         )
 
-    remember_result = None
-    if remember_client is not None:
-        platform_event = await _normalize_platform_event(connector, connector_result.raw_event)
-        remembered = remember_client.remember_event(
-            platform_event_to_remember_command(platform_event)
+    if ingress_service is None:
+        return PlatformWebhookResponse(
+            status_code=500,
+            body={
+                "ok": False,
+                "code": "platform_ingress_service_missing",
+                "message": "platform ingress service is not configured",
+            },
+            raw_event=connector_result.raw_event,
         )
-        if inspect.isawaitable(remembered):
-            remembered = await remembered
-        remember_result = remembered
+
+    remember_result = await ingress_service.ingest(connector_result.raw_event)
 
     response_body: JsonObject = {
         "ok": True,
@@ -107,16 +92,3 @@ async def handle_feishu_webhook(
         raw_event=connector_result.raw_event,
         remember_result=remember_result,
     )
-
-
-async def _normalize_platform_event(
-    connector: PlatformWebhookHandlerPort,
-    raw_event: PlatformRawEvent,
-) -> PlatformEvent:
-    normalizer = getattr(connector, "normalize_event", None)
-    if normalizer is None:
-        raise TypeError("connector must normalize PlatformRawEvent before remember_event")
-    normalized = normalizer(raw_event)
-    if inspect.isawaitable(normalized):
-        normalized = await normalized
-    return normalized

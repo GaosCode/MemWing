@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
+from memwing.api.platform import PlatformRawEvent, PlatformRawRequest, PlatformRef
 from memwing.api.platform_webhooks import handle_feishu_webhook
 from memwing.ports.platform_webhook import PlatformWebhookError, PlatformWebhookResult
 
@@ -52,6 +53,35 @@ def test_feishu_webhook_api_returns_clear_error_for_invalid_schema() -> None:
     assert response.body["code"] == "schema_invalid"
 
 
+def test_feishu_webhook_api_requires_ingress_service_for_accepted_events() -> None:
+    connector = FakeWebhookConnector(
+        PlatformWebhookResult(
+            kind="accepted",
+            status_code=202,
+            body={"ok": True},
+            raw_payload_hash="hash_001",
+            raw_event=_raw_event(),
+        )
+    )
+
+    response = asyncio.run(
+        handle_feishu_webhook(
+            headers={},
+            body=b'{"event":{"message":{"chat_id":"chat_001","content":"hello"}}}',
+            connector=connector,
+            received_at=RECEIVED_AT,
+        )
+    )
+
+    assert response.status_code == 500
+    assert response.body == {
+        "ok": False,
+        "code": "platform_ingress_service_missing",
+        "message": "platform ingress service is not configured",
+    }
+    assert "remembered" not in response.body
+
+
 class FakeWebhookConnector:
     def __init__(self, result: PlatformWebhookResult) -> None:
         self._result = result
@@ -80,3 +110,25 @@ class FailingWebhookConnector:
         received_at: datetime | None = None,
     ) -> PlatformWebhookResult:
         raise self._error
+
+
+def _raw_event() -> PlatformRawEvent:
+    raw_request = PlatformRawRequest(
+        platform="feishu",
+        headers={},
+        body=b'{"event":{"message":{"chat_id":"chat_001","content":"hello"}}}',
+        received_at=RECEIVED_AT,
+        raw_payload_hash="hash_001",
+    )
+    return PlatformRawEvent(
+        platform_ref=PlatformRef(
+            platform="feishu",
+            tenant_id="tenant_001",
+            channel_id="chat_001",
+            thread_id=None,
+            message_id="message_001",
+        ),
+        raw_request=raw_request,
+        event_payload={"event": {"message": {"chat_id": "chat_001", "content": "hello"}}},
+        is_challenge=False,
+    )
