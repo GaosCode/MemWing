@@ -30,10 +30,16 @@ class InMemoryGraphWriteJobRepository:
         lock_duration: timedelta,
         limit: int,
     ) -> tuple[GraphWriteJob, ...]:
+        blocked_group_keys = {
+            _graph_job_group_key(job)
+            for job in self._tx.state.graph_write_jobs.values()
+            if _is_unexpired_processing_graph_job(job, now)
+        }
         eligible = [
             job
             for job in self._tx.state.graph_write_jobs.values()
             if _is_graph_job_claimable(job, now)
+            and _graph_job_group_key(job) not in blocked_group_keys
         ]
         eligible.sort(
             key=lambda job: (
@@ -45,7 +51,12 @@ class InMemoryGraphWriteJobRepository:
         )
 
         claimed: list[GraphWriteJob] = []
-        for job in eligible[:limit]:
+        claimed_group_keys: set[tuple[str, str | None, str | None]] = set()
+        for job in eligible:
+            group_key = _graph_job_group_key(job)
+            if group_key in claimed_group_keys:
+                continue
+
             updated = replace(
                 job,
                 status="processing",
@@ -56,6 +67,9 @@ class InMemoryGraphWriteJobRepository:
             )
             self._tx.state.graph_write_jobs[job.id] = updated
             claimed.append(updated)
+            claimed_group_keys.add(group_key)
+            if len(claimed) >= limit:
+                break
         return tuple(claimed)
 
     async def mark_succeeded(
@@ -159,3 +173,14 @@ def _is_graph_job_claimable(job: GraphWriteJob, now: datetime) -> bool:
         and job.lock_expires_at is not None
         and job.lock_expires_at <= now
     )
+
+
+def _is_unexpired_processing_graph_job(job: GraphWriteJob, now: datetime) -> bool:
+    return (
+        job.status == "processing"
+        and (job.lock_expires_at is None or job.lock_expires_at > now)
+    )
+
+
+def _graph_job_group_key(job: GraphWriteJob) -> tuple[str, str | None, str | None]:
+    return (job.project_memory_space_id, job.thread_id, job.saga_id)

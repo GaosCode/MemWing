@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 
-from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
+from memwing.core.models import AuditEvent, GraphWriteJob, MemoryGraphLink, OutboxJob, SourceEvent
 from memwing.core.scope_patterns import session_pattern_matches
 from memwing.core.scope import (
     GroupMemorySettings,
@@ -52,6 +52,14 @@ class InMemoryDataStore:
     def outbox_jobs(self) -> tuple[OutboxJob, ...]:
         return tuple(self._state.outbox_jobs.values())
 
+    @property
+    def graph_write_jobs(self) -> tuple[GraphWriteJob, ...]:
+        return tuple(self._state.graph_write_jobs.values())
+
+    @property
+    def memory_graph_links(self) -> tuple[MemoryGraphLink, ...]:
+        return tuple(self._state.memory_graph_links.values())
+
     def add_project_memory_space(self, space: ProjectMemorySpace) -> None:
         self._state.projects[space.id] = space
 
@@ -67,6 +75,10 @@ class InMemoryDataStore:
     def add_outbox_job(self, job: OutboxJob) -> None:
         self._state.outbox_jobs[job.id] = job
         self._state.outbox_by_idempotency_key[job.idempotency_key] = job.id
+
+    def add_graph_write_job(self, job: GraphWriteJob) -> None:
+        self._state.graph_write_jobs[job.id] = job
+        self._state.graph_job_by_idempotency_key[job.idempotency_key] = job.id
 
     def transaction(self) -> _Transaction:
         return _Transaction(self)
