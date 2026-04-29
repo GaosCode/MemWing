@@ -39,6 +39,11 @@ export const lifecycleStatus: Record<
     tone: "red",
     description: "已失效，不能继续作为可信记忆使用。",
   },
+  removed: {
+    label: "Removed",
+    tone: "red",
+    description: "已移除，是不可恢复的终态。",
+  },
 };
 
 export const severityStatus: Record<Severity, { label: string; tone: "green" | "orange" | "red" | "gray" }> = {
@@ -51,10 +56,10 @@ export const severityStatus: Record<Severity, { label: string; tone: "green" | "
 };
 
 export const memoryTypeLabel: Record<MemoryType, string> = {
-  preference: "Preference",
   decision: "Decision",
-  policy: "Policy",
-  risk: "Risk",
-  constraint: "Constraint",
-  summary: "Summary",
+  task: "Task",
+  preference: "Preference",
+  rule: "Rule",
+  note: "Note",
+  evidence: "Evidence",
 };

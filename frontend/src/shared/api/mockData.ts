@@ -1,84 +1,9 @@
+import { memoryListFixtureResponse } from "../../api/generated/memoryList";
+import { memoryListItemToViewModel } from "../../api/mappers/memoryList";
 import type { MaintenanceItem, MemoryItem } from "../types/entities";
 
-export const memories: MemoryItem[] = [
-  {
-    id: "mem-q813",
-    title: "用户希望自动维护动作可解释、可撤销",
-    type: "preference",
-    source: "Feishu · 产品群",
-    lastSeen: "2026-04-27 11:32",
-    status: "active",
-    strength: 0.84,
-    flags: ["pinned", "linked"],
-    reason: "Repeated across planning messages and affects future recall.",
-  },
-  {
-    id: "mem-a3-stage",
-    title: "Current Stage wording alignment",
-    type: "decision",
-    source: "Page Memory",
-    lastSeen: "2026-04-27 11:05",
-    status: "candidate",
-    strength: 0.79,
-    flags: ["needs review"],
-    reason: "Project wording drift after rebuild preview.",
-  },
-  {
-    id: "mem-inspector",
-    title: "Inspector remains compact preview",
-    type: "policy",
-    source: "AI 产品自动化维护",
-    lastSeen: "2026-04-27 10:33",
-    status: "fading",
-    strength: 0.61,
-    flags: ["linked"],
-    reason: "Right rail must not become a full detail page.",
-  },
-  {
-    id: "mem-duplicate",
-    title: "过时的 duplicate risk wording",
-    type: "risk",
-    source: "Project Memory",
-    lastSeen: "2026-04-27 10:15",
-    status: "needs_review",
-    strength: 0.48,
-    flags: ["needs review"],
-    reason: "Superseded by v3 wording.",
-  },
-  {
-    id: "mem-safe-mode",
-    title: "默认关闭 safe_mode，不影响主要使用路径",
-    type: "constraint",
-    source: "Feishu · 产品群",
-    lastSeen: "2026-04-26 16:21",
-    status: "hidden",
-    strength: 0.38,
-    flags: ["hidden"],
-    reason: "Needs explicit safety review before broad exposure.",
-  },
-  {
-    id: "mem-graphiti",
-    title: "Graphiti 负责冲突判定，Evidence Index 不抢事实权",
-    type: "decision",
-    source: "Feishu · 安全群",
-    lastSeen: "2026-04-26 18:44",
-    status: "archived",
-    strength: 0.42,
-    flags: ["archived"],
-    reason: "Historical decision, no longer active in current page.",
-  },
-  {
-    id: "mem-invalid",
-    title: "临时飞书讨论摘要",
-    type: "summary",
-    source: "Feishu · 安全群",
-    lastSeen: "2026-04-26 12:08",
-    status: "invalid",
-    strength: 0.12,
-    flags: ["invalid"],
-    reason: "Source redaction removed the original evidence.",
-  },
-];
+export const memories: MemoryItem[] =
+  memoryListFixtureResponse.items.map(memoryListItemToViewModel);
 
 export const maintenanceItems: MaintenanceItem[] = [
   {

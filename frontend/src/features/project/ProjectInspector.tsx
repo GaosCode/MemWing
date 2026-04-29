@@ -4,17 +4,13 @@ import { Definition, InspectorHeader, InspectorSection, StrengthMeter, Timeline 
 export function ProjectInspector({
   onOpenDetail,
   onClose,
-  onNarrow,
-  onWiden,
 }: {
   onOpenDetail: () => void;
   onClose?: () => void;
-  onNarrow?: () => void;
-  onWiden?: () => void;
 }) {
   return (
     <div className="inspector-panel">
-      <InspectorHeader title="Project Inspector" onOpen={onOpenDetail} onClose={onClose} onNarrow={onNarrow} onWiden={onWiden} />
+      <InspectorHeader title="Project Inspector" onOpen={onOpenDetail} onClose={onClose} />
       <InspectorSection title="Project Status">
         <Definition label="Strength"><StrengthMeter value={0.84} /></Definition>
         <Definition label="Lifecycle">Active · Review Pending <span className="status-dot status-dot--orange" /></Definition>

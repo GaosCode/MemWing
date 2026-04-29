@@ -5,10 +5,11 @@ export type LifecycleStatus =
   | "needs_review"
   | "archived"
   | "hidden"
-  | "invalid";
+  | "invalid"
+  | "removed";
 
 export type Severity = "low" | "medium" | "high" | "failed" | "warning" | "healthy";
 
-export type MemoryType = "preference" | "decision" | "policy" | "risk" | "constraint" | "summary";
+export type MemoryType = "decision" | "task" | "preference" | "rule" | "note" | "evidence";
 
 export type QueueState = "running" | "paused" | "failed";

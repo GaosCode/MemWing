@@ -6,18 +6,14 @@ export function MaintenanceInspector({
   item,
   onOpenDetail,
   onClose,
-  onNarrow,
-  onWiden,
 }: {
   item: MaintenanceItem;
   onOpenDetail: () => void;
   onClose?: () => void;
-  onNarrow?: () => void;
-  onWiden?: () => void;
 }) {
   return (
     <div className="inspector-panel">
-      <InspectorHeader title="Maintenance Inspector" onOpen={onOpenDetail} onClose={onClose} onNarrow={onNarrow} onWiden={onWiden} />
+      <InspectorHeader title="Maintenance Inspector" onOpen={onOpenDetail} onClose={onClose} />
       <h2>{item.title} into Project Memory</h2>
       <div className="definition-grid definition-grid--maintenance">
         <Definition label="Status"><StatusPill label={item.state} tone={item.state === "Failed" ? "red" : "orange"} /></Definition>

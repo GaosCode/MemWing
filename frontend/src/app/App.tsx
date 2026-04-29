@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AppShell } from "./AppShell";
 import { maintenanceItems, memories } from "../shared/api/mockData";
-import { SplitSurface, type InspectorSize } from "../shared/components/ui";
+import { SplitSurface } from "../shared/components/ui";
 import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
 import { InboxPage } from "../features/inbox/InboxPage";
 import { LibraryPage } from "../features/library/LibraryPage";
@@ -21,7 +21,7 @@ export function App() {
   const [selectedMemory, setSelectedMemory] = useState<MemoryItem>(memories[0]);
   const [selectedMaintenance, setSelectedMaintenance] = useState<MaintenanceItem>(maintenanceItems[0]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [inspectorSize, setInspectorSize] = useState<InspectorSize>("regular");
+  const [inspectorWidth, setInspectorWidth] = useState(400);
 
   function openNav(next: NavKey) {
     setActiveNav(next);
@@ -29,24 +29,14 @@ export function App() {
     setInspectorOpen(false);
   }
 
-  function narrowInspector() {
-    setInspectorSize((size) => (size === "wide" ? "regular" : "compact"));
-  }
-
-  function widenInspector() {
-    setInspectorOpen(true);
-    setInspectorSize((size) => (size === "compact" ? "regular" : "wide"));
-  }
-
   const inspectorControls = {
     onClose: () => setInspectorOpen(false),
-    onNarrow: narrowInspector,
-    onWiden: widenInspector,
   };
 
   const splitProps = {
     inspectorOpen,
-    inspectorSize,
+    inspectorWidth,
+    onInspectorWidthChange: setInspectorWidth,
     onReopenInspector: () => setInspectorOpen(true),
   };
 
@@ -104,7 +94,7 @@ export function App() {
     }
 
     return <SettingsPage />;
-  }, [activeNav, detailMode, inspectorOpen, inspectorSize, selectedMaintenance, selectedMemory]);
+  }, [activeNav, detailMode, inspectorOpen, inspectorWidth, selectedMaintenance, selectedMemory]);
 
   return (
     <AppShell activeNav={activeNav} shellMode={detailMode ? "detail" : "split"} onSelectNav={openNav}>

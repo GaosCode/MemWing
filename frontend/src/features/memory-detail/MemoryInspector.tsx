@@ -6,20 +6,16 @@ export function MemoryInspector({
   memory,
   onOpenDetail,
   onClose,
-  onNarrow,
-  onWiden,
   libraryMode,
 }: {
   memory: MemoryItem;
   onOpenDetail: () => void;
   onClose?: () => void;
-  onNarrow?: () => void;
-  onWiden?: () => void;
   libraryMode?: boolean;
 }) {
   return (
     <div className="inspector-panel">
-      <InspectorHeader title="Inspector" onOpen={onOpenDetail} onClose={onClose} onNarrow={onNarrow} onWiden={onWiden} />
+      <InspectorHeader title="Inspector" onOpen={onOpenDetail} onClose={onClose} />
       <h2>{memory.title}</h2>
 
       <div className="inspector-metrics">

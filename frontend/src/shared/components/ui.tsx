@@ -1,9 +1,14 @@
-import { useRef, type PointerEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Pin, X, type LucideIcon } from "lucide-react";
+import { useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { ExternalLink, Pin, X, type LucideIcon } from "lucide-react";
 import { lifecycleStatus } from "../design-system/status";
 import type { LifecycleStatus } from "../types/lifecycle";
 
-export type InspectorSize = "compact" | "regular" | "wide";
+const MIN_INSPECTOR_WIDTH = 320;
+const MAX_INSPECTOR_WIDTH = 560;
+
+function clampInspectorWidth(width: number) {
+  return Math.min(MAX_INSPECTOR_WIDTH, Math.max(MIN_INSPECTOR_WIDTH, width));
+}
 
 export function PageHeader({
   title,
@@ -29,22 +34,83 @@ export function SplitSurface({
   main,
   inspector,
   inspectorOpen = true,
-  inspectorSize = "regular",
+  inspectorWidth = 400,
+  onInspectorWidthChange,
   onReopenInspector,
 }: {
   main: ReactNode;
   inspector: ReactNode;
   inspectorOpen?: boolean;
-  inspectorSize?: InspectorSize;
+  inspectorWidth?: number;
+  onInspectorWidthChange?: (width: number) => void;
   onReopenInspector?: () => void;
 }) {
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const clampedWidth = clampInspectorWidth(inspectorWidth);
+  const surfaceStyle = {
+    "--inspector-panel-width": `${clampedWidth}px`,
+  } as CSSProperties;
+
+  function changeWidth(nextWidth: number) {
+    onInspectorWidthChange?.(clampInspectorWidth(nextWidth));
+  }
+
+  function handleResizePointerDown(event: PointerEvent<HTMLDivElement>) {
+    dragState.current = { startX: event.clientX, startWidth: clampedWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+
+  function handleResizePointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (!dragState.current) {
+      return;
+    }
+
+    changeWidth(dragState.current.startWidth + dragState.current.startX - event.clientX);
+  }
+
+  function clearResizeDrag(event: PointerEvent<HTMLDivElement>) {
+    dragState.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleResizeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "ArrowLeft") {
+      changeWidth(clampedWidth + 24);
+      event.preventDefault();
+    }
+    if (event.key === "ArrowRight") {
+      changeWidth(clampedWidth - 24);
+      event.preventDefault();
+    }
+  }
+
   return (
-    <div className={`split-surface split-surface--${inspectorOpen ? inspectorSize : "closed"}`}>
+    <div className={`split-surface split-surface--${inspectorOpen ? "open" : "closed"}`} style={surfaceStyle}>
       <section className="work-area">{main}</section>
       {inspectorOpen ? (
-        <aside className="inspector-rail" aria-label="Inspector">
-          {inspector}
-        </aside>
+        <>
+          <div
+            className="inspector-resizer"
+            role="separator"
+            aria-label="Resize inspector"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_INSPECTOR_WIDTH}
+            aria-valuemax={MAX_INSPECTOR_WIDTH}
+            aria-valuenow={clampedWidth}
+            tabIndex={0}
+            onKeyDown={handleResizeKeyDown}
+            onPointerDown={handleResizePointerDown}
+            onPointerMove={handleResizePointerMove}
+            onPointerUp={clearResizeDrag}
+            onPointerCancel={clearResizeDrag}
+          />
+          <aside className="inspector-rail" aria-label="Inspector">
+            {inspector}
+          </aside>
+        </>
       ) : (
         <button
           className="inspector-edge-hotspot"
@@ -52,9 +118,6 @@ export function SplitSurface({
           aria-label="Open inspector"
           title="Open inspector"
           onClick={onReopenInspector}
-          onFocus={onReopenInspector}
-          onMouseEnter={onReopenInspector}
-          onPointerEnter={onReopenInspector}
         />
       )}
     </div>
@@ -159,21 +222,15 @@ export function InspectorHeader({
   title,
   onOpen,
   onClose,
-  onNarrow,
-  onWiden,
 }: {
   title: string;
   onOpen: () => void;
   onClose?: () => void;
-  onNarrow?: () => void;
-  onWiden?: () => void;
 }) {
   return (
     <div className="inspector-header">
       <h1>{title}</h1>
       <div>
-        <IconButton label="Narrow inspector" icon={ChevronRight} onClick={onNarrow} />
-        <IconButton label="Widen inspector" icon={ChevronLeft} onClick={onWiden} />
         <IconButton label="Open full detail" icon={ExternalLink} onClick={onOpen} />
         <IconButton label="Pin inspector" icon={Pin} />
         <IconButton label="Close inspector" icon={X} onClick={onClose} />
