@@ -20,7 +20,6 @@ from memwing.api.schemas import (
     RememberEventResult,
 )
 from memwing.core.models import (
-    GraphWriteJob,
     GraphWriteResult,
     LongTermFilterItem,
     PageMemorySynthesis,
@@ -34,6 +33,7 @@ from memwing.ports.event_store import (
     EventStoreTransactionPort,
     EvidenceChunkRepositoryPort,
     GraphWriteJobRepositoryPort,
+    SourceEventRepositoryPort,
     MemoryGraphLinkRepositoryPort,
     MemoryItemRepositoryPort,
     MemoryPageRepositoryPort,
@@ -42,7 +42,13 @@ from memwing.ports.event_store import (
     WorkingMemoryRepositoryPort,
 )
 from memwing.ports.graph_backend import GraphBackendPort
-from memwing.ports.llm_filter import LongTermFilterPort
+from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.lifecycle_transition import (
+    LifecycleTransitionPort,
+    LifecycleTransitionRequest,
+    LifecycleTransitionResult,
+)
+from memwing.ports.llm_filter import LongTermFilterPort, LongTermFilterRequest
 from memwing.ports.page_memory_synthesis import (
     PageMemorySynthesisPort,
     PageMemorySynthesisRequest,
@@ -57,6 +63,7 @@ def test_lane_zero_ports_are_runtime_checkable_contracts() -> None:
         EvidenceIndexPort,
         EventStorePort,
         GraphBackendPort,
+        LifecycleTransitionPort,
         LongTermFilterPort,
         PageMemorySynthesisPort,
         PlatformConnectorPort,
@@ -123,7 +130,7 @@ def test_graph_backend_port_accepts_adapter_with_required_methods() -> None:
         async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
             raise NotImplementedError
 
-        async def ingest_graph_job(self, job: GraphWriteJob) -> GraphWriteResult:
+        async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
             raise NotImplementedError
 
         async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
@@ -132,24 +139,42 @@ def test_graph_backend_port_accepts_adapter_with_required_methods() -> None:
     assert isinstance(FakeGraphBackend(), GraphBackendPort)
 
 
-def test_graph_backend_port_uses_graph_write_job_contract() -> None:
+def test_graph_backend_port_uses_graph_write_request_contract() -> None:
     signature = inspect.signature(GraphBackendPort.ingest_graph_job)
     parameters = list(signature.parameters.values())
     hints = get_type_hints(GraphBackendPort.ingest_graph_job)
 
-    assert hints[parameters[1].name] is GraphWriteJob
+    assert hints[parameters[1].name] is GraphWriteRequest
     assert hints["return"] is GraphWriteResult
     assert not hasattr(GraphBackendPort, "write_facts")
 
 
-def test_long_term_filter_port_returns_candidates_not_persisted_memory_items() -> None:
+def test_long_term_filter_port_accepts_enriched_request() -> None:
     signature = inspect.signature(LongTermFilterPort.filter_events)
     parameters = list(signature.parameters.values())
     hints = get_type_hints(LongTermFilterPort.filter_events)
 
-    assert parameters[1].name == "events"
-    assert parameters[2].name == "scope"
+    assert parameters[1].name == "request"
+    assert hints[parameters[1].name] is LongTermFilterRequest
     assert hints["return"] == tuple[LongTermFilterItem, ...]
+
+
+def test_lifecycle_transition_port_is_application_seam() -> None:
+    class FakeLifecycleTransition:
+        async def transition(
+            self,
+            request: LifecycleTransitionRequest,
+        ) -> LifecycleTransitionResult:
+            raise NotImplementedError
+
+    assert isinstance(FakeLifecycleTransition(), LifecycleTransitionPort)
+
+    signature = inspect.signature(LifecycleTransitionPort.transition)
+    parameters = list(signature.parameters.values())
+    hints = get_type_hints(LifecycleTransitionPort.transition)
+
+    assert hints[parameters[1].name] is LifecycleTransitionRequest
+    assert hints["return"] is LifecycleTransitionResult
 
 
 def test_page_memory_synthesis_port_returns_structured_page_memory() -> None:
@@ -173,6 +198,7 @@ def test_page_memory_synthesis_port_returns_structured_page_memory() -> None:
 def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     hints = get_type_hints(EventStoreTransactionPort)
 
+    assert hints["source_events"] is SourceEventRepositoryPort
     assert hints["evidence_chunks"] is EvidenceChunkRepositoryPort
     assert hints["working_memory_entries"] is WorkingMemoryRepositoryPort
     assert hints["memory_items"] is MemoryItemRepositoryPort
@@ -181,6 +207,13 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hints["memory_page_versions"] is MemoryPageVersionRepositoryPort
     assert hints["graph_write_jobs"] is GraphWriteJobRepositoryPort
     assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
+
+    assert hasattr(SourceEventRepositoryPort, "list_for_scope")
+    assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
+    assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
+    assert hasattr(MemoryItemRepositoryPort, "list_for_scope")
+    assert hasattr(MemoryVersionRepositoryPort, "get_latest")
+    assert hasattr(MemoryPageRepositoryPort, "list_needs_rebuild")
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:
@@ -221,6 +254,7 @@ def test_ports_do_not_use_object_placeholders() -> None:
         EvidenceIndexPort,
         EventStorePort,
         GraphBackendPort,
+        LifecycleTransitionPort,
         LongTermFilterPort,
         PageMemorySynthesisPort,
         PlatformConnectorPort,

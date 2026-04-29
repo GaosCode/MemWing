@@ -207,6 +207,7 @@ def test_graph_write_job_contract_carries_worker_claim_fields() -> None:
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
+        memory_id="memory_001",
         source_event_ids=("source_001",),
         route=MemoryRoute.GRAPH,
         status="pending",
@@ -225,6 +226,7 @@ def test_graph_write_job_contract_carries_worker_claim_fields() -> None:
     )
 
     assert job.route is MemoryRoute.GRAPH
+    assert job.memory_id == "memory_001"
     assert job.idempotency_key == "graph:memory_001"
     assert job.max_attempts == 3
     assert job.lock_expires_at is None

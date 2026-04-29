@@ -43,6 +43,14 @@ class SourceEventRepositoryPort(Protocol):
     async def get_source_event(self, source_event_id: str) -> SourceEvent | None:
         ...
 
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        ...
+
 
 class AuditEventRepositoryPort(Protocol):
     async def record(self, event: AuditEvent) -> AuditEvent:
@@ -110,6 +118,23 @@ class WorkingMemoryRepositoryPort(Protocol):
     ) -> tuple[WorkingMemoryEntry, ...]:
         ...
 
+    async def next_sequence(
+        self,
+        *,
+        project_memory_space_id: str,
+        thread_id: str | None,
+    ) -> int:
+        ...
+
+    async def sum_unflushed_tokens(
+        self,
+        *,
+        project_memory_space_id: str,
+        group_id: str | None,
+        thread_id: str | None,
+    ) -> int:
+        ...
+
     async def mark_flushed(
         self,
         *,
@@ -131,9 +156,20 @@ class MemoryItemRepositoryPort(Protocol):
     async def list_by_source_event(self, source_event_id: str) -> tuple[MemoryItem, ...]:
         ...
 
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        ...
+
 
 class MemoryVersionRepositoryPort(Protocol):
     async def record(self, version: MemoryVersion) -> MemoryVersion:
+        ...
+
+    async def get_latest(self, memory_id: str) -> MemoryVersion | None:
         ...
 
 
@@ -156,6 +192,14 @@ class MemoryPageRepositoryPort(Protocol):
         source_event_id: str,
         updated_at: datetime,
     ) -> int:
+        ...
+
+    async def list_needs_rebuild(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
         ...
 
 

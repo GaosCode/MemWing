@@ -82,6 +82,7 @@ class AuditEvent:
     source_event_ids: tuple[str, ...]
     latency_ms: int | None
     created_at: datetime
+    actor_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +320,7 @@ class GraphWriteJob:
     project_memory_space_id: str
     thread_id: str | None
     saga_id: str | None
+    memory_id: str
     source_event_ids: tuple[str, ...]
     route: MemoryRoute
     status: GraphWriteJobStatus
