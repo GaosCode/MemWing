@@ -205,6 +205,19 @@ test("register requires backend config unless a test client is explicit", () => 
   assert.equal(registered.contextEngines[0].id, "memwing");
 });
 
+test("register reads backend config from OpenClaw plugin config", () => {
+  const registered = captureRegistrations({
+    pluginConfig: {
+      memwingBaseUrl: "http://localhost:8000"
+    }
+  });
+
+  plugin.register(registered.api);
+
+  assert.equal(registered.contextEngines[0].id, "memwing");
+  assert.ok(registered.tools.has("memwing_search_memory"));
+});
+
 test("native memory_search converts max_results before calling MemWing client", async () => {
   const registered = captureRegistrations();
   const searchCalls = [];
@@ -391,7 +404,7 @@ function scope() {
   };
 }
 
-function captureRegistrations() {
+function captureRegistrations(params = {}) {
   const contextEngines = [];
   const hooks = [];
   const tools = new Map();
@@ -402,6 +415,7 @@ function captureRegistrations() {
     tools,
     delegateCalls,
     api: {
+      pluginConfig: params.pluginConfig,
       registerContextEngine(id, factory) {
         contextEngines.push({ id, factory });
       },

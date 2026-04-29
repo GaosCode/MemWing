@@ -37,7 +37,7 @@ const REQUIRED_TOOLS = [
 
 function register(api, options = {}) {
   assertOpenClawApi(api);
-  const client = options.client || createMemWingHttpClient(options);
+  const client = options.client || createMemWingHttpClient(registrationClientOptions(api, options));
   api.registerContextEngine("memwing", () => createContextEngine(api, client));
 
   for (const hookName of REQUIRED_HOOKS) {
@@ -51,6 +51,13 @@ function register(api, options = {}) {
   if (options.registerNativeMemoryShim !== false) {
     registerNativeMemoryShim(api, client);
   }
+}
+
+function registrationClientOptions(api, options) {
+  return {
+    ...options,
+    config: options.config || api.pluginConfig
+  };
 }
 
 function createContextEngine(api, client) {
@@ -307,5 +314,6 @@ module.exports = {
   createMemWingHttpClient,
   createMockMemWingClient,
   delegateCompactionToRuntime,
+  registrationClientOptions,
   register
 };

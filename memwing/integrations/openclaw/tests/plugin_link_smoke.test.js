@@ -41,7 +41,11 @@ test("links the build artifact with the OpenClaw CLI when available", async (t) 
       fs.readFileSync(path.join(packageRoot, "dist", "openclaw.plugin.json"), "utf8")
     );
     const plugin = require(path.join(packageRoot, manifest.entry.replace(/^dist\//, "dist/")));
-    const registered = captureRegistrations();
+    const registered = captureRegistrations({
+      pluginConfig: {
+        memwingBaseUrl: "http://localhost:8000"
+      }
+    });
 
     plugin.register(registered.api);
 
@@ -100,13 +104,14 @@ function commandFailureMessage(label, result) {
   ].join("\n");
 }
 
-function captureRegistrations() {
+function captureRegistrations(params = {}) {
   const contextEngines = [];
   const tools = new Map();
   return {
     contextEngines,
     tools,
     api: {
+      pluginConfig: params.pluginConfig,
       registerContextEngine(id, factory) {
         contextEngines.push({ id, factory });
       },
