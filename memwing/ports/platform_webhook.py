@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from memwing.api.platform import PlatformEvent
+from memwing.api.platform import PlatformRawEvent
 from memwing.api.types import JsonObject
 from memwing.api.validation import require_positive_int, require_text
 
 
-PlatformWebhookKind = Literal["challenge", "event"]
+PlatformWebhookKind = Literal["challenge", "accepted", "rejected"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,10 +19,10 @@ class PlatformWebhookResult:
     status_code: int
     body: JsonObject
     raw_payload_hash: str
-    platform_event: PlatformEvent | None = None
+    raw_event: PlatformRawEvent | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in ("challenge", "event"):
+        if self.kind not in ("challenge", "accepted", "rejected"):
             raise ValueError("webhook kind is not supported")
         object.__setattr__(
             self,

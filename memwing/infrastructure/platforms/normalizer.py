@@ -38,6 +38,7 @@ def build_feishu_raw_event(
         event.get("message_id"),
         header.get("event_id"),
     )
+    _event_time_from_payload(message, event, header, raw_request.received_at)
     thread_id = _first_text(
         message.get("root_id"),
         message.get("parent_id"),

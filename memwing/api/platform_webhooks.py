@@ -7,8 +7,12 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from memwing.api.agent_runtime import RememberEventResult
-from memwing.api.platform import PlatformEvent
+from memwing.api.platform import PlatformEvent, PlatformRawEvent
 from memwing.api.types import JsonObject
+from memwing.application.remember_event_command import (
+    RememberEventCommand,
+    platform_event_to_remember_command,
+)
 from memwing.ports.platform_webhook import (
     PlatformWebhookError,
     PlatformWebhookHandlerPort,
@@ -16,7 +20,15 @@ from memwing.ports.platform_webhook import (
 
 
 class PlatformRememberClient(Protocol):
-    def remember_event(self, event: PlatformEvent) -> RememberEventResult | Awaitable[RememberEventResult]:
+    def remember_event(
+        self,
+        command: RememberEventCommand,
+    ) -> RememberEventResult | Awaitable[RememberEventResult]:
+        ...
+
+
+class PlatformEventNormalizer(Protocol):
+    def normalize_event(self, raw_event: PlatformRawEvent) -> PlatformEvent | Awaitable[PlatformEvent]:
         ...
 
 
@@ -24,7 +36,7 @@ class PlatformRememberClient(Protocol):
 class PlatformWebhookResponse:
     status_code: int
     body: JsonObject
-    platform_event: PlatformEvent | None = None
+    raw_event: PlatformRawEvent | None = None
     remember_result: RememberEventResult | None = None
 
 
@@ -55,15 +67,24 @@ async def handle_feishu_webhook(
             body=connector_result.body,
         )
 
-    if connector_result.platform_event is None:
+    if connector_result.kind == "rejected":
+        return PlatformWebhookResponse(
+            status_code=connector_result.status_code,
+            body=connector_result.body,
+        )
+
+    if connector_result.raw_event is None:
         return PlatformWebhookResponse(
             status_code=500,
-            body={"ok": False, "code": "platform_event_missing", "message": "platform event missing"},
+            body={"ok": False, "code": "platform_raw_event_missing", "message": "platform raw event missing"},
         )
 
     remember_result = None
     if remember_client is not None:
-        remembered = remember_client.remember_event(connector_result.platform_event)
+        platform_event = await _normalize_platform_event(connector, connector_result.raw_event)
+        remembered = remember_client.remember_event(
+            platform_event_to_remember_command(platform_event)
+        )
         if inspect.isawaitable(remembered):
             remembered = await remembered
         remember_result = remembered
@@ -83,6 +104,19 @@ async def handle_feishu_webhook(
     return PlatformWebhookResponse(
         status_code=connector_result.status_code,
         body=response_body,
-        platform_event=connector_result.platform_event,
+        raw_event=connector_result.raw_event,
         remember_result=remember_result,
     )
+
+
+async def _normalize_platform_event(
+    connector: PlatformWebhookHandlerPort,
+    raw_event: PlatformRawEvent,
+) -> PlatformEvent:
+    normalizer = getattr(connector, "normalize_event", None)
+    if normalizer is None:
+        raise TypeError("connector must normalize PlatformRawEvent before remember_event")
+    normalized = normalizer(raw_event)
+    if inspect.isawaitable(normalized):
+        normalized = await normalized
+    return normalized

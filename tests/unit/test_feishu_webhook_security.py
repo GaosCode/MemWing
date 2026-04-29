@@ -89,8 +89,9 @@ def test_formal_event_verifies_signature_then_replay_then_decrypts() -> None:
         )
     )
 
-    assert result.platform_event is not None
-    assert result.platform_event.content == "Remember encrypted events."
+    assert result.raw_event is not None
+    platform_event = asyncio.run(connector.normalize_event(result.raw_event))
+    assert platform_event.content == "Remember encrypted events."
     assert calls == ["replay", "decrypt:cipher_event"]
 
 

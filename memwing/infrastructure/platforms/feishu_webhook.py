@@ -30,10 +30,7 @@ from memwing.infrastructure.platforms.feishu_security import (
     text_value,
     to_json_object,
 )
-from memwing.infrastructure.platforms.normalizer import (
-    build_feishu_raw_event,
-    normalize_feishu_event,
-)
+from memwing.infrastructure.platforms.normalizer import build_feishu_raw_event, normalize_feishu_event
 from memwing.ports.platform_webhook import PlatformWebhookKind, PlatformWebhookResult
 
 
@@ -129,7 +126,6 @@ class FeishuWebhookHandler:
 
         try:
             raw_event = build_feishu_raw_event(raw_request, payload)
-            platform_event = await self.normalize_event(raw_event)
         except SchemaValidationError as exc:
             await self._fail(
                 "schema_invalid",
@@ -139,11 +135,11 @@ class FeishuWebhookHandler:
             )
 
         return FeishuWebhookResult(
-            kind="event",
+            kind="accepted",
             status_code=202,
             body={"ok": True, "raw_payload_hash": raw_hash},
             raw_payload_hash=raw_hash,
-            platform_event=platform_event,
+            raw_event=raw_event,
         )
 
     async def verify_request(self, raw_request: PlatformRawRequest) -> bool:

@@ -3,8 +3,8 @@ import json
 from datetime import UTC, datetime
 
 from memwing.api.agent_runtime import RememberEventResult
-from memwing.api.platform import PlatformEvent
 from memwing.api.platform_webhooks import handle_feishu_webhook
+from memwing.application.remember_event_command import RememberEventCommand
 from memwing.infrastructure.platforms.feishu_connector import (
     FeishuConnector,
     compute_feishu_signature,
@@ -15,7 +15,7 @@ RECEIVED_AT = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)
 SECRET = "secret_001"
 
 
-def test_feishu_webhook_routes_platform_event_to_remember_client() -> None:
+def test_feishu_webhook_routes_raw_event_to_remember_command() -> None:
     remember_client = FakeRememberClient()
     body = json.dumps(_message_payload()).encode()
     connector = FeishuConnector(project_memory_space_id="project_001", signing_secret=SECRET)
@@ -33,10 +33,12 @@ def test_feishu_webhook_routes_platform_event_to_remember_client() -> None:
     assert response.status_code == 202
     assert response.body["remembered"] is True
     assert response.body["source_event_id"] == "source_001"
-    assert len(remember_client.events) == 1
-    assert remember_client.events[0].group_id == "oc_group_001"
-    assert remember_client.events[0].thread_id == "om_root"
-    assert remember_client.events[0].content == "Remember this Feishu message."
+    assert len(remember_client.commands) == 1
+    command = remember_client.commands[0]
+    assert command.source_ref.kind == "platform"
+    assert command.scope_hint.group_id == "oc_group_001"
+    assert command.scope_hint.thread_id == "om_root"
+    assert command.content == "Remember this Feishu message."
 
 
 def _message_payload() -> dict[str, object]:
@@ -78,10 +80,10 @@ def _signed_headers(body: bytes) -> dict[str, str]:
 
 class FakeRememberClient:
     def __init__(self) -> None:
-        self.events: list[PlatformEvent] = []
+        self.commands: list[RememberEventCommand] = []
 
-    async def remember_event(self, event: PlatformEvent) -> RememberEventResult:
-        self.events.append(event)
+    async def remember_event(self, command: RememberEventCommand) -> RememberEventResult:
+        self.commands.append(command)
         return RememberEventResult(
             source_event_id="source_001",
             accepted=True,
