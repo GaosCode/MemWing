@@ -145,7 +145,27 @@ def _validate_command(command: PageMemoryRebuildCommand) -> None:
         raise PageMemoryRebuildError("page memory rebuild requires trace_id")
     if command.scope_type not in ("project", "group", "thread", "meeting"):
         raise PageMemoryRebuildError("page memory rebuild scope_type is not supported")
+    _validate_scope_id_matches_scope(command)
     _scope_group_id(command.scope)
+
+
+def _validate_scope_id_matches_scope(command: PageMemoryRebuildCommand) -> None:
+    if command.scope_type == "project":
+        expected_scope_id = command.scope.project_memory_space_id
+    elif command.scope_type == "group":
+        group_id = _scope_group_id(command.scope)
+        if group_id is None:
+            raise PageMemoryRebuildError("group page memory rebuild requires group scope")
+        expected_scope_id = group_id
+    elif command.scope_type == "thread":
+        if command.scope.thread_id is None:
+            raise PageMemoryRebuildError("thread page memory rebuild requires thread scope")
+        expected_scope_id = command.scope.thread_id
+    else:
+        raise PageMemoryRebuildError("meeting page memory rebuild is not supported")
+
+    if command.scope_id != expected_scope_id:
+        raise PageMemoryRebuildError("page memory rebuild scope_id conflicts with EffectiveScope")
 
 
 def _validate_synthesis(
@@ -165,6 +185,8 @@ def _validate_synthesis(
 
     input_source_ids = {event.id for event in source_events}
     linked_item_ids = {item.id for item in linked_memory_items}
+    page_source_ids = set(synthesis.source_event_ids)
+    page_linked_item_ids = set(synthesis.linked_memory_item_ids)
     _require_known_ids(
         synthesis.source_event_ids,
         input_source_ids,
@@ -186,9 +208,19 @@ def _validate_synthesis(
             "synthesis topic references unknown source_events",
         )
         _require_known_ids(
+            topic.source_event_ids,
+            page_source_ids,
+            "synthesis topic source_event_ids must be covered by page source_event_ids",
+        )
+        _require_known_ids(
             topic.linked_memory_item_ids,
             linked_item_ids,
             "synthesis topic references unknown memory_items",
+        )
+        _require_known_ids(
+            topic.linked_memory_item_ids,
+            page_linked_item_ids,
+            "synthesis topic linked_memory_item_ids must be covered by page linked_memory_item_ids",
         )
     for open_question in synthesis.open_questions:
         _require_text(open_question, "synthesis open_questions cannot be blank")
