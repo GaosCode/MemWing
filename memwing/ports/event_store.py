@@ -260,6 +260,16 @@ class GraphWriteJobRepositoryPort(Protocol):
     ) -> GraphWriteJob:
         ...
 
+    async def extend_lock(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        lock_duration: timedelta,
+    ) -> GraphWriteJob:
+        ...
+
     async def mark_failed(
         self,
         *,

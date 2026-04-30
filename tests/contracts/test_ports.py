@@ -219,6 +219,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(MemoryVersionRepositoryPort, "get_latest")
     assert hasattr(MemoryPageRepositoryPort, "list_needs_rebuild")
     assert hasattr(MemoryPageRepositoryPort, "get_by_scope_for_update")
+    assert hasattr(GraphWriteJobRepositoryPort, "extend_lock")
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:
