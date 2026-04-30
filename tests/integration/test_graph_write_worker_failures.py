@@ -15,6 +15,9 @@ from tests.integration.graph_write_worker_fixtures import (
     HangingGraphBackend,
     NOW,
     graph_job,
+    graph_result_with_invalidated_fact,
+    invalidated_memory_item,
+    invalidated_source_event,
     memory_item,
     source_event,
     successful_graph_result,
@@ -231,5 +234,38 @@ def test_graph_write_worker_retries_link_write_failure_without_partial_links(
         for raw_value in raw_values:
             assert raw_value not in (store.audit_events[-1].reason_text or "")
             assert raw_value not in (store.graph_write_jobs[0].last_error or "")
+
+    asyncio.run(scenario())
+
+
+def test_graph_write_worker_dead_letters_missing_lifecycle_port_without_partial_links() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.source_events.insert_if_absent(invalidated_source_event())
+            await tx.memory_items.upsert(memory_item())
+            await tx.memory_items.upsert(invalidated_memory_item())
+            await tx.graph_write_jobs.enqueue(graph_job(max_attempts=1))
+
+        backend = FakeGraphBackend(graph_result_with_invalidated_fact())
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=backend,
+            worker_id="graph_worker_001",
+        )
+
+        result = await worker.run_once(now=NOW)
+
+        assert result.dead_lettered == 1
+        assert backend.requests
+        assert store.graph_write_jobs[0].status == "dead_letter"
+        assert (
+            store.graph_write_jobs[0].dead_letter_reason
+            == "lifecycle transition port required for graph invalidations"
+        )
+        assert store.memory_graph_links == ()
+        assert store.audit_events[-1].stage == "graph_write.dead_letter"
 
     asyncio.run(scenario())
