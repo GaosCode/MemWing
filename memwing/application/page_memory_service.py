@@ -151,10 +151,18 @@ def _validate_command(command: PageMemoryRebuildCommand) -> None:
 
 def _validate_scope_id_matches_scope(command: PageMemoryRebuildCommand) -> None:
     if command.scope_type == "project":
+        if command.scope.group_ids is not None:
+            raise PageMemoryRebuildError("project page memory rebuild requires project scope")
+        if command.scope.thread_id is not None:
+            raise PageMemoryRebuildError("project page memory rebuild requires project scope")
+        if command.scope.shared_group_id is not None:
+            raise PageMemoryRebuildError("project page memory rebuild requires project scope")
         expected_scope_id = command.scope.project_memory_space_id
     elif command.scope_type == "group":
         group_id = _scope_group_id(command.scope)
         if group_id is None:
+            raise PageMemoryRebuildError("group page memory rebuild requires group scope")
+        if command.scope.thread_id is not None:
             raise PageMemoryRebuildError("group page memory rebuild requires group scope")
         expected_scope_id = group_id
     elif command.scope_type == "thread":
