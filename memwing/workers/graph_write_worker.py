@@ -14,7 +14,7 @@ from memwing.core.models import (
     MemoryGraphLink,
     MemoryGraphLinkType,
 )
-from memwing.ports.event_store import EventStoreUnitOfWorkPort
+from memwing.ports.event_store import EventStoreUnitOfWorkPort, OutboxLockOwnershipError
 from memwing.ports.graph_backend import GraphBackendPort, GraphWriteRequest
 from memwing.ports.lifecycle_transition import LifecycleTransitionPort, LifecycleTransitionRequest
 
@@ -72,12 +72,20 @@ class GraphWriteWorker:
                     self._graph_backend.ingest_graph_job(request),
                     timeout=self._backend_timeout.total_seconds(),
                 )
-                await self._record_success(job=job, graph_result=graph_result, now=run_at)
+                completion_at = now or datetime.now(UTC)
+                await self._record_success(
+                    job=job,
+                    graph_result=graph_result,
+                    now=completion_at,
+                )
+            except OutboxLockOwnershipError:
+                raise
             except Exception as exc:
+                completion_at = now or datetime.now(UTC)
                 updated = await self._record_failure(
                     job=job,
                     error=_safe_error_summary(exc),
-                    now=run_at,
+                    now=completion_at,
                 )
                 if updated.status == "dead_letter":
                     dead_lettered += 1
@@ -119,11 +127,16 @@ class GraphWriteWorker:
         graph_result: GraphWriteResult,
         now: datetime,
     ) -> int:
-        link_count = await self._write_graph_links(job=job, graph_result=graph_result, now=now)
+        link_count = await self._write_graph_links_under_current_lock(
+            job=job,
+            graph_result=graph_result,
+            now=now,
+        )
         invalidated_memory_ids = await self._memory_ids_for_invalidated_facts(
             facts=graph_result.invalidated_facts,
             project_memory_space_id=job.project_memory_space_id,
         )
+        await self._extend_current_lock(job=job, now=now)
         await self._mark_invalidated_memories_needs_review(
             job=job,
             memory_ids=invalidated_memory_ids,
@@ -147,7 +160,7 @@ class GraphWriteWorker:
             )
             return link_count
 
-    async def _write_graph_links(
+    async def _write_graph_links_under_current_lock(
         self,
         *,
         job: GraphWriteJob,
@@ -155,6 +168,12 @@ class GraphWriteWorker:
         now: datetime,
     ) -> int:
         async with self._unit_of_work.transaction() as tx:
+            await tx.graph_write_jobs.extend_lock(
+                job_id=job.id,
+                locked_by=self._worker_id,
+                now=now,
+                lock_duration=self._lock_duration,
+            )
             link_count = 0
             for episode_ref in graph_result.backend_episode_refs:
                 await tx.memory_graph_links.upsert(
@@ -187,6 +206,20 @@ class GraphWriteWorker:
                 )
                 link_count += 1
             return link_count
+
+    async def _extend_current_lock(
+        self,
+        *,
+        job: GraphWriteJob,
+        now: datetime,
+    ) -> None:
+        async with self._unit_of_work.transaction() as tx:
+            await tx.graph_write_jobs.extend_lock(
+                job_id=job.id,
+                locked_by=self._worker_id,
+                now=now,
+                lock_duration=self._lock_duration,
+            )
 
     async def _memory_ids_for_invalidated_facts(
         self,

@@ -7,12 +7,21 @@ import pytest
 
 from memwing.api.agent_runtime import AgentMemoryQuery, AgentMemorySearchResult
 from memwing.core.lifecycle import LifecycleAction
-from memwing.core.models import AuditEvent, GraphFact, GraphWriteResult, MemoryGraphLink, MemoryStatus
+from memwing.core.models import (
+    AuditEvent,
+    GraphFact,
+    GraphWriteResult,
+    MemoryGraphLink,
+    MemoryItem,
+    MemoryStatus,
+    SourceEvent,
+)
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.db.in_memory_graph_repositories import (
     InMemoryMemoryGraphLinkRepository,
 )
+from memwing.ports.event_store import OutboxLockOwnershipError
 from memwing.ports.graph_backend import GraphWriteRequest
 from memwing.ports.lifecycle_transition import LifecycleTransitionRequest, LifecycleTransitionResult
 from memwing.workers.graph_write_worker import GraphWriteWorker
@@ -148,30 +157,9 @@ def test_graph_write_worker_retries_backend_timeout_without_hanging() -> None:
 
 def test_graph_write_worker_marks_invalidated_fact_memories_needs_review() -> None:
     store = InMemoryDataStore()
-    invalidated_source = replace(source_event(), id="source_old", content="Old decision.")
-    invalidated_memory = replace(
-        memory_item(),
-        id="memory_old",
-        source_event_ids=("source_old",),
-        primary_source_event_id="source_old",
-        status=MemoryStatus.ACTIVE,
-    )
-    graph_result = replace(
-        successful_graph_result(),
-        invalidated_facts=(
-            GraphFact(
-                backend="graphiti",
-                fact_id="fact_old",
-                fact_text="Old decision.",
-                source_event_ids=("source_old",),
-                valid_from=None,
-                valid_to=NOW,
-                invalidated_at=NOW,
-                confidence=0.8,
-                metadata={},
-            ),
-        ),
-    )
+    invalidated_source = invalidated_source_event()
+    invalidated_memory = invalidated_memory_item()
+    graph_result = graph_result_with_invalidated_fact()
 
     async def scenario() -> None:
         async with store.transaction() as tx:
@@ -209,6 +197,44 @@ def test_graph_write_worker_marks_invalidated_fact_memories_needs_review() -> No
             ),
         )
         assert store.audit_events[-1].stage == "graph_write.succeeded"
+
+    asyncio.run(scenario())
+
+
+def test_graph_write_worker_lost_lock_does_not_write_links_or_lifecycle_side_effects() -> None:
+    store = InMemoryDataStore()
+    invalidated_source = invalidated_source_event()
+    invalidated_memory = invalidated_memory_item()
+    graph_result = graph_result_with_invalidated_fact()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.source_events.insert_if_absent(invalidated_source)
+            await tx.memory_items.upsert(memory_item())
+            await tx.memory_items.upsert(invalidated_memory)
+            await tx.graph_write_jobs.enqueue(graph_job())
+
+        lifecycle = FakeLifecycleTransition(store)
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=ReclaimingGraphBackend(store, graph_result),
+            lifecycle_transition=lifecycle,
+            worker_id="graph_worker_001",
+        )
+
+        with pytest.raises(OutboxLockOwnershipError):
+            await worker.run_once(now=NOW)
+
+        async with store.transaction() as tx:
+            invalidated = await tx.memory_items.get("memory_old")
+
+        assert invalidated is not None
+        assert invalidated.status is MemoryStatus.ACTIVE
+        assert lifecycle.requests == ()
+        assert store.memory_graph_links == ()
+        assert store.graph_write_jobs[0].locked_by == "graph_worker_002"
+        assert store.audit_events == ()
 
     asyncio.run(scenario())
 
@@ -366,6 +392,64 @@ class FakeGraphBackend:
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
         self.requests = (*self.requests, request)
+        return self._result
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+def invalidated_source_event() -> SourceEvent:
+    return replace(source_event(), id="source_old", content="Old decision.")
+
+
+def invalidated_memory_item() -> MemoryItem:
+    return replace(
+        memory_item(),
+        id="memory_old",
+        source_event_ids=("source_old",),
+        primary_source_event_id="source_old",
+        status=MemoryStatus.ACTIVE,
+    )
+
+
+def graph_result_with_invalidated_fact() -> GraphWriteResult:
+    return replace(
+        successful_graph_result(),
+        invalidated_facts=(
+            GraphFact(
+                backend="graphiti",
+                fact_id="fact_old",
+                fact_text="Old decision.",
+                source_event_ids=("source_old",),
+                valid_from=None,
+                valid_to=NOW,
+                invalidated_at=NOW,
+                confidence=0.8,
+                metadata={},
+            ),
+        ),
+    )
+
+
+class ReclaimingGraphBackend:
+    def __init__(self, store: InMemoryDataStore, result: GraphWriteResult) -> None:
+        self._store = store
+        self._result = result
+
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        async with self._store.transaction() as tx:
+            await tx.graph_write_jobs.claim_pending(
+                now=NOW + timedelta(minutes=5, seconds=1),
+                worker_id="graph_worker_002",
+                lock_duration=timedelta(minutes=5),
+                limit=1,
+            )
         return self._result
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
