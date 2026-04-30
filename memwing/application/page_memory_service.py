@@ -181,7 +181,9 @@ def _validate_scope_id_matches_scope(command: PageMemoryRebuildCommand) -> None:
             raise PageMemoryRebuildError("thread page memory rebuild requires thread scope")
         expected_scope_id = command.scope.thread_id
     else:
-        raise PageMemoryRebuildError("meeting page memory rebuild is not supported")
+        if command.scope.thread_id is None:
+            raise PageMemoryRebuildError("meeting page memory rebuild requires thread scope")
+        expected_scope_id = command.scope.thread_id
 
     if command.scope_id != expected_scope_id:
         raise PageMemoryRebuildError("page memory rebuild scope_id conflicts with EffectiveScope")

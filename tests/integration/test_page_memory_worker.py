@@ -95,6 +95,61 @@ def test_manual_rebuild_creates_page_and_version_from_source_events() -> None:
     assert store_with_sources.audit_events[-1] == result.audit_event
 
 
+def test_manual_rebuild_creates_meeting_page_from_thread_backed_scope() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event(
+            "source_001",
+            "Meeting summary should rebuild through its backing thread scope.",
+            thread_id="meeting_001",
+        ),
+    )
+    synthesis = _FakePageMemorySynthesis(
+        _synthesis(
+            title="Meeting page",
+            brief="The meeting page is rebuilt from the meeting thread.",
+            topic_title="Meeting scope",
+            topic_summary="Meeting scope persists separately from normal thread pages.",
+        )
+    )
+    service = PageMemoryService(store, synthesis, clock=_FixedClock(NOW))
+
+    result = asyncio.run(
+        service.rebuild(
+            PageMemoryRebuildCommand(
+                scope=_effective_scope(thread_id="meeting_001"),
+                scope_type="meeting",
+                scope_id="meeting_001",
+                actor_id="user_001",
+                reason="manual_rebuild",
+                trace_id="trace_meeting_rebuild",
+            )
+        )
+    )
+
+    assert result.page.scope_type == "meeting"
+    assert result.page.scope_id == "meeting_001"
+    assert result.page.thread_id == "meeting_001"
+    assert result.page.version == 1
+    assert result.version.page_id == result.page.id
+    assert result.audit_event.entity_id == result.page.id
+    assert synthesis.requests[0].scope.thread_id == "meeting_001"
+
+    async def persisted() -> PageMemory:
+        async with store.transaction() as tx:
+            page = await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="meeting",
+                scope_id="meeting_001",
+            )
+            if page is None:
+                raise AssertionError("meeting page should exist")
+            return page
+
+    assert asyncio.run(persisted()) == result.page
+
+
 def test_needs_rebuild_scanner_rebuilds_flagged_pages_and_clears_flag() -> None:
     store = InMemoryDataStore()
     _seed_source_events(
