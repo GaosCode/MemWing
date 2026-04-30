@@ -469,6 +469,53 @@ def test_failed_transition_replay_is_side_effect_idempotent() -> None:
     asyncio.run(scenario())
 
 
+def test_failed_transition_replay_after_lifecycle_revision_changes_fails_without_side_effects() -> None:
+    store = InMemoryDataStore()
+    service = LifecycleTransitionService(store)
+    original = _memory_item(status=MemoryStatus.ARCHIVED)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(original)
+
+        failed_request = _request(
+            action=LifecycleAction.HIDE,
+            idempotency_key="lifecycle:memory_001:hide:failed-stale-replay",
+            reason="Attempt hidden archive",
+        )
+        with pytest.raises(DomainRuleViolation, match="hide is not allowed from archived"):
+            await service.transition(failed_request)
+
+        unarchived = await service.transition(
+            _request(
+                action=LifecycleAction.UNARCHIVE,
+                idempotency_key="lifecycle:memory_001:unarchive:before-failed-replay",
+                reason="Unarchive before failed replay",
+            )
+        )
+        audit_count_before_replay = len(store.audit_events)
+        async with store.transaction() as tx:
+            latest_version_before_replay = await tx.memory_versions.get_latest("memory_001")
+
+        with pytest.raises(
+            DomainRuleViolation,
+            match="idempotent lifecycle replay no longer matches lifecycle revision",
+        ):
+            await service.transition(failed_request)
+
+        async with store.transaction() as tx:
+            memory = await tx.memory_items.get("memory_001")
+            latest_version_after_replay = await tx.memory_versions.get_latest("memory_001")
+
+        assert memory == unarchived.memory_item
+        assert latest_version_before_replay is not None
+        assert latest_version_after_replay == latest_version_before_replay
+        assert latest_version_after_replay.version == 1
+        assert len(store.audit_events) == audit_count_before_replay
+
+    asyncio.run(scenario())
+
+
 def test_failed_transition_replay_with_different_action_fails_key_action_match_first() -> None:
     store = InMemoryDataStore()
     service = LifecycleTransitionService(store)

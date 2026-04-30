@@ -273,6 +273,12 @@ def _resolve_idempotent_replay(
 ) -> LifecycleTransitionResult:
     if audit_event.stage == _FAILURE_STAGE:
         _ensure_audit_action_matches_request(audit_event, request.action)
+        if memory_item is None:
+            raise DomainRuleViolation(f"memory item {request.memory_id} was not found")
+        _ensure_replay_matches_lifecycle_revision(
+            audit_event=audit_event,
+            memory_item=memory_item,
+        )
         if audit_event.reason_text is None:
             raise DomainRuleViolation("lifecycle failure audit does not include reason_text")
         raise DomainRuleViolation(audit_event.reason_text)
@@ -315,14 +321,10 @@ def _ensure_replay_matches_current_memory(
     action: LifecycleAction,
     memory_item: MemoryItem,
 ) -> None:
-    if audit_event.lifecycle_revision is None:
-        raise DomainRuleViolation("lifecycle audit does not include lifecycle_revision")
-    if memory_item.lifecycle_revision != audit_event.lifecycle_revision:
-        raise DomainRuleViolation(
-            "idempotent lifecycle replay no longer matches lifecycle revision: "
-            f"expected {audit_event.lifecycle_revision}, "
-            f"found {memory_item.lifecycle_revision}"
-        )
+    _ensure_replay_matches_lifecycle_revision(
+        audit_event=audit_event,
+        memory_item=memory_item,
+    )
 
     if action in _PIN_ACTIONS:
         expected_status = _status_from_audit_input(audit_event)
@@ -339,6 +341,21 @@ def _ensure_replay_matches_current_memory(
     expected_status = _status_from_audit_output(audit_event)
     if memory_item.status is not expected_status:
         _raise_replay_status_mismatch(expected_status, memory_item.status)
+
+
+def _ensure_replay_matches_lifecycle_revision(
+    *,
+    audit_event: AuditEvent,
+    memory_item: MemoryItem,
+) -> None:
+    if audit_event.lifecycle_revision is None:
+        raise DomainRuleViolation("lifecycle audit does not include lifecycle_revision")
+    if memory_item.lifecycle_revision != audit_event.lifecycle_revision:
+        raise DomainRuleViolation(
+            "idempotent lifecycle replay no longer matches lifecycle revision: "
+            f"expected {audit_event.lifecycle_revision}, "
+            f"found {memory_item.lifecycle_revision}"
+        )
 
 
 def _pinned_from_audit_output(audit_event: AuditEvent) -> bool:
