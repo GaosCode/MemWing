@@ -91,6 +91,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     connection = FakePostgresConnection(
         fetchrow_results=(
             memory_item_row(memory),
+            {"pg_advisory_xact_lock": None},
             page_memory_row(page),
             memory_version_row(version),
             {"next_sequence": 13},
@@ -108,6 +109,11 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
             assert await tx.source_events.list_for_scope(scope=scope, limit=10) == (source,)
             assert await tx.memory_items.list_for_scope(scope=scope, limit=10) == (memory,)
             assert await tx.memory_items.get_for_update("memory_001") == memory
+            await tx.memory_pages.lock_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            )
             assert await tx.memory_pages.get_by_scope_for_update(
                 project_memory_space_id="project_001",
                 scope_type="thread",
@@ -135,6 +141,8 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     assert "ORDER BY event_time ASC, id ASC" in queries
     assert "FROM memory_items" in queries
     assert "FOR UPDATE" in queries
+    assert "pg_advisory_xact_lock" in queries
+    assert "hashtextextended" in queries
     assert "ORDER BY updated_at DESC, id" in queries
     assert "FROM memory_versions" in queries
     assert "ORDER BY version DESC" in queries
@@ -144,7 +152,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     assert connection.calls[0][2]["group_ids"] == ("group_001",)
     assert connection.calls[0][2]["thread_id"] == "thread_001"
     assert connection.calls[1][2]["group_ids"] == ("group_001",)
-    assert connection.calls[5][2]["project_memory_space_id"] == "project_001"
+    assert connection.calls[6][2]["project_memory_space_id"] == "project_001"
 
 
 def _effective_scope() -> EffectiveScope:

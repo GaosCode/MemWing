@@ -79,6 +79,11 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
                 scope_type="thread",
                 scope_id="thread_001",
             ) == duplicated_page
+            await tx.memory_pages.lock_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            )
             assert await tx.memory_pages.get_by_scope_for_update(
                 project_memory_space_id="project_001",
                 scope_type="thread",

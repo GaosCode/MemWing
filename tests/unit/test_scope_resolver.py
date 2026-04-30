@@ -233,6 +233,7 @@ def test_safe_mode_requires_group_and_uses_shared_group_setting() -> None:
     )
 
     assert resolved.effective_scope.safe_mode_enabled is True
+    assert resolved.source_group_id == "group_001"
     assert resolved.effective_scope.group_ids == ("group_001",)
     assert resolved.effective_scope.cross_group_allowed is False
     assert resolved.effective_scope.shared_group_id == "shared_001"
@@ -286,6 +287,7 @@ def test_safe_mode_does_not_accept_client_shared_group_hint() -> None:
     )
 
     assert resolved.effective_scope.safe_mode_enabled is True
+    assert resolved.source_group_id == "group_001"
     assert resolved.effective_scope.group_ids == ("group_001",)
     assert resolved.effective_scope.shared_group_id is None
     assert resolved.effective_scope.cross_group_allowed is False
@@ -333,6 +335,7 @@ def test_page_memory_rebuild_scope_uses_authoritative_group_settings() -> None:
     )
 
     assert resolved.effective_scope.project_memory_space_id == "project_001"
+    assert resolved.source_group_id == "group_001"
     assert resolved.effective_scope.group_ids == ("group_001",)
     assert resolved.effective_scope.thread_id is None
     assert resolved.effective_scope.shared_group_id is None
@@ -374,18 +377,45 @@ def test_page_memory_rebuild_scope_rejects_safe_mode_project_page() -> None:
         asyncio.run(resolver.resolve_page_memory_rebuild(_page_memory(scope_type="project")))
 
 
+def test_page_memory_rebuild_scope_supports_meeting_thread_scope() -> None:
+    store = ScopeBindingFixture()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Demo",
+            default_safe_mode_enabled=False,
+        )
+    )
+    resolver = ScopeResolver(store)
+
+    resolved = asyncio.run(
+        resolver.resolve_page_memory_rebuild(_page_memory(scope_type="meeting"))
+    )
+
+    assert resolved.source_group_id == "group_001"
+    assert resolved.effective_scope.group_ids == ("group_001",)
+    assert resolved.effective_scope.thread_id == "meeting_001"
+    assert resolved.effective_scope.safe_mode_enabled is False
+    assert resolved.effective_scope.cross_group_allowed is True
+
+
 def _page_memory(
     *,
     scope_type: str,
     shared_group_id: str | None = None,
 ) -> PageMemory:
     now = datetime(2026, 4, 30, tzinfo=UTC)
-    group_id = "group_001" if scope_type in ("group", "thread") else None
-    thread_id = "thread_001" if scope_type == "thread" else None
+    group_id = "group_001" if scope_type in ("group", "thread", "meeting") else None
+    thread_id = None
+    if scope_type == "thread":
+        thread_id = "thread_001"
+    elif scope_type == "meeting":
+        thread_id = "meeting_001"
     scope_id = {
         "project": "project_001",
         "group": "group_001",
         "thread": "thread_001",
+        "meeting": "meeting_001",
     }[scope_type]
     return PageMemory(
         id=f"page_{scope_type}",

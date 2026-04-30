@@ -225,6 +225,15 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
   AND scope_id = %(scope_id)s
 """
 
+_LOCK_MEMORY_PAGE_SCOPE_SQL = """
+SELECT pg_advisory_xact_lock(
+    hashtextextended(
+        %(project_memory_space_id)s || ':' || %(scope_type)s || ':' || %(scope_id)s,
+        0
+    )
+)
+"""
+
 _GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL = """
 SELECT *
 FROM memory_pages

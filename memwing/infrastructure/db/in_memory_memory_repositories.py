@@ -115,6 +115,15 @@ class InMemoryMemoryPageRepository:
         self._tx.state.memory_page_by_scope[key] = page.id
         return page
 
+    async def lock_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> None:
+        return None
+
     async def get_by_scope(
         self,
         *,

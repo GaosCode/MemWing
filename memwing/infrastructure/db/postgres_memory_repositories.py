@@ -29,6 +29,7 @@ from .postgres_derived_sql import (
     _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
     _LIST_MEMORY_ITEMS_BY_SOURCE_SQL,
     _LIST_MEMORY_PAGES_NEEDS_REBUILD_SQL,
+    _LOCK_MEMORY_PAGE_SCOPE_SQL,
     _MARK_MEMORY_PAGES_REBUILD_FOR_SOURCE_SQL,
     _UPSERT_MEMORY_ITEM_SQL,
     _UPSERT_MEMORY_PAGE_SQL,
@@ -125,6 +126,22 @@ class PostgresMemoryPageRepository:
         if row is None:
             raise RuntimeError("memory page upsert did not return a row")
         return page_memory_from_row(row)
+
+    async def lock_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> None:
+        await self._executor.fetchrow(
+            _LOCK_MEMORY_PAGE_SCOPE_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+            },
+        )
 
     async def get_by_scope(
         self,

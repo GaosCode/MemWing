@@ -95,7 +95,7 @@ class ScopeResolver:
         if safe_mode_enabled and source_group_id is None:
             raise ScopeResolutionError("safe_mode requires group_id")
 
-        if page.scope_type == "thread":
+        if page.scope_type in ("thread", "meeting"):
             shared_group_id = self._resolve_shared_group_id(
                 server_shared_group_id=settings.shared_group_id if settings is not None else None,
                 hint_shared_group_id=page.shared_group_id,
@@ -273,10 +273,14 @@ def _page_source_group_id(page: PageMemory) -> str | None:
         if page.thread_id is None or page.thread_id != page.scope_id:
             raise ScopeResolutionError("thread page scope conflicts with persisted thread context")
         return page.group_id
-    raise ScopeResolutionError("meeting page memory rebuild is not supported")
+    if page.scope_type == "meeting":
+        if page.thread_id is None or page.thread_id != page.scope_id:
+            raise ScopeResolutionError("meeting page scope conflicts with persisted thread context")
+        return page.group_id
+    raise ScopeResolutionError("page memory scope_type is not supported")
 
 
 def _page_thread_id(page: PageMemory) -> str | None:
-    if page.scope_type == "thread":
+    if page.scope_type in ("thread", "meeting"):
         return page.thread_id
     return None

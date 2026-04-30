@@ -197,6 +197,15 @@ class MemoryPageRepositoryPort(Protocol):
     async def upsert(self, page: PageMemory) -> PageMemory:
         ...
 
+    async def lock_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> None:
+        ...
+
     async def get_by_scope(
         self,
         *,
