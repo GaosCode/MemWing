@@ -37,33 +37,26 @@ class LifecycleTransitionService:
                 idempotency_key=request.idempotency_key,
             )
             if existing_audit is not None:
-                if existing_audit.stage == _FAILURE_STAGE:
-                    if existing_audit.reason_text is None:
-                        raise DomainRuleViolation(
-                            "lifecycle failure audit does not include reason_text"
-                        )
-                    raise DomainRuleViolation(existing_audit.reason_text)
-                replay_action = _successful_audit_action(existing_audit)
-                if replay_action != request.action:
-                    raise DomainRuleViolation(
-                        "idempotency key was already used for "
-                        f"{replay_action.value}; cannot replay {request.action.value}"
-                    )
-                memory_item = await tx.memory_items.get(request.memory_id)
-                if memory_item is None:
-                    raise DomainRuleViolation(f"memory item {request.memory_id} was not found")
-                _ensure_replay_matches_current_memory(
+                locked_item = await tx.memory_items.get_for_update(request.memory_id)
+                return _resolve_idempotent_replay(
                     audit_event=existing_audit,
-                    action=replay_action,
-                    memory_item=memory_item,
-                )
-                return LifecycleTransitionResult(
-                    memory_item=memory_item,
-                    previous_status=_status_from_audit_input(existing_audit),
-                    audit_event=existing_audit,
+                    request=request,
+                    memory_item=locked_item,
                 )
 
-            memory_item = await tx.memory_items.get(request.memory_id)
+            memory_item = await tx.memory_items.get_for_update(request.memory_id)
+            existing_audit = await tx.audit_events.get_by_idempotency_key(
+                entity_type=_ENTITY_TYPE,
+                entity_id=request.memory_id,
+                idempotency_key=request.idempotency_key,
+            )
+            if existing_audit is not None:
+                return _resolve_idempotent_replay(
+                    audit_event=existing_audit,
+                    request=request,
+                    memory_item=memory_item,
+                )
+
             if memory_item is None:
                 audit_event = _audit_event(
                     request=request,
@@ -74,6 +67,7 @@ class LifecycleTransitionService:
                     reason_code="memory_item_not_found",
                     reason_text=f"memory item {request.memory_id} was not found",
                     source_event_ids=(),
+                    lifecycle_revision=None,
                 )
                 await tx.audit_events.record(audit_event)
                 failure_reason = audit_event.reason_text
@@ -91,6 +85,7 @@ class LifecycleTransitionService:
                         reason_code="invalid_lifecycle_transition",
                         reason_text=str(exc),
                         source_event_ids=memory_item.source_event_ids,
+                        lifecycle_revision=memory_item.lifecycle_revision,
                     )
                     await tx.audit_events.record(audit_event)
                     failure_reason = str(exc)
@@ -122,6 +117,7 @@ class LifecycleTransitionService:
                         reason_code=None,
                         reason_text=request.reason,
                         source_event_ids=saved_item.source_event_ids,
+                        lifecycle_revision=saved_item.lifecycle_revision,
                     )
                     audit_event = await tx.audit_events.record(audit_event)
                     return LifecycleTransitionResult(
@@ -142,7 +138,11 @@ def _transitioned_memory_item(
     next_status: MemoryStatus,
     now: datetime,
 ) -> MemoryItem:
-    updates: dict[str, object] = {"status": next_status, "updated_at": now}
+    updates: dict[str, object] = {
+        "status": next_status,
+        "updated_at": now,
+        "lifecycle_revision": item.lifecycle_revision + 1,
+    }
     if action is LifecycleAction.APPROVE or (
         next_status is MemoryStatus.ACTIVE
         and item.status is not MemoryStatus.ACTIVE
@@ -213,6 +213,7 @@ def _audit_event(
     reason_code: str | None,
     reason_text: str | None,
     source_event_ids: tuple[str, ...],
+    lifecycle_revision: int | None,
 ) -> AuditEvent:
     return AuditEvent(
         id=_uuid("audit", _ENTITY_TYPE, request.memory_id, request.idempotency_key),
@@ -230,6 +231,8 @@ def _audit_event(
         created_at=request.now,
         actor_id=request.actor_id,
         idempotency_key=request.idempotency_key,
+        action_ref=request.action.value,
+        lifecycle_revision=lifecycle_revision,
     )
 
 
@@ -251,13 +254,59 @@ def _status_from_audit_output(audit_event: AuditEvent) -> MemoryStatus:
     return MemoryStatus(audit_event.output_ref)
 
 
-def _successful_audit_action(audit_event: AuditEvent) -> LifecycleAction:
+def _audit_action(audit_event: AuditEvent) -> LifecycleAction:
+    if audit_event.action_ref is None:
+        raise DomainRuleViolation("lifecycle audit does not include action_ref")
     try:
-        return LifecycleAction(audit_event.decision)
+        return LifecycleAction(audit_event.action_ref)
     except ValueError as exc:
         raise DomainRuleViolation(
-            f"lifecycle audit decision is not a lifecycle action: {audit_event.decision}"
+            f"lifecycle audit action_ref is not a lifecycle action: {audit_event.action_ref}"
         ) from exc
+
+
+def _resolve_idempotent_replay(
+    *,
+    audit_event: AuditEvent,
+    request: LifecycleTransitionRequest,
+    memory_item: MemoryItem | None,
+) -> LifecycleTransitionResult:
+    if audit_event.stage == _FAILURE_STAGE:
+        _ensure_audit_action_matches_request(audit_event, request.action)
+        if audit_event.reason_text is None:
+            raise DomainRuleViolation("lifecycle failure audit does not include reason_text")
+        raise DomainRuleViolation(audit_event.reason_text)
+
+    replay_action = _audit_action(audit_event)
+    if replay_action != request.action:
+        raise DomainRuleViolation(
+            "idempotency key was already used for "
+            f"{replay_action.value}; cannot replay {request.action.value}"
+        )
+    if memory_item is None:
+        raise DomainRuleViolation(f"memory item {request.memory_id} was not found")
+    _ensure_replay_matches_current_memory(
+        audit_event=audit_event,
+        action=replay_action,
+        memory_item=memory_item,
+    )
+    return LifecycleTransitionResult(
+        memory_item=memory_item,
+        previous_status=_status_from_audit_input(audit_event),
+        audit_event=audit_event,
+    )
+
+
+def _ensure_audit_action_matches_request(
+    audit_event: AuditEvent,
+    requested_action: LifecycleAction,
+) -> None:
+    replay_action = _audit_action(audit_event)
+    if replay_action != requested_action:
+        raise DomainRuleViolation(
+            "idempotency key was already used for "
+            f"{replay_action.value}; cannot replay {requested_action.value}"
+        )
 
 
 def _ensure_replay_matches_current_memory(
@@ -266,6 +315,15 @@ def _ensure_replay_matches_current_memory(
     action: LifecycleAction,
     memory_item: MemoryItem,
 ) -> None:
+    if audit_event.lifecycle_revision is None:
+        raise DomainRuleViolation("lifecycle audit does not include lifecycle_revision")
+    if memory_item.lifecycle_revision != audit_event.lifecycle_revision:
+        raise DomainRuleViolation(
+            "idempotent lifecycle replay no longer matches lifecycle revision: "
+            f"expected {audit_event.lifecycle_revision}, "
+            f"found {memory_item.lifecycle_revision}"
+        )
+
     if action in _PIN_ACTIONS:
         expected_status = _status_from_audit_input(audit_event)
         expected_pinned = _pinned_from_audit_output(audit_event)
