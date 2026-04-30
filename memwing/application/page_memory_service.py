@@ -164,6 +164,8 @@ def _validate_scope_id_matches_scope(command: PageMemoryRebuildCommand) -> None:
             raise PageMemoryRebuildError("group page memory rebuild requires group scope")
         if command.scope.thread_id is not None:
             raise PageMemoryRebuildError("group page memory rebuild requires group scope")
+        if command.scope.shared_group_id is not None:
+            raise PageMemoryRebuildError("group page memory rebuild requires group scope")
         expected_scope_id = group_id
     elif command.scope_type == "thread":
         if command.scope.thread_id is None:
