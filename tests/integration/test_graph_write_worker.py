@@ -1,16 +1,20 @@
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
+import uuid
 
 import pytest
 
 from memwing.api.agent_runtime import AgentMemoryQuery, AgentMemorySearchResult
-from memwing.core.models import GraphWriteResult, MemoryGraphLink
+from memwing.core.lifecycle import LifecycleAction
+from memwing.core.models import AuditEvent, GraphFact, GraphWriteResult, MemoryGraphLink, MemoryStatus
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.db.in_memory_graph_repositories import (
     InMemoryMemoryGraphLinkRepository,
 )
 from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.lifecycle_transition import LifecycleTransitionRequest, LifecycleTransitionResult
 from memwing.workers.graph_write_worker import GraphWriteWorker
 from tests.integration.graph_write_worker_fixtures import (
     NOW,
@@ -106,6 +110,105 @@ def test_graph_write_worker_retries_then_dead_letters_backend_failures() -> None
             "RuntimeError",
             "RuntimeError",
         ]
+
+    asyncio.run(scenario())
+
+
+def test_graph_write_worker_retries_backend_timeout_without_hanging() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.memory_items.upsert(memory_item())
+            await tx.graph_write_jobs.enqueue(graph_job())
+
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=HangingGraphBackend(),
+            worker_id="graph_worker_001",
+            retry_delay=timedelta(seconds=30),
+            backend_timeout=timedelta(milliseconds=1),
+        )
+
+        result = await asyncio.wait_for(worker.run_once(now=NOW), timeout=1)
+        retry_job = store.graph_write_jobs[0]
+
+        assert result.claimed == 1
+        assert result.retried == 1
+        assert retry_job.status == "pending"
+        assert retry_job.attempts == 1
+        assert retry_job.last_error == "TimeoutError"
+        assert retry_job.next_run_at == NOW + timedelta(seconds=30)
+        assert store.audit_events[-1].stage == "graph_write.retry"
+        assert store.audit_events[-1].reason_text == "TimeoutError"
+
+    asyncio.run(scenario())
+
+
+def test_graph_write_worker_marks_invalidated_fact_memories_needs_review() -> None:
+    store = InMemoryDataStore()
+    invalidated_source = replace(source_event(), id="source_old", content="Old decision.")
+    invalidated_memory = replace(
+        memory_item(),
+        id="memory_old",
+        source_event_ids=("source_old",),
+        primary_source_event_id="source_old",
+        status=MemoryStatus.ACTIVE,
+    )
+    graph_result = replace(
+        successful_graph_result(),
+        invalidated_facts=(
+            GraphFact(
+                backend="graphiti",
+                fact_id="fact_old",
+                fact_text="Old decision.",
+                source_event_ids=("source_old",),
+                valid_from=None,
+                valid_to=NOW,
+                invalidated_at=NOW,
+                confidence=0.8,
+                metadata={},
+            ),
+        ),
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.source_events.insert_if_absent(invalidated_source)
+            await tx.memory_items.upsert(memory_item())
+            await tx.memory_items.upsert(invalidated_memory)
+            await tx.graph_write_jobs.enqueue(graph_job())
+
+        lifecycle = FakeLifecycleTransition(store)
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=FakeGraphBackend(graph_result),
+            lifecycle_transition=lifecycle,
+            worker_id="graph_worker_001",
+        )
+
+        result = await worker.run_once(now=NOW)
+
+        async with store.transaction() as tx:
+            updated = await tx.memory_items.get("memory_old")
+
+        assert result.succeeded == 1
+        assert updated is not None
+        assert updated.status is MemoryStatus.NEEDS_REVIEW
+        assert lifecycle.requests == (
+            LifecycleTransitionRequest(
+                memory_id="memory_old",
+                action=LifecycleAction.MARK_NEEDS_REVIEW,
+                actor_id="graph_write_worker",
+                reason="graph fact invalidated",
+                idempotency_key="graph:graph_job_001:invalidated:memory_old",
+                trace_id="graph_write:graph_job_001",
+                now=NOW,
+            ),
+        )
+        assert store.audit_events[-1].stage == "graph_write.succeeded"
 
     asyncio.run(scenario())
 
@@ -284,3 +387,60 @@ class FailingGraphBackend:
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError
+
+
+class HangingGraphBackend:
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        await asyncio.Event().wait()
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class FakeLifecycleTransition:
+    def __init__(self, store: InMemoryDataStore) -> None:
+        self._store = store
+        self.requests: tuple[LifecycleTransitionRequest, ...] = ()
+
+    async def transition(
+        self,
+        request: LifecycleTransitionRequest,
+    ) -> LifecycleTransitionResult:
+        self.requests = (*self.requests, request)
+        async with self._store.transaction() as tx:
+            memory = await tx.memory_items.get(request.memory_id)
+            assert memory is not None
+            updated = replace(
+                memory,
+                status=MemoryStatus.NEEDS_REVIEW,
+                updated_at=request.now,
+            )
+            await tx.memory_items.upsert(updated)
+
+        audit_event = AuditEvent(
+            id=str(uuid.uuid4()),
+            trace_id=request.trace_id,
+            entity_type="memory_item",
+            entity_id=request.memory_id,
+            stage="memory.lifecycle_transition",
+            input_ref=request.memory_id,
+            output_ref=updated.status,
+            decision=request.action.value,
+            reason_code=None,
+            reason_text=request.reason,
+            source_event_ids=updated.source_event_ids,
+            latency_ms=None,
+            created_at=request.now,
+            actor_id=request.actor_id,
+        )
+        return LifecycleTransitionResult(
+            memory_item=updated,
+            previous_status=memory.status,
+            audit_event=audit_event,
+        )
