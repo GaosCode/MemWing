@@ -98,6 +98,28 @@ def test_postgres_source_insert_if_absent_loads_existing_conflict_row() -> None:
     assert connection.calls[1][2]["runtime_event_idempotency_key"] == "runtime-key-001"
 
 
+def test_postgres_source_repository_exposes_recent_scope_query() -> None:
+    source = source_event()
+    connection = FakePostgresConnection(fetch_results=((source_event_row(source),),))
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            recent = await tx.source_events.list_recent_for_scope(
+                scope=_effective_scope(),
+                limit=10,
+            )
+
+        assert recent == (source,)
+
+    asyncio.run(scenario())
+
+    query = connection.calls[0][1]
+    assert "WITH recent_source_events AS" in query
+    assert "ORDER BY event_time DESC, id DESC" in query
+    assert query.rstrip().endswith("ORDER BY event_time ASC, id ASC")
+    assert connection.calls[0][2]["limit"] == 10
+
+
 def test_postgres_session_key_pattern_like_escapes_sql_wildcards() -> None:
     assert session_pattern_to_postgres_like("feature/*") == "feature/%"
     assert session_pattern_to_postgres_like("session_100%_*") == "session!_100!%!_%"
@@ -183,3 +205,16 @@ def test_postgres_scope_binding_queries_preserve_authoritative_server_lookup() -
     assert "LIMIT 1" not in queries
     assert "thread_id IS NOT DISTINCT FROM %(thread_id)s OR thread_id IS NULL" in queries
     assert "ORDER BY (thread_id IS NOT NULL) DESC" not in queries
+
+
+def _effective_scope():
+    from memwing.core.scope import EffectiveScope
+
+    return EffectiveScope(
+        project_memory_space_id="project_001",
+        group_ids=("group_001",),
+        thread_id="thread_001",
+        shared_group_id=None,
+        safe_mode_enabled=True,
+        cross_group_allowed=False,
+    )

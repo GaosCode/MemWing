@@ -104,6 +104,27 @@ ORDER BY event_time ASC, id ASC
 LIMIT %(limit)s
 """
 
+_LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL = """
+WITH recent_source_events AS (
+    SELECT *
+    FROM source_events
+    WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND purged_at IS NULL
+      AND purge_level = 'none'
+      AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
+      AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+      AND (
+          %(shared_group_id)s IS NULL
+          OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+      )
+    ORDER BY event_time DESC, id DESC
+    LIMIT %(limit)s
+)
+SELECT *
+FROM recent_source_events
+ORDER BY event_time ASC, id ASC
+"""
+
 _INSERT_OUTBOX_JOB_SQL = """
 INSERT INTO outbox_jobs (
     id, project_memory_space_id, source_event_id, job_type, payload_json,

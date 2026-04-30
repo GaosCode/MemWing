@@ -19,6 +19,7 @@ from .postgres_sql import (
     _INSERT_OUTBOX_JOB_SQL,
     _INSERT_SOURCE_EVENT_SQL,
     _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
+    _LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
     _MARK_OUTBOX_SUCCEEDED_SQL,
     _SELECT_AUDIT_EVENT_BY_IDEMPOTENCY_SQL,
@@ -71,6 +72,24 @@ class PostgresSourceEventRepository:
     ) -> tuple[SourceEvent, ...]:
         rows = await self._executor.fetch(
             _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
+            {
+                "project_memory_space_id": scope.project_memory_space_id,
+                "group_ids": scope.group_ids,
+                "thread_id": scope.thread_id,
+                "shared_group_id": scope.shared_group_id,
+                "limit": limit,
+            },
+        )
+        return tuple(source_event_from_row(row) for row in rows)
+
+    async def list_recent_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        rows = await self._executor.fetch(
+            _LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL,
             {
                 "project_memory_space_id": scope.project_memory_space_id,
                 "group_ids": scope.group_ids,

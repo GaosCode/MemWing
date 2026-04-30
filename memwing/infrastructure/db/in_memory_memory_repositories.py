@@ -129,6 +129,19 @@ class InMemoryMemoryPageRepository:
             return None
         return self._tx.state.memory_pages[page_id]
 
+    async def get_by_scope_for_update(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> PageMemory | None:
+        return await self.get_by_scope(
+            project_memory_space_id=project_memory_space_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+
     async def mark_needs_rebuild_for_source(
         self,
         *,

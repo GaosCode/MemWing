@@ -225,6 +225,15 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
   AND scope_id = %(scope_id)s
 """
 
+_GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL = """
+SELECT *
+FROM memory_pages
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND scope_type = %(scope_type)s
+  AND scope_id = %(scope_id)s
+FOR UPDATE
+"""
+
 _MARK_MEMORY_PAGES_REBUILD_FOR_SOURCE_SQL = """
 UPDATE memory_pages
 SET needs_rebuild = true,

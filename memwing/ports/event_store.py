@@ -51,6 +51,14 @@ class SourceEventRepositoryPort(Protocol):
     ) -> tuple[SourceEvent, ...]:
         ...
 
+    async def list_recent_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        ...
+
 
 class AuditEventRepositoryPort(Protocol):
     async def record(self, event: AuditEvent) -> AuditEvent:
@@ -190,6 +198,15 @@ class MemoryPageRepositoryPort(Protocol):
         ...
 
     async def get_by_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> PageMemory | None:
+        ...
+
+    async def get_by_scope_for_update(
         self,
         *,
         project_memory_space_id: str,

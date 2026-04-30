@@ -210,6 +210,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
 
     assert hasattr(SourceEventRepositoryPort, "list_for_scope")
+    assert hasattr(SourceEventRepositoryPort, "list_recent_for_scope")
     assert hasattr(AuditEventRepositoryPort, "get_by_idempotency_key")
     assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
     assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
@@ -217,6 +218,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(MemoryItemRepositoryPort, "get_for_update")
     assert hasattr(MemoryVersionRepositoryPort, "get_latest")
     assert hasattr(MemoryPageRepositoryPort, "list_needs_rebuild")
+    assert hasattr(MemoryPageRepositoryPort, "get_by_scope_for_update")
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.platform import PlatformRef
+from memwing.core.models import PageMemory
 from memwing.core.scope import EffectiveScope, MemoryScope, PlatformScopeBinding, RuntimeScopeBinding
 from memwing.core.scope_patterns import session_pattern_matches, session_pattern_specificity
 from memwing.ports.event_store import ScopeBindingStorePort
@@ -70,6 +71,52 @@ class ScopeResolver:
             bound_thread_id=binding.thread_id,
             hint=scope_hint,
             platform_thread_id=platform_ref.thread_id,
+        )
+
+    async def resolve_page_memory_rebuild(self, page: PageMemory) -> ResolvedScope:
+        project = await self._bindings.get_project_memory_space(page.project_memory_space_id)
+        if project is None:
+            raise ScopeResolutionError("project memory space was not found")
+
+        source_group_id = _page_source_group_id(page)
+        thread_id = _page_thread_id(page)
+        settings = None
+        if source_group_id is not None:
+            settings = await self._bindings.get_group_memory_settings(
+                project_memory_space_id=page.project_memory_space_id,
+                group_id=source_group_id,
+            )
+
+        safe_mode_enabled = (
+            settings.safe_mode_enabled
+            if settings is not None
+            else project.default_safe_mode_enabled
+        )
+        if safe_mode_enabled and source_group_id is None:
+            raise ScopeResolutionError("safe_mode requires group_id")
+
+        if page.scope_type == "thread":
+            shared_group_id = self._resolve_shared_group_id(
+                server_shared_group_id=settings.shared_group_id if settings is not None else None,
+                hint_shared_group_id=page.shared_group_id,
+            )
+        elif page.shared_group_id is not None:
+            raise ScopeResolutionError("page scope conflicts with persisted shared group context")
+        else:
+            shared_group_id = None
+        group_ids = (source_group_id,) if source_group_id is not None else None
+        return ResolvedScope(
+            effective_scope=EffectiveScope(
+                project_memory_space_id=page.project_memory_space_id,
+                group_ids=group_ids,
+                thread_id=thread_id,
+                shared_group_id=shared_group_id,
+                safe_mode_enabled=safe_mode_enabled,
+                cross_group_allowed=not safe_mode_enabled,
+            ),
+            source_group_id=source_group_id,
+            thread_id=thread_id,
+            shared_group_id=shared_group_id,
         )
 
     async def _build_resolved_scope(
@@ -205,3 +252,31 @@ class ScopeResolver:
         ):
             raise ScopeResolutionError("scope_hint shared_group_id conflicts with settings")
         return server_shared_group_id
+
+
+def _page_source_group_id(page: PageMemory) -> str | None:
+    if page.scope_type == "project":
+        if (
+            page.group_id is not None
+            or page.thread_id is not None
+            or page.shared_group_id is not None
+        ):
+            raise ScopeResolutionError("project page scope conflicts with persisted group context")
+        return None
+    if page.scope_type == "group":
+        if page.group_id is None or page.group_id != page.scope_id:
+            raise ScopeResolutionError("group page scope conflicts with persisted group context")
+        if page.thread_id is not None:
+            raise ScopeResolutionError("group page scope conflicts with persisted thread context")
+        return page.group_id
+    if page.scope_type == "thread":
+        if page.thread_id is None or page.thread_id != page.scope_id:
+            raise ScopeResolutionError("thread page scope conflicts with persisted thread context")
+        return page.group_id
+    raise ScopeResolutionError("meeting page memory rebuild is not supported")
+
+
+def _page_thread_id(page: PageMemory) -> str | None:
+    if page.scope_type == "thread":
+        return page.thread_id
+    return None

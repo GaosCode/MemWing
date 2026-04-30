@@ -91,6 +91,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     connection = FakePostgresConnection(
         fetchrow_results=(
             memory_item_row(memory),
+            page_memory_row(page),
             memory_version_row(version),
             {"next_sequence": 13},
             {"token_count": 4},
@@ -107,6 +108,11 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
             assert await tx.source_events.list_for_scope(scope=scope, limit=10) == (source,)
             assert await tx.memory_items.list_for_scope(scope=scope, limit=10) == (memory,)
             assert await tx.memory_items.get_for_update("memory_001") == memory
+            assert await tx.memory_pages.get_by_scope_for_update(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            ) == page
             assert await tx.memory_versions.get_latest("memory_001") == version
             assert await tx.memory_pages.list_needs_rebuild(
                 project_memory_space_id="project_001",
@@ -138,7 +144,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     assert connection.calls[0][2]["group_ids"] == ("group_001",)
     assert connection.calls[0][2]["thread_id"] == "thread_001"
     assert connection.calls[1][2]["group_ids"] == ("group_001",)
-    assert connection.calls[4][2]["project_memory_space_id"] == "project_001"
+    assert connection.calls[5][2]["project_memory_space_id"] == "project_001"
 
 
 def _effective_scope() -> EffectiveScope:

@@ -32,6 +32,16 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             source_event, inserted_source = await tx.source_events.insert_if_absent(
                 _source_event()
             )
+            later_source_event, inserted_later_source = await tx.source_events.insert_if_absent(
+                replace(
+                    _source_event(),
+                    id="source_002",
+                    raw_payload_hash="hash_002",
+                    runtime_event_idempotency_key="runtime-key-002",
+                    event_time=NOW + timedelta(minutes=5),
+                    created_at=NOW + timedelta(minutes=5),
+                )
+            )
             chunk = await tx.evidence_chunks.upsert_chunk(_evidence_chunk())
             duplicated_chunk = await tx.evidence_chunks.upsert_chunk(
                 replace(_evidence_chunk(), id="chunk_duplicate")
@@ -48,6 +58,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             graph_link = await tx.memory_graph_links.upsert(_graph_link())
 
         assert inserted_source is True
+        assert inserted_later_source is True
         assert source_event.id == "source_001"
         assert chunk.id == "chunk_001"
         assert duplicated_chunk.id == "chunk_001"
@@ -64,6 +75,11 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
         async with store.transaction() as tx:
             assert await tx.memory_items.get("memory_001") == memory
             assert await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            ) == duplicated_page
+            assert await tx.memory_pages.get_by_scope_for_update(
                 project_memory_space_id="project_001",
                 scope_type="thread",
                 scope_id="thread_001",
@@ -90,7 +106,11 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             assert await tx.source_events.list_for_scope(
                 scope=_effective_scope(),
                 limit=10,
-            ) == (source_event,)
+            ) == (source_event, later_source_event)
+            assert await tx.source_events.list_recent_for_scope(
+                scope=_effective_scope(),
+                limit=1,
+            ) == (later_source_event,)
             assert await tx.working_memory_entries.mark_flushed(
                 project_memory_space_id="project_001",
                 thread_id="thread_001",

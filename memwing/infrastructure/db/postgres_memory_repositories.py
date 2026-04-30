@@ -23,6 +23,7 @@ from .postgres_derived_sql import (
     _GET_LATEST_MEMORY_VERSION_SQL,
     _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
+    _GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL,
     _INSERT_MEMORY_PAGE_VERSION_SQL,
     _INSERT_MEMORY_VERSION_SQL,
     _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
@@ -134,6 +135,23 @@ class PostgresMemoryPageRepository:
     ) -> PageMemory | None:
         row = await self._executor.fetchrow(
             _GET_MEMORY_PAGE_BY_SCOPE_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+            },
+        )
+        return page_memory_from_row(row) if row is not None else None
+
+    async def get_by_scope_for_update(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: PageMemoryScopeType,
+        scope_id: str,
+    ) -> PageMemory | None:
+        row = await self._executor.fetchrow(
+            _GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL,
             {
                 "project_memory_space_id": project_memory_space_id,
                 "scope_type": scope_type,

@@ -68,6 +68,32 @@ class InMemorySourceEventRepository:
         events.sort(key=lambda event: (event.event_time, event.id))
         return tuple(events[:limit])
 
+    async def list_recent_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[SourceEvent, ...]:
+        if limit <= 0:
+            return ()
+        events = [
+            event
+            for event in self._tx.state.source_events.values()
+            if event.project_memory_space_id == scope.project_memory_space_id
+            and event.purged_at is None
+            and event.purge_level == "none"
+            and effective_scope_matches(
+                group_id=event.group_id,
+                thread_id=event.thread_id,
+                shared_group_id=event.shared_group_id,
+                scope=scope,
+            )
+        ]
+        events.sort(key=lambda event: (event.event_time, event.id), reverse=True)
+        recent = events[:limit]
+        recent.sort(key=lambda event: (event.event_time, event.id))
+        return tuple(recent)
+
 
 class InMemoryAuditEventRepository:
     def __init__(self, tx: InMemoryTransactionView) -> None:
