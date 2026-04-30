@@ -1,5 +1,10 @@
-from datetime import UTC, datetime
+import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+import uuid
 
+from memwing.api.agent_runtime import AgentMemoryQuery, AgentMemorySearchResult
+from memwing.core.models import AuditEvent
 from memwing.core.models import (
     GraphFact,
     GraphWriteJob,
@@ -10,6 +15,10 @@ from memwing.core.models import (
     MemoryStatus,
     SourceEvent,
 )
+from memwing.core.scope import EffectiveScope
+from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.lifecycle_transition import LifecycleTransitionRequest, LifecycleTransitionResult
 
 
 NOW = datetime(2026, 4, 28, tzinfo=UTC)
@@ -132,4 +141,189 @@ def graph_job(
         lock_expires_at=lock_expires_at,
         created_at=NOW,
         updated_at=updated_at,
+    )
+
+
+class FakeGraphBackend:
+    def __init__(self, result: GraphWriteResult) -> None:
+        self._result = result
+        self.requests: tuple[GraphWriteRequest, ...] = ()
+
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        self.requests = (*self.requests, request)
+        return self._result
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class FailingGraphBackend:
+    def __init__(self, error: str) -> None:
+        self._error = error
+
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        raise RuntimeError(self._error)
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class HangingGraphBackend:
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        await asyncio.Event().wait()
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class ReclaimingGraphBackend:
+    def __init__(self, store: InMemoryDataStore, result: GraphWriteResult) -> None:
+        self._store = store
+        self._result = result
+
+    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        async with self._store.transaction() as tx:
+            await tx.graph_write_jobs.claim_pending(
+                now=NOW + timedelta(minutes=5, seconds=1),
+                worker_id="graph_worker_002",
+                lock_duration=timedelta(minutes=5),
+                limit=1,
+            )
+        return self._result
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class FakeLifecycleTransition:
+    def __init__(
+        self,
+        store: InMemoryDataStore,
+        *,
+        reclaim_after_first: bool = False,
+    ) -> None:
+        self._store = store
+        self._reclaim_after_first = reclaim_after_first
+        self.requests: tuple[LifecycleTransitionRequest, ...] = ()
+
+    async def transition(
+        self,
+        request: LifecycleTransitionRequest,
+    ) -> LifecycleTransitionResult:
+        self.requests = (*self.requests, request)
+        async with self._store.transaction() as tx:
+            memory = await tx.memory_items.get(request.memory_id)
+            assert memory is not None
+            updated = replace(
+                memory,
+                status=MemoryStatus.NEEDS_REVIEW,
+                updated_at=request.now,
+            )
+            await tx.memory_items.upsert(updated)
+
+        audit_event = AuditEvent(
+            id=str(uuid.uuid4()),
+            trace_id=request.trace_id,
+            entity_type="memory_item",
+            entity_id=request.memory_id,
+            stage="memory.lifecycle_transition",
+            input_ref=request.memory_id,
+            output_ref=updated.status,
+            decision=request.action.value,
+            reason_code=None,
+            reason_text=request.reason,
+            source_event_ids=updated.source_event_ids,
+            latency_ms=None,
+            created_at=request.now,
+            actor_id=request.actor_id,
+        )
+        if self._reclaim_after_first and len(self.requests) == 1:
+            async with self._store.transaction() as tx:
+                await tx.graph_write_jobs.claim_pending(
+                    now=NOW + timedelta(minutes=5, seconds=1),
+                    worker_id="graph_worker_002",
+                    lock_duration=timedelta(minutes=5),
+                    limit=1,
+                )
+        return LifecycleTransitionResult(
+            memory_item=updated,
+            previous_status=memory.status,
+            audit_event=audit_event,
+        )
+
+
+def invalidated_source_event(source_event_id: str = "source_old") -> SourceEvent:
+    return replace(source_event(), id=source_event_id, content="Old decision.")
+
+
+def invalidated_memory_item(
+    memory_id: str = "memory_old",
+    source_event_id: str = "source_old",
+) -> MemoryItem:
+    return replace(
+        memory_item(),
+        id=memory_id,
+        source_event_ids=(source_event_id,),
+        primary_source_event_id=source_event_id,
+        status=MemoryStatus.ACTIVE,
+    )
+
+
+def graph_result_with_invalidated_fact() -> GraphWriteResult:
+    return replace(
+        successful_graph_result(),
+        invalidated_facts=(
+            GraphFact(
+                backend="graphiti",
+                fact_id="fact_old",
+                fact_text="Old decision.",
+                source_event_ids=("source_old",),
+                valid_from=None,
+                valid_to=NOW,
+                invalidated_at=NOW,
+                confidence=0.8,
+                metadata={},
+            ),
+        ),
+    )
+
+
+def graph_result_with_two_invalidated_facts() -> GraphWriteResult:
+    result = graph_result_with_invalidated_fact()
+    invalidated_fact = result.invalidated_facts[0]
+    return replace(
+        result,
+        invalidated_facts=(
+            invalidated_fact,
+            replace(
+                invalidated_fact,
+                fact_id="fact_older",
+                fact_text="Older decision.",
+                source_event_ids=("source_older",),
+            ),
+        ),
     )
