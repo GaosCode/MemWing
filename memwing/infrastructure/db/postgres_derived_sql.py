@@ -86,7 +86,8 @@ INSERT INTO memory_items (
     status, event_time, valid_from, valid_to, original_score, half_life_days,
     last_reviewed_at, last_confirmed_at, last_recalled_at, recall_count,
     cached_decayed_score, last_decay_computed_at, pinned, created_by, activated_at,
-    created_at, updated_at, archived_at, hidden_at, invalidated_at, removed_at
+    created_at, updated_at, archived_at, hidden_at, invalidated_at, removed_at,
+    lifecycle_revision
 ) VALUES (
     %(id)s, %(project_memory_space_id)s, %(group_id)s, %(thread_id)s,
     %(shared_group_id)s, %(route)s, %(display_type)s, %(title)s, %(content)s,
@@ -96,7 +97,7 @@ INSERT INTO memory_items (
     %(last_recalled_at)s, %(recall_count)s, %(cached_decayed_score)s,
     %(last_decay_computed_at)s, %(pinned)s, %(created_by)s, %(activated_at)s,
     %(created_at)s, %(updated_at)s, %(archived_at)s, %(hidden_at)s,
-    %(invalidated_at)s, %(removed_at)s
+    %(invalidated_at)s, %(removed_at)s, %(lifecycle_revision)s
 )
 ON CONFLICT (id) DO UPDATE
 SET project_memory_space_id = EXCLUDED.project_memory_space_id,
@@ -130,11 +131,19 @@ SET project_memory_space_id = EXCLUDED.project_memory_space_id,
     archived_at = EXCLUDED.archived_at,
     hidden_at = EXCLUDED.hidden_at,
     invalidated_at = EXCLUDED.invalidated_at,
-    removed_at = EXCLUDED.removed_at
+    removed_at = EXCLUDED.removed_at,
+    lifecycle_revision = EXCLUDED.lifecycle_revision
 RETURNING *
 """
 
 _GET_MEMORY_ITEM_SQL = "SELECT * FROM memory_items WHERE id = %(memory_id)s"
+
+_GET_MEMORY_ITEM_FOR_UPDATE_SQL = """
+SELECT *
+FROM memory_items
+WHERE id = %(memory_id)s
+FOR UPDATE
+"""
 
 _LIST_MEMORY_ITEMS_BY_SOURCE_SQL = """
 SELECT *

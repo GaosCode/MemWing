@@ -58,6 +58,8 @@ def audit_event_from_row(row: Row) -> AuditEvent:
         created_at=_datetime(row, "created_at"),
         actor_id=_optional_text(row, "actor_id"),
         idempotency_key=_optional_text(row, "idempotency_key"),
+        action_ref=_optional_text(row, "action_ref"),
+        lifecycle_revision=_optional_int(row, "lifecycle_revision"),
     )
 
 

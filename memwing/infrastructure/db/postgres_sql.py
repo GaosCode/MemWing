@@ -66,12 +66,12 @@ _INSERT_AUDIT_EVENT_SQL = """
 INSERT INTO audit_events (
     id, trace_id, entity_type, entity_id, stage, input_ref, output_ref,
     decision, reason_code, reason_text, source_event_ids, latency_ms, created_at,
-    actor_id, idempotency_key
+    actor_id, idempotency_key, action_ref, lifecycle_revision
 ) VALUES (
     %(id)s, %(trace_id)s, %(entity_type)s, %(entity_id)s, %(stage)s, %(input_ref)s,
     %(output_ref)s, %(decision)s, %(reason_code)s, %(reason_text)s,
     %(source_event_ids)s, %(latency_ms)s, %(created_at)s, %(actor_id)s,
-    %(idempotency_key)s
+    %(idempotency_key)s, %(action_ref)s, %(lifecycle_revision)s
 )
 ON CONFLICT (entity_type, entity_id, idempotency_key)
 WHERE idempotency_key IS NOT NULL

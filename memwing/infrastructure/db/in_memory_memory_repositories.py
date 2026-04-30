@@ -27,6 +27,9 @@ class InMemoryMemoryItemRepository:
     async def get(self, memory_id: str) -> MemoryItem | None:
         return self._tx.state.memory_items.get(memory_id)
 
+    async def get_for_update(self, memory_id: str) -> MemoryItem | None:
+        return await self.get(memory_id)
+
     async def list_by_source_event(self, source_event_id: str) -> tuple[MemoryItem, ...]:
         return tuple(
             item

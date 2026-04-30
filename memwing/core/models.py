@@ -84,6 +84,8 @@ class AuditEvent:
     created_at: datetime
     actor_id: str | None = None
     idempotency_key: str | None = None
+    action_ref: str | None = None
+    lifecycle_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +178,7 @@ class MemoryItem:
     hidden_at: datetime | None
     invalidated_at: datetime | None
     removed_at: datetime | None
+    lifecycle_revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)

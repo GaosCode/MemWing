@@ -297,5 +297,6 @@ def test_source_event_and_memory_item_are_core_neutral_contracts() -> None:
     assert source_event.graph_backend_raw_retained is False
     assert memory_item.route is MemoryRoute.MANUAL
     assert memory_item.status is MemoryStatus.CANDIDATE
+    assert memory_item.lifecycle_revision == 0
     assert memory_item.source_event_ids == ("source_001",)
     assert memory_item.updated_at is event_time

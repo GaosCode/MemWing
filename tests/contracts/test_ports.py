@@ -214,6 +214,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
     assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
     assert hasattr(MemoryItemRepositoryPort, "list_for_scope")
+    assert hasattr(MemoryItemRepositoryPort, "get_for_update")
     assert hasattr(MemoryVersionRepositoryPort, "get_latest")
     assert hasattr(MemoryPageRepositoryPort, "list_needs_rebuild")
 

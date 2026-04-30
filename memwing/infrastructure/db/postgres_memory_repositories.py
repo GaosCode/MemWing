@@ -21,6 +21,7 @@ from .postgres_derived_rows import (
 from .postgres_derived_sql import (
     _GET_MEMORY_ITEM_SQL,
     _GET_LATEST_MEMORY_VERSION_SQL,
+    _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
     _INSERT_MEMORY_PAGE_VERSION_SQL,
     _INSERT_MEMORY_VERSION_SQL,
@@ -46,6 +47,13 @@ class PostgresMemoryItemRepository:
 
     async def get(self, memory_id: str) -> MemoryItem | None:
         row = await self._executor.fetchrow(_GET_MEMORY_ITEM_SQL, {"memory_id": memory_id})
+        return memory_item_from_row(row) if row is not None else None
+
+    async def get_for_update(self, memory_id: str) -> MemoryItem | None:
+        row = await self._executor.fetchrow(
+            _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
+            {"memory_id": memory_id},
+        )
         return memory_item_from_row(row) if row is not None else None
 
     async def list_by_source_event(self, source_event_id: str) -> tuple[MemoryItem, ...]:
@@ -229,6 +237,7 @@ def _memory_item_params(item: MemoryItem) -> dict[str, object]:
         "hidden_at": item.hidden_at,
         "invalidated_at": item.invalidated_at,
         "removed_at": item.removed_at,
+        "lifecycle_revision": item.lifecycle_revision,
     }
 
 

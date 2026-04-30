@@ -162,6 +162,9 @@ class MemoryItemRepositoryPort(Protocol):
     async def get(self, memory_id: str) -> MemoryItem | None:
         ...
 
+    async def get_for_update(self, memory_id: str) -> MemoryItem | None:
+        ...
+
     async def list_by_source_event(self, source_event_id: str) -> tuple[MemoryItem, ...]:
         ...
 

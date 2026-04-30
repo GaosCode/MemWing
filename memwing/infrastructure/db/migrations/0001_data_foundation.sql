@@ -119,7 +119,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
     latency_ms integer,
     created_at timestamptz NOT NULL DEFAULT now(),
     actor_id text,
-    idempotency_key text
+    idempotency_key text,
+    action_ref text,
+    lifecycle_revision integer
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_trace
@@ -247,7 +249,8 @@ CREATE TABLE IF NOT EXISTS memory_items (
     archived_at timestamptz,
     hidden_at timestamptz,
     invalidated_at timestamptz,
-    removed_at timestamptz
+    removed_at timestamptz,
+    lifecycle_revision integer NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_items_scope_status

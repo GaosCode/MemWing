@@ -105,6 +105,8 @@ class PostgresAuditEventRepository:
                 "created_at": event.created_at,
                 "actor_id": event.actor_id,
                 "idempotency_key": event.idempotency_key,
+                "action_ref": event.action_ref,
+                "lifecycle_revision": event.lifecycle_revision,
             },
         )
         if row is None:

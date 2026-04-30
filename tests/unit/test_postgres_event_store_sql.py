@@ -52,6 +52,8 @@ def test_postgres_remember_event_repositories_execute_transactional_insert_paths
     audit_call = next(call for call in connection.calls if "INSERT INTO audit_events" in call[1])
     assert audit_call[2]["actor_id"] == "system"
     assert audit_call[2]["idempotency_key"] == "audit:source_001"
+    assert audit_call[2]["action_ref"] is None
+    assert audit_call[2]["lifecycle_revision"] is None
 
 
 def test_postgres_audit_record_loads_existing_idempotent_event() -> None:

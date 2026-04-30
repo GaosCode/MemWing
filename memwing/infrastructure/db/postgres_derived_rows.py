@@ -99,6 +99,7 @@ def memory_item_from_row(row: Row) -> MemoryItem:
         hidden_at=_optional_datetime(row, "hidden_at"),
         invalidated_at=_optional_datetime(row, "invalidated_at"),
         removed_at=_optional_datetime(row, "removed_at"),
+        lifecycle_revision=_int(row, "lifecycle_revision"),
     )
 
 
