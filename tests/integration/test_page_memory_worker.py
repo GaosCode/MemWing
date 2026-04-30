@@ -358,6 +358,88 @@ def test_manual_rebuild_rejects_scope_id_that_does_not_match_effective_scope(
         )
 
 
+@pytest.mark.parametrize(
+    "scope_kwargs",
+    (
+        {"group_ids": ("group_001",), "thread_id": None},
+        {"group_ids": None, "thread_id": "thread_001"},
+        {"group_ids": None, "thread_id": None, "shared_group_id": "shared_group_001"},
+    ),
+)
+def test_project_page_rebuild_rejects_child_filtered_effective_scope(
+    scope_kwargs: dict[str, object],
+) -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event(
+            "source_001",
+            "A project page must not rebuild from a narrowed child scope.",
+            shared_group_id=scope_kwargs.get("shared_group_id"),
+        ),
+    )
+    service = PageMemoryService(
+        store,
+        _FakePageMemorySynthesis(
+            _synthesis(
+                title="Invalid project page rebuild",
+                brief="A parent project page must not use child-filtered provenance.",
+                topic_title="Invalid scope",
+                topic_summary="Project rebuilds require an unfiltered project scope.",
+            )
+        ),
+        clock=_FixedClock(NOW),
+    )
+
+    with pytest.raises(PageMemoryRebuildError):
+        asyncio.run(
+            service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=_effective_scope(**scope_kwargs),
+                    scope_type="project",
+                    scope_id="project_001",
+                    actor_id="user_001",
+                    reason="manual_rebuild",
+                    trace_id="trace_project_child_scope",
+                )
+            )
+        )
+
+
+def test_group_page_rebuild_rejects_thread_filtered_effective_scope() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event("source_001", "A group page must not rebuild from a thread scope."),
+    )
+    service = PageMemoryService(
+        store,
+        _FakePageMemorySynthesis(
+            _synthesis(
+                title="Invalid group page rebuild",
+                brief="A parent group page must not use thread-filtered provenance.",
+                topic_title="Invalid scope",
+                topic_summary="Group rebuilds require a group-only scope.",
+            )
+        ),
+        clock=_FixedClock(NOW),
+    )
+
+    with pytest.raises(PageMemoryRebuildError):
+        asyncio.run(
+            service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=_effective_scope(group_ids=("group_001",), thread_id="thread_001"),
+                    scope_type="group",
+                    scope_id="group_001",
+                    actor_id="user_001",
+                    reason="manual_rebuild",
+                    trace_id="trace_group_thread_scope",
+                )
+            )
+        )
+
+
 def _seed_source_events(
     store: InMemoryDataStore,
     *events: SourceEvent,
@@ -405,13 +487,14 @@ def _source_event(
     project_memory_space_id: str = "project_001",
     group_id: str = "group_001",
     thread_id: str = "thread_001",
+    shared_group_id: str | None = None,
 ) -> SourceEvent:
     return SourceEvent(
         id=source_event_id,
         project_memory_space_id=project_memory_space_id,
         group_id=group_id,
         thread_id=thread_id,
-        shared_group_id=None,
+        shared_group_id=shared_group_id,
         author_id="user_001",
         author_name="Ada",
         source_type="text",
@@ -576,12 +659,13 @@ def _effective_scope(
     project_memory_space_id: str = "project_001",
     group_ids: tuple[str, ...] | None = ("group_001",),
     thread_id: str | None = "thread_001",
+    shared_group_id: str | None = None,
 ) -> EffectiveScope:
     return EffectiveScope(
         project_memory_space_id=project_memory_space_id,
         group_ids=group_ids,
         thread_id=thread_id,
-        shared_group_id=None,
+        shared_group_id=shared_group_id,
         safe_mode_enabled=group_ids is not None,
         cross_group_allowed=group_ids is None,
     )
