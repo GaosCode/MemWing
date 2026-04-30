@@ -9,6 +9,7 @@ from memwing.application.page_memory_service import (
     PageMemorySynthesisValidationError,
     PageMemoryService,
 )
+from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import (
     MemoryDisplayType,
     MemoryItem,
@@ -130,7 +131,11 @@ def test_needs_rebuild_scanner_rebuilds_flagged_pages_and_clears_flag() -> None:
         )
     )
     service = PageMemoryService(store, synthesis, clock=_FixedClock(NOW))
-    worker = PageMemoryWorker(store, service)
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
+    )
 
     result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
 
@@ -174,7 +179,11 @@ def test_page_memory_maybe_rebuild_noops_when_no_page_needs_rebuild() -> None:
         _UnexpectedPageMemorySynthesis(),
         clock=_FixedClock(NOW),
     )
-    worker = PageMemoryWorker(store, service)
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
+    )
 
     result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
 
@@ -202,7 +211,11 @@ def test_synthesis_failure_does_not_write_fallback_or_clear_rebuild_flag() -> No
         ),
         clock=_FixedClock(NOW),
     )
-    worker = PageMemoryWorker(store, service)
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
+    )
 
     with pytest.raises(PageMemorySynthesisValidationError):
         asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
@@ -509,7 +522,17 @@ def test_worker_rejects_persisted_group_page_with_shared_group_scope() -> None:
         _UnexpectedPageMemorySynthesis(),
         clock=_FixedClock(NOW),
     )
-    worker = PageMemoryWorker(store, service)
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(
+            _effective_scope(
+                group_ids=("group_001",),
+                thread_id=None,
+                shared_group_id="shared_group_001",
+            )
+        ),
+    )
 
     with pytest.raises(PageMemoryRebuildError):
         asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
@@ -781,6 +804,21 @@ class _FakePageMemorySynthesis:
     ) -> PageMemorySynthesis:
         self.requests.append(request)
         return self._synthesis
+
+
+class _StaticPageMemoryRebuildScopeResolver:
+    def __init__(self, scope: EffectiveScope) -> None:
+        self._scope = scope
+
+    async def resolve_page_memory_rebuild(self, page: PageMemory) -> ResolvedScope:
+        return ResolvedScope(
+            effective_scope=self._scope,
+            source_group_id=(
+                self._scope.group_ids[0] if self._scope.group_ids is not None else None
+            ),
+            thread_id=self._scope.thread_id,
+            shared_group_id=self._scope.shared_group_id,
+        )
 
 
 class _UnexpectedPageMemorySynthesis:

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from memwing.application.page_memory_service import (
     PageMemoryRebuildCommand,
     PageMemoryService,
 )
+from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import OutboxJob, PageMemory
-from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 
@@ -20,16 +21,23 @@ class PageMemoryWorkerResult:
     rebuilt: int
 
 
+class PageMemoryRebuildScopeResolver(Protocol):
+    async def resolve_page_memory_rebuild(self, page: PageMemory) -> ResolvedScope:
+        ...
+
+
 class PageMemoryWorker:
     def __init__(
         self,
         unit_of_work: EventStoreUnitOfWorkPort,
         page_memory_service: PageMemoryService,
         *,
+        scope_resolver: PageMemoryRebuildScopeResolver,
         rebuild_limit: int = 10,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._page_memory_service = page_memory_service
+        self._scope_resolver = scope_resolver
         self._rebuild_limit = rebuild_limit
 
     async def maybe_rebuild(self, job: OutboxJob) -> PageMemoryWorkerResult:
@@ -44,9 +52,10 @@ class PageMemoryWorker:
 
         rebuilt = 0
         for page in candidates:
+            resolved_scope = await self._scope_resolver.resolve_page_memory_rebuild(page)
             await self._page_memory_service.rebuild(
                 PageMemoryRebuildCommand(
-                    scope=_effective_scope_from_page(page),
+                    scope=resolved_scope.effective_scope,
                     scope_type=page.scope_type,
                     scope_id=page.scope_id,
                     actor_id=None,
@@ -57,14 +66,3 @@ class PageMemoryWorker:
             rebuilt += 1
 
         return PageMemoryWorkerResult(scanned=len(candidates), rebuilt=rebuilt)
-
-
-def _effective_scope_from_page(page: PageMemory) -> EffectiveScope:
-    return EffectiveScope(
-        project_memory_space_id=page.project_memory_space_id,
-        group_ids=(page.group_id,) if page.group_id is not None else None,
-        thread_id=page.thread_id,
-        shared_group_id=page.shared_group_id,
-        safe_mode_enabled=page.group_id is not None,
-        cross_group_allowed=page.group_id is None,
-    )
