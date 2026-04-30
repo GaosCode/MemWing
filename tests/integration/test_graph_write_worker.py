@@ -398,16 +398,19 @@ class FakeGraphBackend:
         raise NotImplementedError
 
 
-def invalidated_source_event() -> SourceEvent:
-    return replace(source_event(), id="source_old", content="Old decision.")
+def invalidated_source_event(source_event_id: str = "source_old") -> SourceEvent:
+    return replace(source_event(), id=source_event_id, content="Old decision.")
 
 
-def invalidated_memory_item() -> MemoryItem:
+def invalidated_memory_item(
+    memory_id: str = "memory_old",
+    source_event_id: str = "source_old",
+) -> MemoryItem:
     return replace(
         memory_item(),
-        id="memory_old",
-        source_event_ids=("source_old",),
-        primary_source_event_id="source_old",
+        id=memory_id,
+        source_event_ids=(source_event_id,),
+        primary_source_event_id=source_event_id,
         status=MemoryStatus.ACTIVE,
     )
 
@@ -488,8 +491,14 @@ class HangingGraphBackend:
 
 
 class FakeLifecycleTransition:
-    def __init__(self, store: InMemoryDataStore) -> None:
+    def __init__(
+        self,
+        store: InMemoryDataStore,
+        *,
+        reclaim_after_first: bool = False,
+    ) -> None:
         self._store = store
+        self._reclaim_after_first = reclaim_after_first
         self.requests: tuple[LifecycleTransitionRequest, ...] = ()
 
     async def transition(
@@ -523,6 +532,14 @@ class FakeLifecycleTransition:
             created_at=request.now,
             actor_id=request.actor_id,
         )
+        if self._reclaim_after_first and len(self.requests) == 1:
+            async with self._store.transaction() as tx:
+                await tx.graph_write_jobs.claim_pending(
+                    now=NOW + timedelta(minutes=5, seconds=1),
+                    worker_id="graph_worker_002",
+                    lock_duration=timedelta(minutes=5),
+                    limit=1,
+                )
         return LifecycleTransitionResult(
             memory_item=updated,
             previous_status=memory.status,
