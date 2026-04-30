@@ -136,7 +136,6 @@ class GraphWriteWorker:
             facts=graph_result.invalidated_facts,
             project_memory_space_id=job.project_memory_space_id,
         )
-        await self._extend_current_lock(job=job, now=now)
         await self._mark_invalidated_memories_needs_review(
             job=job,
             memory_ids=invalidated_memory_ids,
@@ -260,6 +259,7 @@ class GraphWriteWorker:
             )
 
         for memory_id in memory_ids:
+            await self._extend_current_lock(job=job, now=now)
             await self._lifecycle_transition.transition(
                 LifecycleTransitionRequest(
                     memory_id=memory_id,
