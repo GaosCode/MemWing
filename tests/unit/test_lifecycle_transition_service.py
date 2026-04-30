@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from types import TracebackType
 
 import pytest
 
@@ -11,6 +12,8 @@ from memwing.core.models import (
     MemoryItem,
     MemoryRoute,
     MemoryStatus,
+    MemoryVersion,
+    AuditEvent,
 )
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.ports.lifecycle_transition import LifecycleTransitionRequest
@@ -37,12 +40,15 @@ def test_candidate_approve_activates_memory_and_records_version_and_audit() -> N
 
         assert result.previous_status is MemoryStatus.CANDIDATE
         assert result.memory_item.status is MemoryStatus.ACTIVE
+        assert result.memory_item.lifecycle_revision == 1
         assert result.memory_item.activated_at == NOW
         assert result.memory_item.updated_at == NOW
         assert result.audit_event.stage == "lifecycle_transition.succeeded"
         assert result.audit_event.input_ref == "candidate"
         assert result.audit_event.output_ref == "active"
         assert result.audit_event.decision == "approve"
+        assert result.audit_event.action_ref == "approve"
+        assert result.audit_event.lifecycle_revision == 1
         assert result.audit_event.reason_text == "Approve reviewed decision"
         assert result.audit_event.idempotency_key == "lifecycle:memory_001:approve"
 
@@ -93,14 +99,20 @@ def test_pin_and_unpin_keep_status_and_do_not_record_memory_versions() -> None:
         assert pinned.previous_status is MemoryStatus.ACTIVE
         assert pinned.memory_item.status is MemoryStatus.ACTIVE
         assert pinned.memory_item.pinned is True
+        assert pinned.memory_item.lifecycle_revision == 1
         assert pinned.memory_item.updated_at == NOW
         assert pinned.audit_event.output_ref == "pinned:true"
+        assert pinned.audit_event.action_ref == "pin"
+        assert pinned.audit_event.lifecycle_revision == 1
 
         assert unpinned.previous_status is MemoryStatus.ACTIVE
         assert unpinned.memory_item.status is MemoryStatus.ACTIVE
         assert unpinned.memory_item.pinned is False
+        assert unpinned.memory_item.lifecycle_revision == 2
         assert unpinned.memory_item.updated_at == NOW
         assert unpinned.audit_event.output_ref == "pinned:false"
+        assert unpinned.audit_event.action_ref == "unpin"
+        assert unpinned.audit_event.lifecycle_revision == 2
 
         async with store.transaction() as tx:
             memory = await tx.memory_items.get("memory_001")
@@ -169,10 +181,13 @@ def test_status_transitions_update_action_timestamps_and_record_versions(
 
         assert result.previous_status is initial_status
         assert result.memory_item.status is expected_status
+        assert result.memory_item.lifecycle_revision == 1
         assert result.memory_item.updated_at == NOW
         assert getattr(result.memory_item, timestamp_field) == NOW
         assert result.audit_event.input_ref == initial_status.value
         assert result.audit_event.output_ref == expected_status.value
+        assert result.audit_event.action_ref == action.value
+        assert result.audit_event.lifecycle_revision == 1
 
         async with store.transaction() as tx:
             latest_version = await tx.memory_versions.get_latest("memory_001")
@@ -233,6 +248,8 @@ def test_illegal_transitions_raise_and_record_failure_audit_without_mutating_mem
         assert audit.input_ref == initial_status.value
         assert audit.output_ref is None
         assert audit.decision == "rejected"
+        assert audit.action_ref == action.value
+        assert audit.lifecycle_revision == original.lifecycle_revision
         assert audit.reason_code == "invalid_lifecycle_transition"
         assert audit.reason_text == expected_message
 
@@ -313,7 +330,7 @@ def test_successful_transition_replay_after_later_status_change_fails_without_si
 
         with pytest.raises(
             DomainRuleViolation,
-            match="idempotent lifecycle replay no longer matches memory status",
+            match="idempotent lifecycle replay no longer matches lifecycle revision",
         ):
             await service.transition(original_request)
 
@@ -325,6 +342,56 @@ def test_successful_transition_replay_after_later_status_change_fails_without_si
         assert latest_version_before_replay is not None
         assert latest_version_after_replay == latest_version_before_replay
         assert latest_version_after_replay.version == 2
+        assert len(store.audit_events) == audit_count_before_replay
+
+    asyncio.run(scenario())
+
+
+def test_successful_transition_replay_after_state_changes_away_and_back_fails() -> None:
+    store = InMemoryDataStore()
+    service = LifecycleTransitionService(store)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(_memory_item(status=MemoryStatus.CANDIDATE))
+
+        original_request = _request(
+            action=LifecycleAction.APPROVE,
+            idempotency_key="lifecycle:memory_001:approve:stale-after-return",
+        )
+        await service.transition(original_request)
+        await service.transition(
+            _request(
+                action=LifecycleAction.ARCHIVE,
+                idempotency_key="lifecycle:memory_001:archive:before-return",
+                reason="Archive before returning active",
+            )
+        )
+        returned = await service.transition(
+            _request(
+                action=LifecycleAction.UNARCHIVE,
+                idempotency_key="lifecycle:memory_001:unarchive:before-return-replay",
+                reason="Return to active before stale replay",
+            )
+        )
+        audit_count_before_replay = len(store.audit_events)
+        async with store.transaction() as tx:
+            latest_version_before_replay = await tx.memory_versions.get_latest("memory_001")
+
+        with pytest.raises(
+            DomainRuleViolation,
+            match="idempotent lifecycle replay no longer matches lifecycle revision",
+        ):
+            await service.transition(original_request)
+
+        async with store.transaction() as tx:
+            memory = await tx.memory_items.get("memory_001")
+            latest_version_after_replay = await tx.memory_versions.get_latest("memory_001")
+
+        assert memory == returned.memory_item
+        assert latest_version_before_replay is not None
+        assert latest_version_after_replay == latest_version_before_replay
+        assert latest_version_after_replay.version == 3
         assert len(store.audit_events) == audit_count_before_replay
 
     asyncio.run(scenario())
@@ -402,6 +469,67 @@ def test_failed_transition_replay_is_side_effect_idempotent() -> None:
     asyncio.run(scenario())
 
 
+def test_failed_transition_replay_with_different_action_fails_key_action_match_first() -> None:
+    store = InMemoryDataStore()
+    service = LifecycleTransitionService(store)
+    original = _memory_item(status=MemoryStatus.ARCHIVED)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(original)
+
+        failed_request = _request(
+            action=LifecycleAction.HIDE,
+            idempotency_key="lifecycle:memory_001:failed-key-action",
+            reason="Attempt hidden archive",
+        )
+        with pytest.raises(DomainRuleViolation, match="hide is not allowed from archived"):
+            await service.transition(failed_request)
+
+        audit_count_before_replay = len(store.audit_events)
+        with pytest.raises(
+            DomainRuleViolation,
+            match="idempotency key was already used for hide; cannot replay unarchive",
+        ):
+            await service.transition(
+                _request(
+                    action=LifecycleAction.UNARCHIVE,
+                    idempotency_key="lifecycle:memory_001:failed-key-action",
+                    reason="Reuse failed key for a different action",
+                )
+            )
+
+        async with store.transaction() as tx:
+            memory = await tx.memory_items.get("memory_001")
+            latest_version = await tx.memory_versions.get_latest("memory_001")
+
+        assert memory == original
+        assert latest_version is None
+        assert len(store.audit_events) == audit_count_before_replay
+
+    asyncio.run(scenario())
+
+
+def test_new_transition_uses_get_for_update_before_applying_transition() -> None:
+    memory = _memory_item(status=MemoryStatus.CANDIDATE)
+    unit_of_work = _TrackingUnitOfWork(memory)
+    service = LifecycleTransitionService(unit_of_work)
+
+    async def scenario() -> None:
+        result = await service.transition(
+            _request(
+                action=LifecycleAction.APPROVE,
+                idempotency_key="lifecycle:memory_001:get-for-update",
+            )
+        )
+
+        assert result.memory_item.status is MemoryStatus.ACTIVE
+        assert unit_of_work.memory_items.get_for_update_calls == ["memory_001"]
+        assert unit_of_work.memory_items.get_calls == []
+
+    asyncio.run(scenario())
+
+
 def _request(
     *,
     action: LifecycleAction,
@@ -425,6 +553,7 @@ def _memory_item(
     status: MemoryStatus,
     pinned: bool = False,
     updated_at: datetime = CREATED_AT,
+    lifecycle_revision: int = 0,
 ) -> MemoryItem:
     return MemoryItem(
         id="memory_001",
@@ -460,4 +589,84 @@ def _memory_item(
         hidden_at=None,
         invalidated_at=None,
         removed_at=None,
+        lifecycle_revision=lifecycle_revision,
     )
+
+
+class _TrackingUnitOfWork:
+    def __init__(self, memory: MemoryItem) -> None:
+        self.audit_events = _TrackingAuditEventRepository()
+        self.memory_items = _TrackingMemoryItemRepository(memory)
+        self.memory_versions = _TrackingMemoryVersionRepository()
+
+    def transaction(self) -> "_TrackingUnitOfWork":
+        return self
+
+    async def __aenter__(self) -> "_TrackingUnitOfWork":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        return False
+
+
+class _TrackingAuditEventRepository:
+    def __init__(self) -> None:
+        self.events: list[AuditEvent] = []
+
+    async def record(self, event: AuditEvent) -> AuditEvent:
+        self.events.append(event)
+        return event
+
+    async def get_by_idempotency_key(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        idempotency_key: str,
+    ) -> AuditEvent | None:
+        for event in self.events:
+            if (
+                event.entity_type == entity_type
+                and event.entity_id == entity_id
+                and event.idempotency_key == idempotency_key
+            ):
+                return event
+        return None
+
+
+class _TrackingMemoryItemRepository:
+    def __init__(self, memory: MemoryItem) -> None:
+        self.memory = memory
+        self.get_calls: list[str] = []
+        self.get_for_update_calls: list[str] = []
+
+    async def upsert(self, item: MemoryItem) -> MemoryItem:
+        self.memory = item
+        return item
+
+    async def get(self, memory_id: str) -> MemoryItem | None:
+        self.get_calls.append(memory_id)
+        return self.memory if self.memory.id == memory_id else None
+
+    async def get_for_update(self, memory_id: str) -> MemoryItem | None:
+        self.get_for_update_calls.append(memory_id)
+        return self.memory if self.memory.id == memory_id else None
+
+
+class _TrackingMemoryVersionRepository:
+    def __init__(self) -> None:
+        self.versions: list[MemoryVersion] = []
+
+    async def record(self, version: MemoryVersion) -> MemoryVersion:
+        self.versions.append(version)
+        return version
+
+    async def get_latest(self, memory_id: str) -> MemoryVersion | None:
+        versions = [version for version in self.versions if version.memory_id == memory_id]
+        versions.sort(key=lambda version: version.version, reverse=True)
+        return versions[0] if versions else None
