@@ -2,8 +2,11 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from memwing.core.models import GraphWriteJob, MemoryRoute
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.ports.event_store import OutboxLockOwnershipError
 
 
 NOW = datetime(2026, 4, 28, tzinfo=UTC)
@@ -115,6 +118,45 @@ def test_graph_claim_limit_zero_claims_no_jobs() -> None:
 
         assert claimed == ()
         assert store.graph_write_jobs[0].status == "pending"
+
+    asyncio.run(scenario())
+
+
+def test_graph_extend_lock_requires_current_owner() -> None:
+    store = InMemoryDataStore()
+    store.add_graph_write_job(
+        _job(
+            "graph_job_001",
+            status="processing",
+            locked_by="worker_a",
+            lock_expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            updated = await tx.graph_write_jobs.extend_lock(
+                job_id="graph_job_001",
+                locked_by="worker_a",
+                now=NOW + timedelta(minutes=1),
+                lock_duration=timedelta(minutes=10),
+            )
+
+        assert updated.locked_by == "worker_a"
+        assert updated.locked_at == NOW + timedelta(minutes=1)
+        assert updated.lock_expires_at == NOW + timedelta(minutes=11)
+
+        with pytest.raises(OutboxLockOwnershipError):
+            async with store.transaction() as tx:
+                await tx.graph_write_jobs.extend_lock(
+                    job_id="graph_job_001",
+                    locked_by="worker_b",
+                    now=NOW + timedelta(minutes=2),
+                    lock_duration=timedelta(minutes=10),
+                )
+
+        assert store.graph_write_jobs[0].locked_by == "worker_a"
+        assert store.graph_write_jobs[0].lock_expires_at == NOW + timedelta(minutes=11)
 
     asyncio.run(scenario())
 

@@ -379,6 +379,17 @@ WHERE id = %(job_id)s
 RETURNING *
 """
 
+_EXTEND_GRAPH_WRITE_LOCK_SQL = """
+UPDATE graph_write_jobs
+SET locked_at = %(now)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+WHERE id = %(job_id)s
+  AND status = 'processing'
+  AND locked_by = %(locked_by)s
+RETURNING *
+"""
+
 _MARK_GRAPH_WRITE_FAILED_SQL = """
 UPDATE graph_write_jobs
 SET attempts = attempts + 1,

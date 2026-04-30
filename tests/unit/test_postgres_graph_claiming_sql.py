@@ -52,3 +52,38 @@ def test_postgres_graph_claim_pending_enforces_group_backpressure() -> None:
     assert params["worker_id"] == "worker_b"
     assert params["lock_expires_at"] == now + timedelta(minutes=5)
     assert params["limit"] == 3
+
+
+def test_postgres_graph_extend_lock_requires_current_owner() -> None:
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    updated_job = replace(
+        graph_write_job(),
+        status="processing",
+        locked_at=now,
+        locked_by="worker_b",
+        lock_expires_at=now + timedelta(minutes=5),
+    )
+    connection = FakePostgresConnection(fetchrow_results=(graph_write_job_row(updated_job),))
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            updated = await tx.graph_write_jobs.extend_lock(
+                job_id=updated_job.id,
+                locked_by="worker_b",
+                now=now,
+                lock_duration=timedelta(minutes=5),
+            )
+
+        assert updated == updated_job
+
+    asyncio.run(scenario())
+
+    method, sql, params = connection.calls[0]
+    assert method == "fetchrow"
+    assert "UPDATE graph_write_jobs" in sql
+    assert "lock_expires_at = %(lock_expires_at)s" in sql
+    assert "AND status = 'processing'" in sql
+    assert "AND locked_by = %(locked_by)s" in sql
+    assert params["job_id"] == updated_job.id
+    assert params["locked_by"] == "worker_b"
+    assert params["lock_expires_at"] == now + timedelta(minutes=5)

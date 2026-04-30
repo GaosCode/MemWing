@@ -105,6 +105,24 @@ class InMemoryGraphWriteJobRepository:
         self._tx.state.graph_write_jobs[job_id] = updated
         return updated
 
+    async def extend_lock(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        lock_duration: timedelta,
+    ) -> GraphWriteJob:
+        job = self._get_locked_job(job_id, locked_by)
+        updated = replace(
+            job,
+            locked_at=now,
+            lock_expires_at=now + lock_duration,
+            updated_at=now,
+        )
+        self._tx.state.graph_write_jobs[job_id] = updated
+        return updated
+
     async def mark_failed(
         self,
         *,
