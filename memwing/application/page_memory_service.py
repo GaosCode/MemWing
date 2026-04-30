@@ -7,6 +7,7 @@ import uuid
 from memwing.core.models import (
     AuditEvent,
     MemoryItem,
+    MemoryStatus,
     MemoryPageVersion,
     PageMemory,
     PageMemoryScopeType,
@@ -24,6 +25,16 @@ from memwing.ports.page_memory_synthesis import (
 
 DEFAULT_PAGE_MEMORY_SOURCE_EVENT_LIMIT = 200
 DEFAULT_PAGE_MEMORY_LINKED_ITEM_LIMIT = 50
+NEEDS_REBUILD_REASON = "needs_rebuild"
+_PINNED_CURRENT_EXCLUDED_STATUSES = frozenset(
+    {
+        MemoryStatus.CANDIDATE,
+        MemoryStatus.ARCHIVED,
+        MemoryStatus.HIDDEN,
+        MemoryStatus.INVALID,
+        MemoryStatus.REMOVED,
+    }
+)
 
 
 class PageMemoryRebuildError(RuntimeError):
@@ -51,6 +62,12 @@ class PageMemoryRebuildResult:
     audit_event: AuditEvent
 
 
+@dataclass(frozen=True, slots=True)
+class PageMemoryRebuildNoOp:
+    page: PageMemory
+    reason: str
+
+
 class PageMemoryService:
     def __init__(
         self,
@@ -70,7 +87,7 @@ class PageMemoryService:
     async def rebuild(
         self,
         command: PageMemoryRebuildCommand,
-    ) -> PageMemoryRebuildResult:
+    ) -> PageMemoryRebuildResult | PageMemoryRebuildNoOp:
         _validate_command(command)
         async with self._unit_of_work.transaction() as tx:
             existing_page = await tx.memory_pages.get_by_scope(
@@ -86,6 +103,7 @@ class PageMemoryService:
                 scope=command.scope,
                 limit=self._linked_item_limit,
             )
+            current_linked_memory_items = _current_page_memory_items(linked_memory_items)
 
         if not source_events:
             raise PageMemoryRebuildError("page memory rebuild requires source_events")
@@ -95,13 +113,13 @@ class PageMemoryService:
                 scope=command.scope,
                 source_events=source_events,
                 existing_page=existing_page,
-                linked_memory_items=linked_memory_items,
+                linked_memory_items=current_linked_memory_items,
             )
         )
         _validate_synthesis(
             synthesis=synthesis,
             source_events=source_events,
-            linked_memory_items=linked_memory_items,
+            linked_memory_items=current_linked_memory_items,
         )
 
         async with self._unit_of_work.transaction() as tx:
@@ -115,6 +133,21 @@ class PageMemoryService:
                 scope_type=command.scope_type,
                 scope_id=command.scope_id,
             )
+            if command.reason == NEEDS_REBUILD_REASON and current_page is not None:
+                if not current_page.needs_rebuild:
+                    return PageMemoryRebuildNoOp(
+                        page=current_page,
+                        reason="already_rebuilt",
+                    )
+                current_source_events = await tx.source_events.list_recent_for_scope(
+                    scope=command.scope,
+                    limit=self._source_event_limit,
+                )
+                if _source_event_ids(current_source_events) != _source_event_ids(source_events):
+                    return PageMemoryRebuildNoOp(
+                        page=current_page,
+                        reason="source_window_changed",
+                    )
             now = self._clock.now()
             page = _page_from_synthesis(
                 command=command,
@@ -155,7 +188,9 @@ def _validate_command(command: PageMemoryRebuildCommand) -> None:
     if command.scope_type not in ("project", "group", "thread", "meeting"):
         raise PageMemoryRebuildError("page memory rebuild scope_type is not supported")
     _validate_scope_id_matches_scope(command)
-    _scope_group_id(command.scope)
+    group_id = _scope_group_id(command.scope)
+    if command.scope.safe_mode_enabled and group_id is None:
+        raise PageMemoryRebuildError("safe_mode requires group_id")
 
 
 def _validate_scope_id_matches_scope(command: PageMemoryRebuildCommand) -> None:
@@ -247,6 +282,20 @@ def _validate_synthesis(
         _require_text(open_question, "synthesis open_questions cannot be blank")
     for next_step in synthesis.next_steps:
         _require_text(next_step, "synthesis next_steps cannot be blank")
+
+
+def _current_page_memory_items(items: tuple[MemoryItem, ...]) -> tuple[MemoryItem, ...]:
+    return tuple(item for item in items if _is_current_page_memory_item(item))
+
+
+def _is_current_page_memory_item(item: MemoryItem) -> bool:
+    if item.status == MemoryStatus.ACTIVE:
+        return True
+    return item.pinned and item.status not in _PINNED_CURRENT_EXCLUDED_STATUSES
+
+
+def _source_event_ids(events: tuple[SourceEvent, ...]) -> tuple[str, ...]:
+    return tuple(event.id for event in events)
 
 
 def _require_text(value: str, message: str) -> None:

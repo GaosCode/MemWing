@@ -5,6 +5,7 @@ from typing import Protocol
 
 from memwing.application.page_memory_service import (
     PageMemoryRebuildCommand,
+    PageMemoryRebuildResult,
     PageMemoryService,
 )
 from memwing.application.scope_resolver import ResolvedScope
@@ -53,7 +54,7 @@ class PageMemoryWorker:
         rebuilt = 0
         for page in candidates:
             resolved_scope = await self._scope_resolver.resolve_page_memory_rebuild(page)
-            await self._page_memory_service.rebuild(
+            rebuild_result = await self._page_memory_service.rebuild(
                 PageMemoryRebuildCommand(
                     scope=resolved_scope.effective_scope,
                     scope_type=page.scope_type,
@@ -63,6 +64,7 @@ class PageMemoryWorker:
                     trace_id=f"page_memory:{job.id}:{page.id}",
                 )
             )
-            rebuilt += 1
+            if isinstance(rebuild_result, PageMemoryRebuildResult):
+                rebuilt += 1
 
         return PageMemoryWorkerResult(scanned=len(candidates), rebuilt=rebuilt)

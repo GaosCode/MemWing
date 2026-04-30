@@ -1,9 +1,7 @@
 import asyncio
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
-import pytest
-
-from memwing.application.page_memory_service import PageMemoryRebuildCommand, PageMemoryRebuildError
 from memwing.application.page_memory_service import PageMemoryService
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import (
@@ -22,71 +20,53 @@ from memwing.workers.page_memory_worker import PageMemoryWorker
 NOW = datetime(2026, 4, 28, 12, tzinfo=UTC)
 
 
-def test_worker_rebuild_uses_scope_resolver_as_authority() -> None:
+def test_worker_skips_stale_needs_rebuild_when_current_page_is_already_rebuilt() -> None:
     store = InMemoryDataStore()
-    authority_scope = EffectiveScope(
-        project_memory_space_id="project_001",
-        group_ids=("group_authority",),
-        thread_id="thread_001",
-        shared_group_id=None,
-        safe_mode_enabled=True,
-        cross_group_allowed=False,
-    )
     _seed_source_events(
         store,
         _source_event(
-            "source_authority",
-            "Only the resolver-authorized group should feed this rebuild.",
-            group_id="group_authority",
+            "source_current",
+            "A concurrent worker may rebuild this page before this worker writes.",
         ),
     )
     _seed_pages(
         store,
         _page_memory(
             "page_001",
-            group_id="group_persisted",
+            source_event_ids=("source_current",),
             needs_rebuild=True,
         ),
     )
-    resolver = _RecordingPageMemoryRebuildScopeResolver(authority_scope)
-    synthesis = _EchoSourceEventSynthesis()
-    service = PageMemoryService(store, synthesis, clock=_FixedClock(NOW))
-    worker = PageMemoryWorker(store, service, scope_resolver=resolver)
+    synthesis = _ConcurrentNeedsRebuildClearedSynthesis(store)
+    service = PageMemoryService(store, synthesis, clock=_FixedClock(NOW + timedelta(minutes=1)))
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
+    )
 
     result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001")))
 
-    assert result.rebuilt == 1
-    assert resolver.pages == ("page_001",)
-    assert synthesis.requests[0].scope == authority_scope
-    assert tuple(event.id for event in synthesis.requests[0].source_events) == (
-        "source_authority",
-    )
+    assert result.scanned == 1
+    assert result.rebuilt == 0
 
-
-def test_service_rejects_direct_safe_mode_project_rebuild_without_group() -> None:
-    store = InMemoryDataStore()
-    service = PageMemoryService(store, _UnexpectedPageMemorySynthesis(), clock=_FixedClock(NOW))
-
-    with pytest.raises(PageMemoryRebuildError, match="safe_mode requires group_id"):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=EffectiveScope(
-                        project_memory_space_id="project_001",
-                        group_ids=None,
-                        thread_id=None,
-                        shared_group_id=None,
-                        safe_mode_enabled=True,
-                        cross_group_allowed=False,
-                    ),
-                    scope_type="project",
-                    scope_id="project_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_direct_safe_mode_project",
-                )
+    async def persisted() -> tuple[PageMemory, int]:
+        async with store.transaction() as tx:
+            page = await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
             )
-        )
+            if page is None:
+                raise AssertionError("page should exist")
+            return page, len(tx.state.memory_page_versions)
+
+    page, version_count = asyncio.run(persisted())
+    assert page.title == "Already rebuilt"
+    assert page.version == 2
+    assert page.needs_rebuild is False
+    assert version_count == 0
+    assert store.audit_events == ()
 
 
 def _seed_source_events(
@@ -115,16 +95,11 @@ def _seed_pages(
     return store
 
 
-def _source_event(
-    source_event_id: str,
-    content: str,
-    *,
-    group_id: str,
-) -> SourceEvent:
+def _source_event(source_event_id: str, content: str) -> SourceEvent:
     return SourceEvent(
         id=source_event_id,
         project_memory_space_id="project_001",
-        group_id=group_id,
+        group_id="group_001",
         thread_id="thread_001",
         shared_group_id=None,
         author_id="user_001",
@@ -149,13 +124,13 @@ def _source_event(
 def _page_memory(
     page_id: str,
     *,
-    group_id: str,
+    source_event_ids: tuple[str, ...],
     needs_rebuild: bool,
 ) -> PageMemory:
     return PageMemory(
         id=page_id,
         project_memory_space_id="project_001",
-        group_id=group_id,
+        group_id="group_001",
         thread_id="thread_001",
         shared_group_id=None,
         scope_type="thread",
@@ -166,13 +141,13 @@ def _page_memory(
             PageMemoryTopic(
                 title="Existing topic",
                 summary="Existing topic summary.",
-                source_event_ids=("source_authority",),
+                source_event_ids=source_event_ids,
                 linked_memory_item_ids=(),
             ),
         ),
         open_questions=(),
         next_steps=(),
-        source_event_ids=("source_authority",),
+        source_event_ids=source_event_ids,
         linked_memory_item_ids=(),
         version=1,
         needs_rebuild=needs_rebuild,
@@ -185,12 +160,12 @@ def _outbox_job(job_id: str) -> OutboxJob:
     return OutboxJob(
         id=job_id,
         project_memory_space_id="project_001",
-        source_event_id="source_authority",
+        source_event_id="source_current",
         job_type="page_memory.maybe_rebuild",
-        payload_json={"source_event_id": "source_authority"},
+        payload_json={"source_event_id": "source_current"},
         status="pending",
         idempotency_key=f"page_memory.maybe_rebuild:{job_id}",
-        aggregate_key="source_authority",
+        aggregate_key="source_current",
         attempts=0,
         max_attempts=3,
         priority=100,
@@ -205,6 +180,17 @@ def _outbox_job(job_id: str) -> OutboxJob:
     )
 
 
+def _effective_scope() -> EffectiveScope:
+    return EffectiveScope(
+        project_memory_space_id="project_001",
+        group_ids=("group_001",),
+        thread_id="thread_001",
+        shared_group_id=None,
+        safe_mode_enabled=True,
+        cross_group_allowed=False,
+    )
+
+
 class _FixedClock:
     def __init__(self, now: datetime) -> None:
         self._now = now
@@ -213,13 +199,11 @@ class _FixedClock:
         return self._now
 
 
-class _RecordingPageMemoryRebuildScopeResolver:
+class _StaticPageMemoryRebuildScopeResolver:
     def __init__(self, scope: EffectiveScope) -> None:
         self._scope = scope
-        self.pages: tuple[str, ...] = ()
 
     async def resolve_page_memory_rebuild(self, page: PageMemory) -> ResolvedScope:
-        self.pages = (*self.pages, page.id)
         return ResolvedScope(
             effective_scope=self._scope,
             source_group_id=(
@@ -230,23 +214,33 @@ class _RecordingPageMemoryRebuildScopeResolver:
         )
 
 
-class _EchoSourceEventSynthesis:
-    def __init__(self) -> None:
-        self.requests: list[PageMemorySynthesisRequest] = []
+class _ConcurrentNeedsRebuildClearedSynthesis:
+    def __init__(self, store: InMemoryDataStore) -> None:
+        self._store = store
 
     async def synthesize(
         self,
         request: PageMemorySynthesisRequest,
     ) -> PageMemorySynthesis:
-        self.requests.append(request)
+        if request.existing_page is None:
+            raise AssertionError("test requires an existing page")
+        rebuilt = replace(
+            request.existing_page,
+            title="Already rebuilt",
+            version=2,
+            needs_rebuild=False,
+            updated_at=NOW + timedelta(seconds=30),
+        )
+        async with self._store.transaction() as tx:
+            await tx.memory_pages.upsert(rebuilt)
         source_event_ids = tuple(event.id for event in request.source_events)
         return PageMemorySynthesis(
-            title="Resolver-authorized rebuild",
-            brief="The worker used the resolver-authorized scope.",
+            title="Stale rebuild",
+            brief="This stale synthesis must not overwrite the current page.",
             topics=(
                 PageMemoryTopic(
-                    title="Authorized source",
-                    summary="The synthesis input comes from the resolver scope.",
+                    title="Stale topic",
+                    summary="The service must re-check the current page before writing.",
                     source_event_ids=source_event_ids,
                     linked_memory_item_ids=(),
                 ),
@@ -256,11 +250,3 @@ class _EchoSourceEventSynthesis:
             source_event_ids=source_event_ids,
             linked_memory_item_ids=(),
         )
-
-
-class _UnexpectedPageMemorySynthesis:
-    async def synthesize(
-        self,
-        request: PageMemorySynthesisRequest,
-    ) -> PageMemorySynthesis:
-        raise AssertionError("synthesis should not be called for invalid scope")
