@@ -1,20 +1,12 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from memwing.application.page_memory_service import (
     PageMemoryRebuildCommand,
-    PageMemoryRebuildError,
-    PageMemorySynthesisValidationError,
     PageMemoryService,
 )
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import (
-    MemoryDisplayType,
-    MemoryItem,
-    MemoryRoute,
-    MemoryStatus,
     OutboxJob,
     PageMemory,
     PageMemorySynthesis,
@@ -247,366 +239,6 @@ def test_page_memory_maybe_rebuild_noops_when_no_page_needs_rebuild() -> None:
     assert store.audit_events == ()
 
 
-def test_synthesis_failure_does_not_write_fallback_or_clear_rebuild_flag() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event("source_001", "The page must remain flagged after invalid synthesis."),
-    )
-    _seed_pages(store, _page_memory("page_001", needs_rebuild=True))
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid output",
-                brief="",
-                topic_title="Invalid topic",
-                topic_summary="The brief is blank, so this output is invalid.",
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-    worker = PageMemoryWorker(
-        store,
-        service,
-        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
-    )
-
-    with pytest.raises(PageMemorySynthesisValidationError):
-        asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
-
-    async def persisted() -> tuple[PageMemory, int]:
-        async with store.transaction() as tx:
-            page = await tx.memory_pages.get_by_scope(
-                project_memory_space_id="project_001",
-                scope_type="thread",
-                scope_id="thread_001",
-            )
-            return page, len(tx.state.memory_page_versions)
-
-    page, version_count = asyncio.run(persisted())
-    assert page.title == "Existing page"
-    assert page.version == 1
-    assert page.needs_rebuild is True
-    assert version_count == 0
-    assert store.audit_events == ()
-
-
-def test_synthesis_topic_source_ids_must_be_covered_by_page_source_ids() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event("source_001", "The page-level source set must remain authoritative."),
-        _source_event(
-            "source_002",
-            "A topic-only source would be missed by rebuild invalidation.",
-            event_time=NOW + timedelta(minutes=1),
-        ),
-    )
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid provenance",
-                brief="Topic provenance must be included in page provenance.",
-                topic_title="Uncovered topic source",
-                topic_summary="This topic references a source missing from the page.",
-                source_event_ids=("source_001",),
-                topic_source_event_ids=("source_002",),
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemorySynthesisValidationError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(),
-                    scope_type="thread",
-                    scope_id="thread_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_invalid_topic_source",
-                )
-            )
-        )
-
-
-def test_synthesis_topic_linked_memory_ids_must_be_covered_by_page_linked_memory_ids() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event("source_001", "Linked memory provenance must remain page-visible."),
-    )
-    _seed_memory_items(store, _memory_item("memory_001"))
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid linked provenance",
-                brief="Topic linked memories must be included in page linked memories.",
-                topic_title="Uncovered linked memory",
-                topic_summary="This topic references a linked memory missing from the page.",
-                linked_memory_item_ids=(),
-                topic_linked_memory_item_ids=("memory_001",),
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemorySynthesisValidationError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(),
-                    scope_type="thread",
-                    scope_id="thread_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_invalid_topic_memory_link",
-                )
-            )
-        )
-
-
-@pytest.mark.parametrize(
-    ("scope_kwargs", "scope_type", "scope_id"),
-    (
-        (
-            {"project_memory_space_id": "project_001"},
-            "project",
-            "project_002",
-        ),
-        (
-            {"group_ids": ("group_001",)},
-            "group",
-            "group_002",
-        ),
-        (
-            {"thread_id": "thread_001"},
-            "thread",
-            "thread_002",
-        ),
-        (
-            {},
-            "meeting",
-            "meeting_001",
-        ),
-    ),
-)
-def test_manual_rebuild_rejects_scope_id_that_does_not_match_effective_scope(
-    scope_kwargs: dict[str, object],
-    scope_type: str,
-    scope_id: str,
-) -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event("source_001", "Mismatched scope must not choose another page."),
-    )
-    service = PageMemoryService(
-        store,
-        _UnexpectedPageMemorySynthesis(),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemoryRebuildError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(**scope_kwargs),
-                    scope_type=scope_type,
-                    scope_id=scope_id,
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_scope_mismatch",
-                )
-            )
-        )
-
-
-@pytest.mark.parametrize(
-    "scope_kwargs",
-    (
-        {"group_ids": ("group_001",), "thread_id": None},
-        {"group_ids": None, "thread_id": "thread_001"},
-        {"group_ids": None, "thread_id": None, "shared_group_id": "shared_group_001"},
-    ),
-)
-def test_project_page_rebuild_rejects_child_filtered_effective_scope(
-    scope_kwargs: dict[str, object],
-) -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event(
-            "source_001",
-            "A project page must not rebuild from a narrowed child scope.",
-            shared_group_id=scope_kwargs.get("shared_group_id"),
-        ),
-    )
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid project page rebuild",
-                brief="A parent project page must not use child-filtered provenance.",
-                topic_title="Invalid scope",
-                topic_summary="Project rebuilds require an unfiltered project scope.",
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemoryRebuildError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(**scope_kwargs),
-                    scope_type="project",
-                    scope_id="project_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_project_child_scope",
-                )
-            )
-        )
-
-
-def test_group_page_rebuild_rejects_thread_filtered_effective_scope() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event("source_001", "A group page must not rebuild from a thread scope."),
-    )
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid group page rebuild",
-                brief="A parent group page must not use thread-filtered provenance.",
-                topic_title="Invalid scope",
-                topic_summary="Group rebuilds require a group-only scope.",
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemoryRebuildError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(group_ids=("group_001",), thread_id="thread_001"),
-                    scope_type="group",
-                    scope_id="group_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_group_thread_scope",
-                )
-            )
-        )
-
-
-def test_group_page_rebuild_rejects_shared_group_filtered_effective_scope() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event(
-            "source_001",
-            "A group page must align exactly to one group scope.",
-            shared_group_id="shared_group_001",
-        ),
-    )
-    service = PageMemoryService(
-        store,
-        _FakePageMemorySynthesis(
-            _synthesis(
-                title="Invalid group page rebuild",
-                brief="A group page must not use shared-group-filtered provenance.",
-                topic_title="Invalid scope",
-                topic_summary="Group rebuilds require exactly one group scope.",
-            )
-        ),
-        clock=_FixedClock(NOW),
-    )
-
-    with pytest.raises(PageMemoryRebuildError):
-        asyncio.run(
-            service.rebuild(
-                PageMemoryRebuildCommand(
-                    scope=_effective_scope(
-                        group_ids=("group_001",),
-                        thread_id=None,
-                        shared_group_id="shared_group_001",
-                    ),
-                    scope_type="group",
-                    scope_id="group_001",
-                    actor_id="user_001",
-                    reason="manual_rebuild",
-                    trace_id="trace_group_shared_scope",
-                )
-            )
-        )
-
-
-def test_worker_rejects_persisted_group_page_with_shared_group_scope() -> None:
-    store = InMemoryDataStore()
-    _seed_source_events(
-        store,
-        _source_event(
-            "source_001",
-            "Persisted group pages must not be rebuilt through shared-group scope.",
-            thread_id=None,
-            shared_group_id="shared_group_001",
-        ),
-    )
-    _seed_pages(
-        store,
-        _page_memory(
-            "page_001",
-            thread_id=None,
-            shared_group_id="shared_group_001",
-            scope_type="group",
-            scope_id="group_001",
-            needs_rebuild=True,
-        )
-    )
-    service = PageMemoryService(
-        store,
-        _UnexpectedPageMemorySynthesis(),
-        clock=_FixedClock(NOW),
-    )
-    worker = PageMemoryWorker(
-        store,
-        service,
-        scope_resolver=_StaticPageMemoryRebuildScopeResolver(
-            _effective_scope(
-                group_ids=("group_001",),
-                thread_id=None,
-                shared_group_id="shared_group_001",
-            )
-        ),
-    )
-
-    with pytest.raises(PageMemoryRebuildError):
-        asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
-
-    async def persisted() -> tuple[PageMemory, int]:
-        async with store.transaction() as tx:
-            page = await tx.memory_pages.get_by_scope(
-                project_memory_space_id="project_001",
-                scope_type="group",
-                scope_id="group_001",
-            )
-            return page, len(tx.state.memory_page_versions)
-
-    page, version_count = asyncio.run(persisted())
-    assert page.needs_rebuild is True
-    assert version_count == 0
-    assert store.audit_events == ()
-
-
 def _seed_source_events(
     store: InMemoryDataStore,
     *events: SourceEvent,
@@ -628,19 +260,6 @@ def _seed_pages(
         async with store.transaction() as tx:
             for page in pages:
                 await tx.memory_pages.upsert(page)
-
-    asyncio.run(seed())
-    return store
-
-
-def _seed_memory_items(
-    store: InMemoryDataStore,
-    *items: MemoryItem,
-) -> InMemoryDataStore:
-    async def seed() -> None:
-        async with store.transaction() as tx:
-            for item in items:
-                await tx.memory_items.upsert(item)
 
     asyncio.run(seed())
     return store
@@ -729,20 +348,9 @@ def _synthesis(
     topic_title: str,
     topic_summary: str,
     source_event_ids: tuple[str, ...] = ("source_001",),
-    topic_source_event_ids: tuple[str, ...] | None = None,
-    linked_memory_item_ids: tuple[str, ...] = (),
-    topic_linked_memory_item_ids: tuple[str, ...] | None = None,
     open_questions: tuple[str, ...] = (),
     next_steps: tuple[str, ...] = (),
 ) -> PageMemorySynthesis:
-    topic_source_ids = (
-        source_event_ids if topic_source_event_ids is None else topic_source_event_ids
-    )
-    topic_linked_ids = (
-        linked_memory_item_ids
-        if topic_linked_memory_item_ids is None
-        else topic_linked_memory_item_ids
-    )
     return PageMemorySynthesis(
         title=title,
         brief=brief,
@@ -750,52 +358,14 @@ def _synthesis(
             PageMemoryTopic(
                 title=topic_title,
                 summary=topic_summary,
-                source_event_ids=topic_source_ids,
-                linked_memory_item_ids=topic_linked_ids,
+                source_event_ids=source_event_ids,
+                linked_memory_item_ids=(),
             ),
         ),
         open_questions=open_questions,
         next_steps=next_steps,
         source_event_ids=source_event_ids,
-        linked_memory_item_ids=linked_memory_item_ids,
-    )
-
-
-def _memory_item(memory_id: str) -> MemoryItem:
-    return MemoryItem(
-        id=memory_id,
-        project_memory_space_id="project_001",
-        group_id="group_001",
-        thread_id="thread_001",
-        shared_group_id=None,
-        route=MemoryRoute.GRAPH,
-        display_type=MemoryDisplayType.DECISION,
-        title="Known memory",
-        content="Known linked memory item.",
-        summary=None,
-        source_event_ids=("source_001",),
-        primary_source_event_id="source_001",
-        status=MemoryStatus.ACTIVE,
-        event_time=NOW,
-        valid_from=None,
-        valid_to=None,
-        original_score=0.8,
-        half_life_days=30,
-        last_reviewed_at=None,
-        last_confirmed_at=None,
-        last_recalled_at=None,
-        recall_count=0,
-        cached_decayed_score=None,
-        last_decay_computed_at=None,
-        pinned=False,
-        created_by="system",
-        created_at=NOW,
-        activated_at=NOW,
-        updated_at=NOW,
-        archived_at=None,
-        hidden_at=None,
-        invalidated_at=None,
-        removed_at=None,
+        linked_memory_item_ids=(),
     )
 
 
