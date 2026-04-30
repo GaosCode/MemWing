@@ -49,6 +49,8 @@ def test_postgres_graph_claim_pending_enforces_group_backpressure() -> None:
     assert "PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id" in sql
     assert "project_rank = 1" in sql
     assert "group_rank = 1" in sql
+    assert "CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END" in sql
+    assert "CASE WHEN candidates.status = 'processing' THEN 0 ELSE 1 END" in sql
     assert params["worker_id"] == "worker_b"
     assert params["lock_expires_at"] == now + timedelta(minutes=5)
     assert params["limit"] == 3

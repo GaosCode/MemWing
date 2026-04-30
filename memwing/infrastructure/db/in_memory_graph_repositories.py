@@ -52,7 +52,7 @@ class InMemoryGraphWriteJobRepository:
         ]
         eligible.sort(
             key=lambda job: (
-                0 if job.status == "pending" else 1,
+                0 if job.status == "processing" else 1,
                 job.next_run_at,
                 -job.priority,
                 job.created_at,

@@ -302,7 +302,7 @@ WITH candidates AS (
         ROW_NUMBER() OVER (
             PARTITION BY job.project_memory_space_id
             ORDER BY
-                CASE WHEN job.status = 'pending' THEN 0 ELSE 1 END,
+                CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
                 job.next_run_at,
                 job.priority DESC,
                 job.created_at
@@ -310,7 +310,7 @@ WITH candidates AS (
         ROW_NUMBER() OVER (
             PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id
             ORDER BY
-                CASE WHEN job.status = 'pending' THEN 0 ELSE 1 END,
+                CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
                 job.next_run_at,
                 job.priority DESC,
                 job.created_at
@@ -347,7 +347,7 @@ claim AS (
     WHERE candidates.project_rank = 1
       AND candidates.group_rank = 1
     ORDER BY
-        CASE WHEN candidates.status = 'pending' THEN 0 ELSE 1 END,
+        CASE WHEN candidates.status = 'processing' THEN 0 ELSE 1 END,
         candidates.next_run_at,
         candidates.priority DESC,
         candidates.created_at

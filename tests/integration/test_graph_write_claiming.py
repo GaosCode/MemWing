@@ -47,6 +47,34 @@ def test_expired_processing_graph_job_can_be_reclaimed_by_another_worker() -> No
     asyncio.run(scenario())
 
 
+def test_expired_processing_graph_job_is_claimed_before_pending_same_group() -> None:
+    store = InMemoryDataStore()
+    store.add_graph_write_job(
+        _job(
+            "graph_job_expired",
+            status="processing",
+            locked_by="worker_a",
+            lock_expires_at=NOW - timedelta(seconds=1),
+        )
+    )
+    store.add_graph_write_job(_job("graph_job_pending"))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.graph_write_jobs.claim_pending(
+                now=NOW,
+                worker_id="worker_b",
+                lock_duration=timedelta(minutes=5),
+                limit=1,
+            )
+
+        assert tuple(job.id for job in claimed) == ("graph_job_expired",)
+        assert store.graph_write_jobs[0].locked_by == "worker_b"
+        assert store.graph_write_jobs[1].status == "pending"
+
+    asyncio.run(scenario())
+
+
 def test_unexpired_processing_graph_job_blocks_same_thread_group_claim() -> None:
     store = InMemoryDataStore()
     store.add_graph_write_job(
