@@ -127,11 +127,7 @@ class GraphWriteWorker:
         graph_result: GraphWriteResult,
         now: datetime,
     ) -> int:
-        link_count = await self._write_graph_links_under_current_lock(
-            job=job,
-            graph_result=graph_result,
-            now=now,
-        )
+        self._ensure_lifecycle_port_for_invalidated_facts(graph_result.invalidated_facts)
         invalidated_memory_ids = await self._memory_ids_for_invalidated_facts(
             facts=graph_result.invalidated_facts,
             project_memory_space_id=job.project_memory_space_id,
@@ -139,6 +135,11 @@ class GraphWriteWorker:
         await self._mark_invalidated_memories_needs_review(
             job=job,
             memory_ids=invalidated_memory_ids,
+            now=now,
+        )
+        link_count = await self._write_graph_links_under_current_lock(
+            job=job,
+            graph_result=graph_result,
             now=now,
         )
         async with self._unit_of_work.transaction() as tx:
@@ -243,6 +244,15 @@ class GraphWriteWorker:
                         seen.add(item.id)
                         memory_ids.append(item.id)
         return tuple(memory_ids)
+
+    def _ensure_lifecycle_port_for_invalidated_facts(
+        self,
+        facts: tuple[GraphFact, ...],
+    ) -> None:
+        if facts and self._lifecycle_transition is None:
+            raise GraphWriteWorkerInputError(
+                "lifecycle transition port required for graph invalidations"
+            )
 
     async def _mark_invalidated_memories_needs_review(
         self,

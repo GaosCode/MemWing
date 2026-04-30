@@ -99,7 +99,7 @@ def test_graph_write_worker_stops_lifecycle_invalidations_after_lost_lock() -> N
         assert first.status is MemoryStatus.NEEDS_REVIEW
         assert second.status is MemoryStatus.ACTIVE
         assert [request.memory_id for request in lifecycle.requests] == ["memory_old"]
-        assert store.memory_graph_links
+        assert store.memory_graph_links == ()
         assert store.graph_write_jobs[0].locked_by == "graph_worker_002"
 
     asyncio.run(scenario())
