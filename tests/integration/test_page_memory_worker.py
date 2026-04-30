@@ -440,6 +440,95 @@ def test_group_page_rebuild_rejects_thread_filtered_effective_scope() -> None:
         )
 
 
+def test_group_page_rebuild_rejects_shared_group_filtered_effective_scope() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event(
+            "source_001",
+            "A group page must align exactly to one group scope.",
+            shared_group_id="shared_group_001",
+        ),
+    )
+    service = PageMemoryService(
+        store,
+        _FakePageMemorySynthesis(
+            _synthesis(
+                title="Invalid group page rebuild",
+                brief="A group page must not use shared-group-filtered provenance.",
+                topic_title="Invalid scope",
+                topic_summary="Group rebuilds require exactly one group scope.",
+            )
+        ),
+        clock=_FixedClock(NOW),
+    )
+
+    with pytest.raises(PageMemoryRebuildError):
+        asyncio.run(
+            service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=_effective_scope(
+                        group_ids=("group_001",),
+                        thread_id=None,
+                        shared_group_id="shared_group_001",
+                    ),
+                    scope_type="group",
+                    scope_id="group_001",
+                    actor_id="user_001",
+                    reason="manual_rebuild",
+                    trace_id="trace_group_shared_scope",
+                )
+            )
+        )
+
+
+def test_worker_rejects_persisted_group_page_with_shared_group_scope() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event(
+            "source_001",
+            "Persisted group pages must not be rebuilt through shared-group scope.",
+            thread_id=None,
+            shared_group_id="shared_group_001",
+        ),
+    )
+    _seed_pages(
+        store,
+        _page_memory(
+            "page_001",
+            thread_id=None,
+            shared_group_id="shared_group_001",
+            scope_type="group",
+            scope_id="group_001",
+            needs_rebuild=True,
+        )
+    )
+    service = PageMemoryService(
+        store,
+        _UnexpectedPageMemorySynthesis(),
+        clock=_FixedClock(NOW),
+    )
+    worker = PageMemoryWorker(store, service)
+
+    with pytest.raises(PageMemoryRebuildError):
+        asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
+
+    async def persisted() -> tuple[PageMemory, int]:
+        async with store.transaction() as tx:
+            page = await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="group",
+                scope_id="group_001",
+            )
+            return page, len(tx.state.memory_page_versions)
+
+    page, version_count = asyncio.run(persisted())
+    assert page.needs_rebuild is True
+    assert version_count == 0
+    assert store.audit_events == ()
+
+
 def _seed_source_events(
     store: InMemoryDataStore,
     *events: SourceEvent,
@@ -520,6 +609,8 @@ def _page_memory(
     project_memory_space_id: str = "project_001",
     group_id: str = "group_001",
     thread_id: str = "thread_001",
+    shared_group_id: str | None = None,
+    scope_type: str = "thread",
     scope_id: str = "thread_001",
     source_event_ids: tuple[str, ...] = ("source_001",),
     needs_rebuild: bool = False,
@@ -529,8 +620,8 @@ def _page_memory(
         project_memory_space_id=project_memory_space_id,
         group_id=group_id,
         thread_id=thread_id,
-        shared_group_id=None,
-        scope_type="thread",
+        shared_group_id=shared_group_id,
+        scope_type=scope_type,
         scope_id=scope_id,
         title="Existing page",
         brief="Existing page content.",
