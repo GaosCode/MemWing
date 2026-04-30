@@ -8,6 +8,7 @@ from memwing.api.agent_runtime import RememberEventResult
 from memwing.core.models import (
     AuditEvent,
     EvidenceChunk,
+    ForgettingReviewCandidate,
     GraphWriteJob,
     MemoryGraphLink,
     MemoryItem,
@@ -184,6 +185,14 @@ class MemoryItemRepositoryPort(Protocol):
     ) -> tuple[MemoryItem, ...]:
         ...
 
+    async def list_decay_candidates(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        ...
+
 
 class MemoryVersionRepositoryPort(Protocol):
     async def record(self, version: MemoryVersion) -> MemoryVersion:
@@ -299,6 +308,22 @@ class MemoryGraphLinkRepositoryPort(Protocol):
         ...
 
 
+class ForgettingReviewCandidateRepositoryPort(Protocol):
+    async def upsert(
+        self,
+        candidate: ForgettingReviewCandidate,
+    ) -> ForgettingReviewCandidate:
+        ...
+
+    async def list_pending(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[ForgettingReviewCandidate, ...]:
+        ...
+
+
 class EventStoreTransactionPort(Protocol):
     source_events: SourceEventRepositoryPort
     audit_events: AuditEventRepositoryPort
@@ -311,6 +336,7 @@ class EventStoreTransactionPort(Protocol):
     memory_page_versions: MemoryPageVersionRepositoryPort
     graph_write_jobs: GraphWriteJobRepositoryPort
     memory_graph_links: MemoryGraphLinkRepositoryPort
+    forgetting_review_candidates: ForgettingReviewCandidateRepositoryPort
 
 
 class EventStoreUnitOfWorkPort(Protocol):

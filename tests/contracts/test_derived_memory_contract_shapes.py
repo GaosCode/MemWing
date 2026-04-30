@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from memwing.core.models import (
     EvidenceChunk,
+    ForgettingReviewCandidate,
     LongTermFilterItem,
     MemoryDisplayType,
     MemoryGraphLink,
@@ -179,3 +180,23 @@ def test_lane_f_filter_and_version_contracts_do_not_bypass_lifecycle() -> None:
     assert candidate.display_type is MemoryDisplayType.DECISION
     assert candidate.source_event_ids == ("source_001",)
     assert version.status is MemoryStatus.CANDIDATE
+
+
+def test_forgetting_review_candidate_contract_shape() -> None:
+    candidate = ForgettingReviewCandidate(
+        id="forgetting_review_001",
+        memory_id="memory_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id=None,
+        decayed_score=0.42,
+        threshold=0.5,
+        reason="score_below_threshold",
+        status="pending",
+        created_at=datetime(2026, 4, 30, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 30, tzinfo=UTC),
+    )
+
+    assert candidate.memory_id == "memory_001"
+    assert candidate.status == "pending"
+    assert candidate.decayed_score == 0.42

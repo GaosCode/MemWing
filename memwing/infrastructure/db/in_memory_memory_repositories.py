@@ -4,8 +4,10 @@ from dataclasses import replace
 from datetime import datetime
 
 from memwing.core.models import (
+    ForgettingReviewCandidate,
     MemoryItem,
     MemoryPageVersion,
+    MemoryStatus,
     MemoryVersion,
     PageMemory,
     PageMemoryScopeType,
@@ -56,6 +58,77 @@ class InMemoryMemoryItemRepository:
         ]
         items.sort(key=lambda item: (item.updated_at, item.id), reverse=True)
         return tuple(items[:limit])
+
+    async def list_decay_candidates(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        items = [
+            item
+            for item in self._tx.state.memory_items.values()
+            if item.project_memory_space_id == project_memory_space_id
+            and item.status
+            in (
+                MemoryStatus.ACTIVE,
+                MemoryStatus.FADING,
+                MemoryStatus.NEEDS_REVIEW,
+            )
+            and item.removed_at is None
+        ]
+        items.sort(
+            key=lambda item: (
+                item.last_decay_computed_at is not None,
+                item.last_decay_computed_at or item.updated_at,
+                item.id,
+            )
+        )
+        return tuple(items[:limit])
+
+
+class InMemoryForgettingReviewCandidateRepository:
+    def __init__(self, tx: InMemoryTransactionView) -> None:
+        self._tx = tx
+
+    async def upsert(
+        self,
+        candidate: ForgettingReviewCandidate,
+    ) -> ForgettingReviewCandidate:
+        key = (candidate.memory_id, candidate.reason, candidate.status)
+        existing_id = self._tx.state.forgetting_review_by_memory_reason_status.get(key)
+        if existing_id is not None:
+            existing = self._tx.state.forgetting_review_candidates[existing_id]
+            updated = replace(
+                existing,
+                project_memory_space_id=candidate.project_memory_space_id,
+                group_id=candidate.group_id,
+                thread_id=candidate.thread_id,
+                decayed_score=candidate.decayed_score,
+                threshold=candidate.threshold,
+                updated_at=candidate.updated_at,
+            )
+            self._tx.state.forgetting_review_candidates[existing_id] = updated
+            return updated
+
+        self._tx.state.forgetting_review_candidates[candidate.id] = candidate
+        self._tx.state.forgetting_review_by_memory_reason_status[key] = candidate.id
+        return candidate
+
+    async def list_pending(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[ForgettingReviewCandidate, ...]:
+        candidates = [
+            candidate
+            for candidate in self._tx.state.forgetting_review_candidates.values()
+            if candidate.project_memory_space_id == project_memory_space_id
+            and candidate.status == "pending"
+        ]
+        candidates.sort(key=lambda candidate: (candidate.updated_at, candidate.id))
+        return tuple(candidates[:limit])
 
 
 class InMemoryMemoryVersionRepository:

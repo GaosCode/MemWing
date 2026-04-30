@@ -40,6 +40,7 @@ PageMemoryScopeType = Literal["project", "group", "thread", "meeting"]
 MemoryGraphLinkType = Literal["fact", "episode", "entity", "redaction_marker"]
 GraphWriteJobStatus = Literal["pending", "processing", "succeeded", "retry", "dead_letter"]
 OutboxJobStatus = Literal["pending", "processing", "succeeded", "dead_letter"]
+ForgettingReviewStatus = Literal["pending", "resolved", "skipped"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,21 @@ class MemoryVersion:
     changed_by: MemoryChangedBy
     change_reason: str
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ForgettingReviewCandidate:
+    id: str
+    memory_id: str
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    decayed_score: float
+    threshold: float
+    reason: str
+    status: ForgettingReviewStatus
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

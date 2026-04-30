@@ -22,6 +22,7 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
         "evidence_chunks",
         "working_memory_entries",
         "memory_items",
+        "forgetting_review_candidates",
         "memory_versions",
         "memory_pages",
         "memory_page_versions",
@@ -44,6 +45,8 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
     assert "FOR UPDATE SKIP LOCKED" in migration
     assert "idx_memory_items_project_status_display_updated" in migration
     assert "idx_memory_items_project_group_status_updated" in migration
+    assert "UNIQUE (memory_id, reason, status)" in migration
+    assert "idx_forgetting_review_candidates_project_status" in migration
     assert "idx_graph_write_jobs_project_thread_saga" in migration
     assert "memory_id text NOT NULL REFERENCES memory_items(id)" in migration
     assert "idx_graph_write_jobs_memory" in migration

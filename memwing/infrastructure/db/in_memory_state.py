@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from memwing.core.models import (
     AuditEvent,
     EvidenceChunk,
+    ForgettingReviewCandidate,
     GraphWriteJob,
     MemoryGraphLink,
     MemoryItem,
@@ -46,6 +47,8 @@ class InMemoryState:
     graph_job_by_idempotency_key: dict[str, str] = field(default_factory=dict)
     memory_graph_links: dict[str, MemoryGraphLink] = field(default_factory=dict)
     memory_graph_link_by_backend_object: dict[tuple[str, str, str, str, str], str] = field(default_factory=dict)
+    forgetting_review_candidates: dict[str, ForgettingReviewCandidate] = field(default_factory=dict)
+    forgetting_review_by_memory_reason_status: dict[tuple[str, str, str], str] = field(default_factory=dict)
     projects: dict[str, ProjectMemorySpace] = field(default_factory=dict)
     runtime_bindings: list[RuntimeScopeBinding] = field(default_factory=list)
     platform_bindings: list[PlatformScopeBinding] = field(default_factory=list)

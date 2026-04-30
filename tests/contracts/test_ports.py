@@ -33,6 +33,7 @@ from memwing.ports.event_store import (
     EventStorePort,
     EventStoreTransactionPort,
     EvidenceChunkRepositoryPort,
+    ForgettingReviewCandidateRepositoryPort,
     GraphWriteJobRepositoryPort,
     SourceEventRepositoryPort,
     MemoryGraphLinkRepositoryPort,
@@ -208,6 +209,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hints["memory_page_versions"] is MemoryPageVersionRepositoryPort
     assert hints["graph_write_jobs"] is GraphWriteJobRepositoryPort
     assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
+    assert hints["forgetting_review_candidates"] is ForgettingReviewCandidateRepositoryPort
 
     assert hasattr(SourceEventRepositoryPort, "list_for_scope")
     assert hasattr(SourceEventRepositoryPort, "list_recent_for_scope")
@@ -215,6 +217,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
     assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
     assert hasattr(MemoryItemRepositoryPort, "list_for_scope")
+    assert hasattr(MemoryItemRepositoryPort, "list_decay_candidates")
     assert hasattr(MemoryItemRepositoryPort, "get_for_update")
     assert hasattr(MemoryVersionRepositoryPort, "get_latest")
     assert hasattr(MemoryPageRepositoryPort, "lock_scope")

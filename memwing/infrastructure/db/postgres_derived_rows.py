@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from memwing.core.models import (
     EvidenceChunk,
+    ForgettingReviewCandidate,
     GraphWriteJob,
     MemoryDisplayType,
     MemoryGraphLink,
@@ -100,6 +101,22 @@ def memory_item_from_row(row: Row) -> MemoryItem:
         invalidated_at=_optional_datetime(row, "invalidated_at"),
         removed_at=_optional_datetime(row, "removed_at"),
         lifecycle_revision=_int(row, "lifecycle_revision"),
+    )
+
+
+def forgetting_review_candidate_from_row(row: Row) -> ForgettingReviewCandidate:
+    return ForgettingReviewCandidate(
+        id=_text(row, "id"),
+        memory_id=_text(row, "memory_id"),
+        project_memory_space_id=_text(row, "project_memory_space_id"),
+        group_id=_optional_text(row, "group_id"),
+        thread_id=_optional_text(row, "thread_id"),
+        decayed_score=_float(row, "decayed_score"),
+        threshold=_float(row, "threshold"),
+        reason=_text(row, "reason"),
+        status=_text(row, "status"),
+        created_at=_datetime(row, "created_at"),
+        updated_at=_datetime(row, "updated_at"),
     )
 
 

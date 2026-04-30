@@ -22,6 +22,7 @@ from .postgres_derived_sql import (
     _GET_MEMORY_ITEM_SQL,
     _GET_LATEST_MEMORY_VERSION_SQL,
     _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
+    _LIST_MEMORY_ITEMS_DECAY_CANDIDATES_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL,
     _INSERT_MEMORY_PAGE_VERSION_SQL,
@@ -78,6 +79,21 @@ class PostgresMemoryItemRepository:
                 "group_ids": scope.group_ids,
                 "thread_id": scope.thread_id,
                 "shared_group_id": scope.shared_group_id,
+                "limit": limit,
+            },
+        )
+        return tuple(memory_item_from_row(row) for row in rows)
+
+    async def list_decay_candidates(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[MemoryItem, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_ITEMS_DECAY_CANDIDATES_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
                 "limit": limit,
             },
         )

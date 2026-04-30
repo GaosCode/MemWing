@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from memwing.core.models import (
     EvidenceChunk,
+    ForgettingReviewCandidate,
     GraphWriteJob,
     MemoryDisplayType,
     MemoryGraphLink,
@@ -48,6 +49,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             )
             working_entry = await tx.working_memory_entries.append(_working_memory_entry())
             memory = await tx.memory_items.upsert(_memory_item())
+            decay_memory = await tx.memory_items.upsert(_decay_memory_item())
             version = await tx.memory_versions.record(_memory_version())
             page = await tx.memory_pages.upsert(_page_memory())
             duplicated_page = await tx.memory_pages.upsert(
@@ -56,6 +58,9 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             page_version = await tx.memory_page_versions.record(_page_version())
             graph_job = await tx.graph_write_jobs.enqueue(_graph_job())
             graph_link = await tx.memory_graph_links.upsert(_graph_link())
+            review_candidate = await tx.forgetting_review_candidates.upsert(
+                _forgetting_review_candidate()
+            )
 
         assert inserted_source is True
         assert inserted_later_source is True
@@ -64,6 +69,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
         assert duplicated_chunk.id == "chunk_001"
         assert working_entry.source_event_id == "source_001"
         assert memory.status is MemoryStatus.CANDIDATE
+        assert decay_memory.status is MemoryStatus.ACTIVE
         assert version.memory_id == memory.id
         assert page.version == 1
         assert duplicated_page.id == "page_001"
@@ -71,6 +77,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
         assert page_version.page_id == page.id
         assert graph_job.id == "graph_job_001"
         assert graph_link.memory_id == memory.id
+        assert review_candidate.id == "forgetting_review_001"
 
         async with store.transaction() as tx:
             assert await tx.memory_items.get("memory_001") == memory
@@ -106,6 +113,14 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
                 scope=_effective_scope(),
                 limit=10,
             ) == (memory,)
+            assert await tx.memory_items.list_decay_candidates(
+                project_memory_space_id="project_001",
+                limit=10,
+            ) == (decay_memory,)
+            assert await tx.forgetting_review_candidates.list_pending(
+                project_memory_space_id="project_001",
+                limit=10,
+            ) == (_forgetting_review_candidate(),)
             assert await tx.memory_versions.get_latest("memory_001") == version
             assert await tx.memory_graph_links.list_by_memory("memory_001") == (graph_link,)
             assert await tx.source_events.list_for_scope(
@@ -246,6 +261,21 @@ def _memory_item() -> MemoryItem:
     )
 
 
+def _decay_memory_item() -> MemoryItem:
+    return replace(
+        _memory_item(),
+        id="memory_decay_001",
+        group_id="group_decay",
+        thread_id=None,
+        title="Active decay memory",
+        source_event_ids=("source_002",),
+        primary_source_event_id="source_002",
+        status=MemoryStatus.ACTIVE,
+        activated_at=NOW,
+        updated_at=NOW - timedelta(minutes=1),
+    )
+
+
 def _memory_version() -> MemoryVersion:
     return MemoryVersion(
         id="memory_version_001",
@@ -361,4 +391,20 @@ def _graph_link() -> MemoryGraphLink:
         backend_object_id="edge_001",
         link_type="fact",
         created_at=NOW,
+    )
+
+
+def _forgetting_review_candidate() -> ForgettingReviewCandidate:
+    return ForgettingReviewCandidate(
+        id="forgetting_review_001",
+        memory_id="memory_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        decayed_score=0.42,
+        threshold=0.5,
+        reason="score_below_threshold",
+        status="pending",
+        created_at=NOW,
+        updated_at=NOW,
     )

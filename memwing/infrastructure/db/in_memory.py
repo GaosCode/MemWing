@@ -3,7 +3,14 @@ from __future__ import annotations
 import asyncio
 import copy
 
-from memwing.core.models import AuditEvent, GraphWriteJob, MemoryGraphLink, OutboxJob, SourceEvent
+from memwing.core.models import (
+    AuditEvent,
+    ForgettingReviewCandidate,
+    GraphWriteJob,
+    MemoryGraphLink,
+    OutboxJob,
+    SourceEvent,
+)
 from memwing.core.scope_patterns import session_pattern_matches
 from memwing.core.scope import (
     GroupMemorySettings,
@@ -21,6 +28,7 @@ from .in_memory_graph_repositories import (
     InMemoryMemoryGraphLinkRepository,
 )
 from .in_memory_memory_repositories import (
+    InMemoryForgettingReviewCandidateRepository,
     InMemoryMemoryItemRepository,
     InMemoryMemoryPageRepository,
     InMemoryMemoryPageVersionRepository,
@@ -59,6 +67,10 @@ class InMemoryDataStore:
     @property
     def memory_graph_links(self) -> tuple[MemoryGraphLink, ...]:
         return tuple(self._state.memory_graph_links.values())
+
+    @property
+    def forgetting_review_candidates(self) -> tuple[ForgettingReviewCandidate, ...]:
+        return tuple(self._state.forgetting_review_candidates.values())
 
     def add_project_memory_space(self, space: ProjectMemorySpace) -> None:
         self._state.projects[space.id] = space
@@ -148,6 +160,7 @@ class _Transaction:
         self.memory_page_versions = InMemoryMemoryPageVersionRepository(self)
         self.graph_write_jobs = InMemoryGraphWriteJobRepository(self)
         self.memory_graph_links = InMemoryMemoryGraphLinkRepository(self)
+        self.forgetting_review_candidates = InMemoryForgettingReviewCandidateRepository(self)
 
     async def __aenter__(self) -> _Transaction:
         await self._store._lock.acquire()

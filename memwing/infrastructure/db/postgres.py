@@ -20,6 +20,7 @@ from .postgres_graph_repositories import (
     PostgresGraphWriteJobRepository,
     PostgresMemoryGraphLinkRepository,
 )
+from .postgres_forgetting_review_repositories import PostgresForgettingReviewCandidateRepository
 from .postgres_memory_repositories import (
     PostgresMemoryItemRepository,
     PostgresMemoryPageRepository,
@@ -158,6 +159,7 @@ class PostgresTransaction(PostgresExecutor):
         self.memory_page_versions = PostgresMemoryPageVersionRepository(self)
         self.graph_write_jobs = PostgresGraphWriteJobRepository(self)
         self.memory_graph_links = PostgresMemoryGraphLinkRepository(self)
+        self.forgetting_review_candidates = PostgresForgettingReviewCandidateRepository(self)
 
     async def __aenter__(self) -> PostgresTransaction:
         self._context = self._connection.transaction()

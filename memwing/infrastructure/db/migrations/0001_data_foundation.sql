@@ -265,6 +265,24 @@ CREATE INDEX IF NOT EXISTS idx_memory_items_project_group_status_updated
 CREATE INDEX IF NOT EXISTS idx_memory_items_review_touch
     ON memory_items (last_reviewed_at, last_confirmed_at);
 
+CREATE TABLE IF NOT EXISTS forgetting_review_candidates (
+    id text PRIMARY KEY,
+    memory_id text NOT NULL REFERENCES memory_items(id),
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    group_id text,
+    thread_id text,
+    decayed_score double precision NOT NULL,
+    threshold double precision NOT NULL,
+    reason text NOT NULL,
+    status text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (memory_id, reason, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_forgetting_review_candidates_project_status
+    ON forgetting_review_candidates (project_memory_space_id, status, updated_at);
+
 CREATE TABLE IF NOT EXISTS memory_versions (
     id text PRIMARY KEY,
     memory_id text NOT NULL REFERENCES memory_items(id),

@@ -166,6 +166,47 @@ ORDER BY updated_at DESC, id
 LIMIT %(limit)s
 """
 
+_LIST_MEMORY_ITEMS_DECAY_CANDIDATES_SQL = """
+SELECT *
+FROM memory_items
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND status IN ('active', 'fading', 'needs_review')
+  AND removed_at IS NULL
+ORDER BY
+    last_decay_computed_at IS NOT NULL,
+    COALESCE(last_decay_computed_at, updated_at),
+    id
+LIMIT %(limit)s
+"""
+
+_UPSERT_FORGETTING_REVIEW_CANDIDATE_SQL = """
+INSERT INTO forgetting_review_candidates (
+    id, memory_id, project_memory_space_id, group_id, thread_id, decayed_score,
+    threshold, reason, status, created_at, updated_at
+) VALUES (
+    %(id)s, %(memory_id)s, %(project_memory_space_id)s, %(group_id)s,
+    %(thread_id)s, %(decayed_score)s, %(threshold)s, %(reason)s, %(status)s,
+    %(created_at)s, %(updated_at)s
+)
+ON CONFLICT (memory_id, reason, status) DO UPDATE
+SET project_memory_space_id = EXCLUDED.project_memory_space_id,
+    group_id = EXCLUDED.group_id,
+    thread_id = EXCLUDED.thread_id,
+    decayed_score = EXCLUDED.decayed_score,
+    threshold = EXCLUDED.threshold,
+    updated_at = EXCLUDED.updated_at
+RETURNING *
+"""
+
+_LIST_PENDING_FORGETTING_REVIEW_CANDIDATES_SQL = """
+SELECT *
+FROM forgetting_review_candidates
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND status = 'pending'
+ORDER BY updated_at, id
+LIMIT %(limit)s
+"""
+
 _INSERT_MEMORY_VERSION_SQL = """
 INSERT INTO memory_versions (
     id, memory_id, version, title, content, summary, status, source_event_ids,
