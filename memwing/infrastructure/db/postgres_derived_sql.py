@@ -300,6 +300,14 @@ WITH candidates AS (
         job.priority,
         job.created_at,
         ROW_NUMBER() OVER (
+            PARTITION BY job.project_memory_space_id
+            ORDER BY
+                CASE WHEN job.status = 'pending' THEN 0 ELSE 1 END,
+                job.next_run_at,
+                job.priority DESC,
+                job.created_at
+        ) AS project_rank,
+        ROW_NUMBER() OVER (
             PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id
             ORDER BY
                 CASE WHEN job.status = 'pending' THEN 0 ELSE 1 END,
@@ -321,12 +329,23 @@ WITH candidates AS (
             AND active.status = 'processing'
             AND (active.lock_expires_at IS NULL OR active.lock_expires_at > %(now)s)
       )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM graph_write_jobs AS project_active
+          WHERE project_active.project_memory_space_id = job.project_memory_space_id
+            AND project_active.status = 'processing'
+            AND (
+                project_active.lock_expires_at IS NULL
+                OR project_active.lock_expires_at > %(now)s
+            )
+      )
 ),
 claim AS (
     SELECT job.id
     FROM graph_write_jobs AS job
     INNER JOIN candidates ON candidates.id = job.id
-    WHERE candidates.group_rank = 1
+    WHERE candidates.project_rank = 1
+      AND candidates.group_rank = 1
     ORDER BY
         CASE WHEN candidates.status = 'pending' THEN 0 ELSE 1 END,
         candidates.next_run_at,

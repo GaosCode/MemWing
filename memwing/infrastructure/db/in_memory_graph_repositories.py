@@ -30,6 +30,14 @@ class InMemoryGraphWriteJobRepository:
         lock_duration: timedelta,
         limit: int,
     ) -> tuple[GraphWriteJob, ...]:
+        if limit <= 0:
+            return ()
+
+        blocked_project_keys = {
+            job.project_memory_space_id
+            for job in self._tx.state.graph_write_jobs.values()
+            if _is_unexpired_processing_graph_job(job, now)
+        }
         blocked_group_keys = {
             _graph_job_group_key(job)
             for job in self._tx.state.graph_write_jobs.values()
@@ -39,6 +47,7 @@ class InMemoryGraphWriteJobRepository:
             job
             for job in self._tx.state.graph_write_jobs.values()
             if _is_graph_job_claimable(job, now)
+            and job.project_memory_space_id not in blocked_project_keys
             and _graph_job_group_key(job) not in blocked_group_keys
         ]
         eligible.sort(
@@ -51,8 +60,11 @@ class InMemoryGraphWriteJobRepository:
         )
 
         claimed: list[GraphWriteJob] = []
+        claimed_project_keys: set[str] = set()
         claimed_group_keys: set[tuple[str, str | None, str | None]] = set()
         for job in eligible:
+            if job.project_memory_space_id in claimed_project_keys:
+                continue
             group_key = _graph_job_group_key(job)
             if group_key in claimed_group_keys:
                 continue
@@ -67,6 +79,7 @@ class InMemoryGraphWriteJobRepository:
             )
             self._tx.state.graph_write_jobs[job.id] = updated
             claimed.append(updated)
+            claimed_project_keys.add(job.project_memory_space_id)
             claimed_group_keys.add(group_key)
             if len(claimed) >= limit:
                 break

@@ -55,7 +55,7 @@ def test_unexpired_processing_graph_job_blocks_same_thread_group_claim() -> None
         )
     )
     store.add_graph_write_job(_job("graph_job_002"))
-    store.add_graph_write_job(_job("graph_job_003", thread_id="thread_002"))
+    store.add_graph_write_job(_job("graph_job_003", project_memory_space_id="project_002"))
 
     async def scenario() -> None:
         async with store.transaction() as tx:
@@ -72,9 +72,57 @@ def test_unexpired_processing_graph_job_blocks_same_thread_group_claim() -> None
     asyncio.run(scenario())
 
 
+def test_unexpired_processing_graph_job_blocks_same_project_claim() -> None:
+    store = InMemoryDataStore()
+    store.add_graph_write_job(
+        _job(
+            "graph_job_001",
+            status="processing",
+            locked_by="worker_a",
+            lock_expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    store.add_graph_write_job(_job("graph_job_002", thread_id="thread_002"))
+    store.add_graph_write_job(_job("graph_job_003", project_memory_space_id="project_002"))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.graph_write_jobs.claim_pending(
+                now=NOW,
+                worker_id="worker_b",
+                lock_duration=timedelta(minutes=5),
+                limit=3,
+            )
+
+        assert tuple(job.id for job in claimed) == ("graph_job_003",)
+        assert store.graph_write_jobs[1].status == "pending"
+
+    asyncio.run(scenario())
+
+
+def test_graph_claim_limit_zero_claims_no_jobs() -> None:
+    store = InMemoryDataStore()
+    store.add_graph_write_job(_job("graph_job_001"))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.graph_write_jobs.claim_pending(
+                now=NOW,
+                worker_id="worker_b",
+                lock_duration=timedelta(minutes=5),
+                limit=0,
+            )
+
+        assert claimed == ()
+        assert store.graph_write_jobs[0].status == "pending"
+
+    asyncio.run(scenario())
+
+
 def _job(
     job_id: str,
     *,
+    project_memory_space_id: str = "project_001",
     thread_id: str | None = "thread_001",
     status: str = "pending",
     locked_by: str | None = None,
@@ -83,7 +131,7 @@ def _job(
     return GraphWriteJob(
         id=job_id,
         backend="graphiti",
-        project_memory_space_id="project_001",
+        project_memory_space_id=project_memory_space_id,
         thread_id=thread_id,
         saga_id=None,
         memory_id=f"memory_{job_id}",

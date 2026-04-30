@@ -41,10 +41,13 @@ def test_postgres_graph_claim_pending_enforces_group_backpressure() -> None:
     assert "NOT EXISTS" in sql
     assert "active.status = 'processing'" in sql
     assert "active.lock_expires_at IS NULL OR active.lock_expires_at > %(now)s" in sql
+    assert "project_active.project_memory_space_id = job.project_memory_space_id" in sql
     assert "active.thread_id IS NOT DISTINCT FROM job.thread_id" in sql
     assert "active.saga_id IS NOT DISTINCT FROM job.saga_id" in sql
     assert "ROW_NUMBER() OVER" in sql
+    assert "PARTITION BY job.project_memory_space_id" in sql
     assert "PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id" in sql
+    assert "project_rank = 1" in sql
     assert "group_rank = 1" in sql
     assert params["worker_id"] == "worker_b"
     assert params["lock_expires_at"] == now + timedelta(minutes=5)
