@@ -7,6 +7,7 @@ from memwing.application.page_memory_service import (
     PageMemoryService,
 )
 from memwing.core.models import (
+    MemoryPageVersion,
     PageMemory,
     PageMemorySynthesis,
     PageMemoryTopic,
@@ -111,6 +112,63 @@ def test_rebuild_writes_version_from_current_locked_page_after_synthesis() -> No
     assert asyncio.run(persisted_version()) == 5
 
 
+def test_rebuild_locks_scope_before_first_create_write_version() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event(
+            "source_current",
+            "The second first-create rebuild must advance after the first page appears.",
+        ),
+    )
+    competing_page = _page_memory(
+        "page_competing",
+        source_event_ids=("source_current",),
+        version=1,
+    )
+    race_store = _FirstCreateRaceDataStore(store, competing_page)
+    synthesis = _EchoSourceEventSynthesis()
+    service = PageMemoryService(race_store, synthesis, clock=_FixedClock(NOW))
+
+    result = asyncio.run(
+        service.rebuild(
+            PageMemoryRebuildCommand(
+                scope=_effective_scope(),
+                scope_type="thread",
+                scope_id="thread_001",
+                actor_id="user_001",
+                reason="manual_rebuild",
+                trace_id="trace_first_create_race",
+            )
+        )
+    )
+
+    assert synthesis.requests[0].existing_page is None
+    assert result.page.version == 2
+    assert result.version.version == 2
+    assert result.audit_event.entity_id == result.page.id
+    assert result.audit_event.output_ref == result.page.id
+    assert result.audit_event.source_event_ids == result.page.source_event_ids
+
+    async def persisted() -> tuple[PageMemory, tuple[MemoryPageVersion, ...]]:
+        async with store.transaction() as tx:
+            page = await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            )
+            if page is None:
+                raise AssertionError("page should exist")
+            versions = tuple(tx.state.memory_page_versions.values())
+            return page, versions
+
+    page, versions = asyncio.run(persisted())
+    assert page.version == 2
+    assert {version.version for version in versions} == {1, 2}
+    assert page.title == result.version.title
+    assert page.brief == result.version.brief
+
+
 def _seed_source_events(
     store: InMemoryDataStore,
     *events: SourceEvent,
@@ -206,6 +264,24 @@ def _page_memory(
     )
 
 
+def _page_version(page: PageMemory) -> MemoryPageVersion:
+    return MemoryPageVersion(
+        id=f"memory_page_version_{page.id}_{page.version}",
+        page_id=page.id,
+        version=page.version,
+        title=page.title,
+        brief=page.brief,
+        topics=page.topics,
+        open_questions=page.open_questions,
+        next_steps=page.next_steps,
+        source_event_ids=page.source_event_ids,
+        linked_memory_item_ids=page.linked_memory_item_ids,
+        changed_by="system",
+        change_reason="manual_rebuild",
+        created_at=page.updated_at,
+    )
+
+
 def _effective_scope() -> EffectiveScope:
     return EffectiveScope(
         project_memory_space_id="project_001",
@@ -223,6 +299,152 @@ class _FixedClock:
 
     def now(self) -> datetime:
         return self._now
+
+
+class _FirstCreateRaceDataStore:
+    def __init__(
+        self,
+        store: InMemoryDataStore,
+        competing_page: PageMemory,
+    ) -> None:
+        self._store = store
+        self._competing_page = competing_page
+        self._competing_page_inserted = False
+        self._scope_locked = False
+        self._stale_no_page_read = False
+
+    def transaction(self) -> "_FirstCreateRaceTransaction":
+        return _FirstCreateRaceTransaction(self, self._store.transaction())
+
+    def insert_competing_page(self, tx: object) -> None:
+        if self._competing_page_inserted:
+            return
+        state = tx.state
+        page = self._competing_page
+        state.memory_pages[page.id] = page
+        state.memory_page_by_scope[
+            (page.project_memory_space_id, page.scope_type, page.scope_id)
+        ] = page.id
+        version = _page_version(page)
+        state.memory_page_versions[version.id] = version
+        state.memory_page_version_by_page_version[(version.page_id, version.version)] = version.id
+        self._competing_page_inserted = True
+
+
+class _FirstCreateRaceTransaction:
+    def __init__(
+        self,
+        race_store: _FirstCreateRaceDataStore,
+        inner: object,
+    ) -> None:
+        self._race_store = race_store
+        self._inner = inner
+
+    async def __aenter__(self) -> "_FirstCreateRaceTransaction":
+        tx = await self._inner.__aenter__()
+        self._tx = tx
+        self.source_events = tx.source_events
+        self.audit_events = tx.audit_events
+        self.outbox_jobs = tx.outbox_jobs
+        self.evidence_chunks = tx.evidence_chunks
+        self.working_memory_entries = tx.working_memory_entries
+        self.memory_items = tx.memory_items
+        self.memory_versions = tx.memory_versions
+        self.memory_pages = _FirstCreateRaceMemoryPageRepository(
+            self._race_store,
+            tx.memory_pages,
+            tx,
+        )
+        self.memory_page_versions = tx.memory_page_versions
+        self.graph_write_jobs = tx.graph_write_jobs
+        self.memory_graph_links = tx.memory_graph_links
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        return await self._inner.__aexit__(exc_type, exc, traceback)
+
+
+class _FirstCreateRaceMemoryPageRepository:
+    def __init__(
+        self,
+        race_store: _FirstCreateRaceDataStore,
+        inner: object,
+        tx: object,
+    ) -> None:
+        self._race_store = race_store
+        self._inner = inner
+        self._tx = tx
+
+    async def upsert(self, page: PageMemory) -> PageMemory:
+        if self._race_store._stale_no_page_read:
+            self._race_store.insert_competing_page(self._tx)
+        return await self._inner.upsert(page)
+
+    async def lock_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: str,
+        scope_id: str,
+    ) -> None:
+        self._race_store._scope_locked = True
+        self._race_store.insert_competing_page(self._tx)
+        await self._inner.lock_scope(
+            project_memory_space_id=project_memory_space_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+
+    async def get_by_scope(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: str,
+        scope_id: str,
+    ) -> PageMemory | None:
+        return await self._inner.get_by_scope(
+            project_memory_space_id=project_memory_space_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+
+    async def get_by_scope_for_update(
+        self,
+        *,
+        project_memory_space_id: str,
+        scope_type: str,
+        scope_id: str,
+    ) -> PageMemory | None:
+        page = await self._inner.get_by_scope_for_update(
+            project_memory_space_id=project_memory_space_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        if page is None and not self._race_store._scope_locked:
+            self._race_store._stale_no_page_read = True
+        return page
+
+    async def mark_needs_rebuild_for_source(
+        self,
+        *,
+        source_event_id: str,
+        updated_at: datetime,
+    ) -> int:
+        return await self._inner.mark_needs_rebuild_for_source(
+            source_event_id=source_event_id,
+            updated_at=updated_at,
+        )
+
+    async def list_needs_rebuild(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        return await self._inner.list_needs_rebuild(
+            project_memory_space_id=project_memory_space_id,
+            limit=limit,
+        )
 
 
 class _EchoSourceEventSynthesis:

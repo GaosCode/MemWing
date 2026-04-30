@@ -105,6 +105,11 @@ class PageMemoryService:
         )
 
         async with self._unit_of_work.transaction() as tx:
+            await tx.memory_pages.lock_scope(
+                project_memory_space_id=command.scope.project_memory_space_id,
+                scope_type=command.scope_type,
+                scope_id=command.scope_id,
+            )
             current_page = await tx.memory_pages.get_by_scope_for_update(
                 project_memory_space_id=command.scope.project_memory_space_id,
                 scope_type=command.scope_type,
