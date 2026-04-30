@@ -78,7 +78,7 @@ class PageMemoryService:
                 scope_type=command.scope_type,
                 scope_id=command.scope_id,
             )
-            source_events = await tx.source_events.list_for_scope(
+            source_events = await tx.source_events.list_recent_for_scope(
                 scope=command.scope,
                 limit=self._source_event_limit,
             )
@@ -104,22 +104,26 @@ class PageMemoryService:
             linked_memory_items=linked_memory_items,
         )
 
-        now = self._clock.now()
-        page = _page_from_synthesis(
-            command=command,
-            existing_page=existing_page,
-            synthesis=synthesis,
-            now=now,
-        )
-        version = _page_version(page, reason=command.reason, now=now)
-        audit_event = _audit_event(
-            page=page,
-            command=command,
-            source_event_ids=synthesis.source_event_ids,
-            now=now,
-        )
-
         async with self._unit_of_work.transaction() as tx:
+            current_page = await tx.memory_pages.get_by_scope_for_update(
+                project_memory_space_id=command.scope.project_memory_space_id,
+                scope_type=command.scope_type,
+                scope_id=command.scope_id,
+            )
+            now = self._clock.now()
+            page = _page_from_synthesis(
+                command=command,
+                existing_page=current_page,
+                synthesis=synthesis,
+                now=now,
+            )
+            version = _page_version(page, reason=command.reason, now=now)
+            audit_event = _audit_event(
+                page=page,
+                command=command,
+                source_event_ids=synthesis.source_event_ids,
+                now=now,
+            )
             persisted_page = await tx.memory_pages.upsert(page)
             persisted_version = await tx.memory_page_versions.record(version)
             persisted_audit_event = await tx.audit_events.record(audit_event)
