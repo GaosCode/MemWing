@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import uuid
 
-from memwing.application.failure_semantics import classify_failure
+from memwing.application.failure_semantics import FailureClassification, classify_failure
 from memwing.application.graph_write_processor import (
     GraphWriteProcessingResult,
     GraphWriteProcessor,
@@ -86,7 +86,7 @@ class GraphWriteWorker:
                 updated = await self._record_failure(
                     job=job,
                     error=_safe_error_summary(exc),
-                    reason_code=failure.reason_code,
+                    failure=failure,
                     now=completion_at,
                 )
                 if updated.status == "dead_letter":
@@ -133,17 +133,25 @@ class GraphWriteWorker:
         *,
         job: GraphWriteJob,
         error: str,
-        reason_code: str,
+        failure: FailureClassification,
         now: datetime,
     ) -> GraphWriteJob:
         async with self._unit_of_work.transaction() as tx:
-            updated = await tx.graph_write_jobs.mark_failed(
-                job_id=job.id,
-                locked_by=self._worker_id,
-                now=now,
-                error=error,
-                retry_delay=self._retry_delay,
-            )
+            if failure.dead_letter and not failure.retryable:
+                updated = await tx.graph_write_jobs.mark_dead_letter(
+                    job_id=job.id,
+                    locked_by=self._worker_id,
+                    now=now,
+                    error=error,
+                )
+            else:
+                updated = await tx.graph_write_jobs.mark_failed(
+                    job_id=job.id,
+                    locked_by=self._worker_id,
+                    now=now,
+                    error=error,
+                    retry_delay=self._retry_delay,
+                )
             is_dead_letter = updated.status == "dead_letter"
             await tx.audit_events.record(
                 _audit_event(
@@ -151,7 +159,7 @@ class GraphWriteWorker:
                     stage="graph_write.dead_letter" if is_dead_letter else "graph_write.retry",
                     decision="dead_letter" if is_dead_letter else "retry",
                     output_ref=updated.status,
-                    reason_code=reason_code,
+                    reason_code=failure.reason_code,
                     reason_text=error,
                     now=now,
                 )

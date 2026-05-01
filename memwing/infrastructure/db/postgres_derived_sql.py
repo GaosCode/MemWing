@@ -508,6 +508,22 @@ WHERE id = %(job_id)s
 RETURNING *
 """
 
+_MARK_GRAPH_WRITE_DEAD_LETTER_SQL = """
+UPDATE graph_write_jobs
+SET attempts = attempts + 1,
+    status = 'dead_letter',
+    locked_at = NULL,
+    locked_by = NULL,
+    lock_expires_at = NULL,
+    last_error = %(last_error)s,
+    dead_letter_reason = %(last_error)s,
+    updated_at = %(now)s
+WHERE id = %(job_id)s
+  AND status = 'processing'
+  AND locked_by = %(locked_by)s
+RETURNING *
+"""
+
 _UPSERT_MEMORY_GRAPH_LINK_SQL = """
 INSERT INTO memory_graph_links (
     id, backend, memory_id, source_event_id, project_memory_space_id,

@@ -161,6 +161,29 @@ class InMemoryGraphWriteJobRepository:
         self._tx.state.graph_write_jobs[job_id] = updated
         return updated
 
+    async def mark_dead_letter(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        error: str,
+    ) -> GraphWriteJob:
+        job = self._get_locked_job(job_id, locked_by)
+        updated = replace(
+            job,
+            status="dead_letter",
+            attempts=job.attempts + 1,
+            locked_at=None,
+            locked_by=None,
+            lock_expires_at=None,
+            last_error=error,
+            dead_letter_reason=error,
+            updated_at=now,
+        )
+        self._tx.state.graph_write_jobs[job_id] = updated
+        return updated
+
     def _get_locked_job(self, job_id: str, locked_by: str) -> GraphWriteJob:
         job = self._tx.state.graph_write_jobs[job_id]
         if job.status != "processing" or job.locked_by != locked_by:

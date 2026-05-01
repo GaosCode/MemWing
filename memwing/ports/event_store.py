@@ -306,6 +306,16 @@ class GraphWriteJobRepositoryPort(Protocol):
     ) -> GraphWriteJob:
         ...
 
+    async def mark_dead_letter(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        error: str,
+    ) -> GraphWriteJob:
+        ...
+
 
 class MemoryGraphLinkRepositoryPort(Protocol):
     async def upsert(self, link: MemoryGraphLink) -> MemoryGraphLink:

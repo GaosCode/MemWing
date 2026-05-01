@@ -240,6 +240,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(MemoryPageRepositoryPort, "get_by_scope_for_update")
     assert hasattr(hints["memory_recall_events"], "record")
     assert hasattr(GraphWriteJobRepositoryPort, "extend_lock")
+    assert hasattr(GraphWriteJobRepositoryPort, "mark_dead_letter")
     assert hasattr(PushCandidateRepositoryPort, "list_pending")
 
 

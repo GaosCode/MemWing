@@ -11,6 +11,7 @@ from .postgres_derived_sql import (
     _EXTEND_GRAPH_WRITE_LOCK_SQL,
     _INSERT_GRAPH_WRITE_JOB_SQL,
     _LIST_MEMORY_GRAPH_LINKS_BY_MEMORY_SQL,
+    _MARK_GRAPH_WRITE_DEAD_LETTER_SQL,
     _MARK_GRAPH_WRITE_FAILED_SQL,
     _MARK_GRAPH_WRITE_SUCCEEDED_SQL,
     _UPSERT_MEMORY_GRAPH_LINK_SQL,
@@ -111,6 +112,27 @@ class PostgresGraphWriteJobRepository:
                 "now": now,
                 "last_error": error,
                 "retry_at": now + retry_delay,
+            },
+        )
+        if row is None:
+            raise OutboxLockOwnershipError("graph write job is not locked by this worker")
+        return graph_write_job_from_row(row)
+
+    async def mark_dead_letter(
+        self,
+        *,
+        job_id: str,
+        locked_by: str,
+        now: datetime,
+        error: str,
+    ) -> GraphWriteJob:
+        row = await self._executor.fetchrow(
+            _MARK_GRAPH_WRITE_DEAD_LETTER_SQL,
+            {
+                "job_id": job_id,
+                "locked_by": locked_by,
+                "now": now,
+                "last_error": error,
             },
         )
         if row is None:
