@@ -8,6 +8,7 @@ from memwing.api.agent_knowledge import AgentKnowledgeExplainRequest, AgentKnowl
 from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.decay_service import DecayProcessCommand, DecayService
+from memwing.application.decision_card_service import DecisionCardCommand, DecisionCardService
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.lifecycle import LifecycleAction
@@ -102,6 +103,116 @@ def test_d_e_f_closure_gate_decay_review_confirm_then_default_recall() -> None:
     asyncio.run(scenario())
 
 
+def test_direction_b_decision_change_current_history_explain_and_decision_card() -> None:
+    async def scenario() -> None:
+        store = _store()
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                _decision_source_event(
+                    "source_decision_old",
+                    "The project codename is Apollo.",
+                    days_ago=4,
+                )
+            )
+            await tx.source_events.insert_if_absent(
+                _decision_source_event(
+                    "source_decision_new",
+                    "The project codename is Skyline.",
+                    days_ago=1,
+                )
+            )
+            await tx.memory_items.upsert(
+                _decision_memory_item(
+                    "memory_decision_old",
+                    "Apollo project codename",
+                    "The project codename is Apollo.",
+                    "source_decision_old",
+                    MemoryStatus.ACTIVE,
+                )
+            )
+            await tx.memory_items.upsert(
+                _decision_memory_item(
+                    "memory_decision_new",
+                    "Skyline project codename",
+                    "The project codename is Skyline.",
+                    "source_decision_new",
+                    MemoryStatus.CANDIDATE,
+                )
+            )
+
+        lifecycle = LifecycleTransitionService(store)
+        await lifecycle.transition(
+            LifecycleTransitionRequest(
+                memory_id="memory_decision_old",
+                action=LifecycleAction.INVALIDATE,
+                actor_id="user_001",
+                reason="project decision changed",
+                idempotency_key="invalidate:memory_decision_old",
+                trace_id="direction_b:invalidate_old",
+                now=NOW,
+            )
+        )
+        await lifecycle.transition(
+            LifecycleTransitionRequest(
+                memory_id="memory_decision_new",
+                action=LifecycleAction.CONFIRM,
+                actor_id="user_001",
+                reason="project decision changed",
+                idempotency_key="confirm:memory_decision_new",
+                trace_id="direction_b:confirm_new",
+                now=NOW,
+            )
+        )
+
+        access = MemoryAccessService(ScopeResolver(store), store, now=lambda: NOW)
+        current = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=_runtime_ref(),
+                query="project codename",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+                mode="current",
+            )
+        )
+        history = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=_runtime_ref(),
+                query="project codename",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+                mode="history",
+            )
+        )
+        explain_old = await access.explain(
+            AgentKnowledgeExplainRequest(
+                runtime_ref=_runtime_ref(),
+                memory_id="memory_decision_old",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+            )
+        )
+        decision_card = await DecisionCardService(store).create_for_memory(
+            DecisionCardCommand(
+                memory_id="memory_decision_new",
+                now=NOW,
+                trigger_reason="project_decision_changed",
+                trace_id="direction_b:decision_card",
+            )
+        )
+
+        assert tuple(item.id for item in current.results) == ("memory_decision_new",)
+        assert {item.id for item in history.results} == {
+            "memory_decision_old",
+            "memory_decision_new",
+        }
+        assert explain_old.source_event_ids == ("source_decision_old",)
+        assert "invalid" in explain_old.rationale
+        assert decision_card.type == "decision_card"
+        assert decision_card.status == "pending"
+        assert decision_card.memory_item_ids == ("memory_decision_new",)
+        assert decision_card.source_event_ids == ("source_decision_new",)
+        assert store.push_candidates == (decision_card,)
+
+    asyncio.run(scenario())
+
+
 def _store() -> InMemoryDataStore:
     store = InMemoryDataStore()
     store.add_project_memory_space(
@@ -129,6 +240,77 @@ def _runtime_ref() -> AgentRuntimeRef:
         agent_id="main",
         workspace_id="workspace_001",
         session_id="session_001",
+    )
+
+
+def _decision_source_event(source_event_id: str, content: str, *, days_ago: int) -> SourceEvent:
+    return SourceEvent(
+        id=source_event_id,
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        author_id="user_001",
+        author_name="Ada",
+        source_type="agent_runtime.message_ingested",
+        content=content,
+        content_preview=content,
+        source_url=None,
+        event_time=NOW - timedelta(days=days_ago),
+        raw_payload_hash=f"hash:{source_event_id}",
+        metadata={},
+        purged_at=None,
+        purged_by=None,
+        purge_reason=None,
+        purge_level="none",
+        graph_backend_raw_retained=False,
+        created_at=NOW - timedelta(days=days_ago),
+        runtime_event_idempotency_key=f"runtime:{source_event_id}",
+    )
+
+
+def _decision_memory_item(
+    memory_id: str,
+    title: str,
+    content: str,
+    source_event_id: str,
+    status: MemoryStatus,
+) -> MemoryItem:
+    activated_at = NOW - timedelta(days=4) if status is MemoryStatus.ACTIVE else None
+    return MemoryItem(
+        id=memory_id,
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        route=MemoryRoute.VECTOR_ONLY,
+        display_type=MemoryDisplayType.DECISION,
+        title=title,
+        content=content,
+        summary=None,
+        source_event_ids=(source_event_id,),
+        primary_source_event_id=source_event_id,
+        status=status,
+        event_time=NOW,
+        valid_from=None,
+        valid_to=None,
+        original_score=0.9,
+        half_life_days=180,
+        last_reviewed_at=None,
+        last_confirmed_at=None,
+        last_recalled_at=None,
+        recall_count=0,
+        cached_decayed_score=None,
+        last_decay_computed_at=None,
+        pinned=False,
+        created_by="system",
+        created_at=NOW - timedelta(days=4),
+        activated_at=activated_at,
+        updated_at=NOW - timedelta(days=4),
+        archived_at=None,
+        hidden_at=None,
+        invalidated_at=None,
+        removed_at=None,
     )
 
 
