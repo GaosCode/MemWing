@@ -4,9 +4,12 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from memwing.application.control_service import ControlService
 from memwing.application.decay_service import DEFAULT_FORGETTING_REVIEW_THRESHOLD
 from memwing.application.page_memory_service import PageMemoryService
+from memwing.core.errors import ValidationFailure
 from memwing.core.models import (
     ForgettingReviewCandidate,
     GraphWriteJob,
@@ -137,6 +140,102 @@ def test_control_plane_lists_support_cursor_sort_and_max_limit() -> None:
     asyncio.run(scenario())
 
 
+def test_control_plane_list_sort_applies_before_limit() -> None:
+    store = InMemoryDataStore()
+    service = ControlService(store, now=lambda: NOW)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.memory_items.upsert(_memory_item("memory_updated_newest", updated_at=NOW))
+            await tx.memory_items.upsert(
+                _memory_item(
+                    "memory_middle",
+                    title="Middle memory",
+                    event_time=NOW - timedelta(days=1),
+                    updated_at=NOW - timedelta(hours=1),
+                )
+            )
+            await tx.memory_items.upsert(
+                _memory_item(
+                    "memory_event_newest",
+                    title="Event newest memory",
+                    event_time=NOW + timedelta(hours=1),
+                    updated_at=NOW - timedelta(days=30),
+                )
+            )
+            await tx.memory_pages.upsert(_page(id="page_updated_newest", updated_at=NOW))
+            await tx.memory_pages.upsert(
+                replace(
+                    _page(
+                        id="page_middle",
+                        title="Middle page",
+                        created_at=NOW - timedelta(days=1),
+                        updated_at=NOW - timedelta(hours=1),
+                    ),
+                    group_id="group_002",
+                    thread_id="thread_002",
+                    scope_id="thread_002",
+                )
+            )
+            await tx.memory_pages.upsert(
+                replace(
+                    _page(
+                        id="page_created_newest",
+                        title="Created newest page",
+                        created_at=NOW + timedelta(hours=1),
+                        updated_at=NOW - timedelta(days=30),
+                    ),
+                    group_id="group_003",
+                    thread_id="thread_003",
+                    scope_id="thread_003",
+                )
+            )
+            await tx.outbox_jobs.enqueue(_outbox_job(id="outbox_updated_newest", updated_at=NOW))
+            await tx.outbox_jobs.enqueue(
+                _outbox_job(
+                    id="outbox_middle",
+                    priority=10,
+                    updated_at=NOW - timedelta(hours=1),
+                )
+            )
+            await tx.outbox_jobs.enqueue(
+                _outbox_job(
+                    id="outbox_priority_newest",
+                    priority=999,
+                    updated_at=NOW - timedelta(days=30),
+                )
+            )
+
+        memories = await service.list_memories(
+            scope=SCOPE,
+            limit=1,
+            cursor=None,
+            sort="event_time",
+            trace_id="trace_event_sort",
+        )
+        pages = await service.list_pages(
+            scope=PROJECT_SCOPE,
+            limit=1,
+            cursor=None,
+            sort="created_at",
+            trace_id="trace_page_sort",
+        )
+        maintenance = await service.get_maintenance(
+            scope=SCOPE,
+            limit=1,
+            cursor=None,
+            sort="priority",
+            trace_id="trace_job_sort",
+        )
+
+        assert tuple(item.id for item in memories.items) == ("memory_event_newest",)
+        assert tuple(page.id for page in pages.items) == ("page_created_newest",)
+        assert tuple(job.id for job in maintenance.jobs) == ("outbox_priority_newest",)
+
+    asyncio.run(scenario())
+
+
 def test_control_plane_rebuilds_pages_and_sends_approved_push_candidates() -> None:
     store = InMemoryDataStore()
     connector = _RecordingPlatformConnector()
@@ -198,7 +297,51 @@ def test_control_plane_rebuilds_pages_and_sends_approved_push_candidates() -> No
     asyncio.run(scenario())
 
 
-def _memory_item(memory_id: str) -> MemoryItem:
+def test_control_plane_rejected_push_send_is_audited() -> None:
+    store = InMemoryDataStore()
+    connector = _RecordingPlatformConnector()
+    service = ControlService(
+        store,
+        now=lambda: NOW,
+        platform_connectors={"feishu": connector},
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.push_candidates.upsert(_push_candidate())
+
+        with pytest.raises(ValidationFailure) as exc_info:
+            await service.send_push_candidate(
+                candidate_id="push_001",
+                platform="feishu",
+                scope=SCOPE,
+                actor_id="user_001",
+                reason="send pending candidate",
+                idempotency_key="send-pending-push-001",
+                trace_id="trace_pending_send",
+            )
+
+        assert exc_info.value.reason_code == "push_candidate_not_approved"
+        assert connector.sent == ()
+        assert any(
+            event.stage == "control.push_candidate.send_rejected"
+            and event.entity_id == "push_001"
+            and event.idempotency_key == "send-pending-push-001"
+            for event in store.audit_events
+        )
+
+    asyncio.run(scenario())
+
+
+def _memory_item(
+    memory_id: str,
+    *,
+    title: str = "Demo scope",
+    event_time: datetime = NOW - timedelta(days=10),
+    created_at: datetime = NOW - timedelta(days=10),
+    updated_at: datetime = NOW - timedelta(days=1),
+) -> MemoryItem:
     return MemoryItem(
         id=memory_id,
         project_memory_space_id="project_001",
@@ -207,13 +350,13 @@ def _memory_item(memory_id: str) -> MemoryItem:
         shared_group_id=None,
         route=MemoryRoute.GRAPH,
         display_type=MemoryDisplayType.DECISION,
-        title="Demo scope",
+        title=title,
         content="Demo scope remains Feishu plus OpenClaw.",
         summary="Demo scope remains stable.",
         source_event_ids=("source_001",),
         primary_source_event_id="source_001",
         status=MemoryStatus.ACTIVE,
-        event_time=NOW - timedelta(days=10),
+        event_time=event_time,
         valid_from=None,
         valid_to=None,
         original_score=0.8,
@@ -226,9 +369,9 @@ def _memory_item(memory_id: str) -> MemoryItem:
         last_decay_computed_at=None,
         pinned=False,
         created_by="system",
-        created_at=NOW - timedelta(days=10),
-        activated_at=NOW - timedelta(days=10),
-        updated_at=NOW - timedelta(days=1),
+        created_at=created_at,
+        activated_at=created_at,
+        updated_at=updated_at,
         archived_at=None,
         hidden_at=None,
         invalidated_at=None,
@@ -271,16 +414,22 @@ def _source_event(source_event_id: str) -> SourceEvent:
     )
 
 
-def _page() -> PageMemory:
+def _page(
+    *,
+    id: str = "page_001",
+    title: str = "Current title",
+    created_at: datetime = NOW,
+    updated_at: datetime = NOW,
+) -> PageMemory:
     return PageMemory(
-        id="page_001",
+        id=id,
         project_memory_space_id="project_001",
         group_id="group_001",
         thread_id="thread_001",
         shared_group_id=None,
         scope_type="thread",
         scope_id="thread_001",
-        title="Current title",
+        title=title,
         brief="Current brief",
         topics=(
             PageMemoryTopic(
@@ -296,8 +445,8 @@ def _page() -> PageMemory:
         linked_memory_item_ids=("memory_001",),
         version=1,
         needs_rebuild=False,
-        created_at=NOW,
-        updated_at=NOW,
+        created_at=created_at,
+        updated_at=updated_at,
     )
 
 
@@ -346,19 +495,24 @@ def _push_candidate() -> PushCandidate:
     )
 
 
-def _outbox_job() -> OutboxJob:
+def _outbox_job(
+    *,
+    id: str = "outbox_job_001",
+    priority: int = 10,
+    updated_at: datetime = NOW,
+) -> OutboxJob:
     return OutboxJob(
-        id="outbox_job_001",
+        id=id,
         project_memory_space_id="project_001",
         source_event_id="source_001",
         job_type="memory.decay",
         payload_json={},
         status="pending",
-        idempotency_key="outbox:memory.decay:project_001",
+        idempotency_key=f"outbox:memory.decay:{id}",
         aggregate_key="project_001",
         attempts=0,
         max_attempts=3,
-        priority=10,
+        priority=priority,
         next_run_at=NOW,
         locked_at=None,
         locked_by=None,
@@ -366,7 +520,7 @@ def _outbox_job() -> OutboxJob:
         last_error=None,
         dead_letter_reason=None,
         created_at=NOW,
-        updated_at=NOW,
+        updated_at=updated_at,
     )
 
 
