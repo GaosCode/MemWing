@@ -27,13 +27,14 @@ class InMemoryGraphWriteJobRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[GraphWriteJob, ...]:
         jobs = [
             job
             for job in self._tx.state.graph_write_jobs.values()
             if job.project_memory_space_id == project_memory_space_id
         ]
-        jobs.sort(key=lambda job: (job.updated_at, job.id), reverse=True)
+        jobs.sort(key=lambda job: (_graph_job_sort_value(job, sort), job.id), reverse=True)
         return tuple(jobs[:limit])
 
     async def claim_pending(
@@ -229,6 +230,16 @@ class InMemoryGraphWriteJobRepository:
         if job.status != "processing" or job.locked_by != locked_by:
             raise OutboxLockOwnershipError("graph write job is not locked by this worker")
         return job
+
+
+def _graph_job_sort_value(job: GraphWriteJob, sort: str | None) -> object:
+    if sort == "created_at":
+        return job.created_at
+    if sort == "next_run_at":
+        return job.next_run_at
+    if sort == "priority":
+        return job.priority
+    return job.updated_at
 
 
 class InMemoryMemoryGraphLinkRepository:

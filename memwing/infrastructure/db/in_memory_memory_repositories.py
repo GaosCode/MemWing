@@ -45,6 +45,7 @@ class InMemoryMemoryItemRepository:
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[MemoryItem, ...]:
         items = [
             item
@@ -57,7 +58,10 @@ class InMemoryMemoryItemRepository:
                 scope=scope,
             )
         ]
-        items.sort(key=lambda item: (item.updated_at, item.id), reverse=True)
+        items.sort(
+            key=lambda item: (_memory_item_sort_value(item, sort), item.id),
+            reverse=True,
+        )
         return tuple(items[:limit])
 
     async def list_decay_candidates(
@@ -130,6 +134,7 @@ class InMemoryForgettingReviewCandidateRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[ForgettingReviewCandidate, ...]:
         candidates = [
             candidate
@@ -137,7 +142,13 @@ class InMemoryForgettingReviewCandidateRepository:
             if candidate.project_memory_space_id == project_memory_space_id
             and candidate.status == "pending"
         ]
-        candidates.sort(key=lambda candidate: (candidate.updated_at, candidate.id))
+        if sort is None:
+            candidates.sort(key=lambda candidate: (candidate.updated_at, candidate.id))
+        else:
+            candidates.sort(
+                key=lambda candidate: (_review_sort_value(candidate, sort), candidate.id),
+                reverse=True,
+            )
         return tuple(candidates[:limit])
 
 
@@ -265,6 +276,7 @@ class InMemoryMemoryPageRepository:
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PageMemory, ...]:
         pages = [
             page
@@ -277,7 +289,10 @@ class InMemoryMemoryPageRepository:
                 scope=scope,
             )
         ]
-        pages.sort(key=lambda page: (page.updated_at, page.id), reverse=True)
+        pages.sort(
+            key=lambda page: (_page_sort_value(page, sort), page.id),
+            reverse=True,
+        )
         return tuple(pages[:limit])
 
     async def mark_needs_rebuild_for_source(
@@ -345,3 +360,23 @@ class InMemoryMemoryPageVersionRepository:
         ]
         versions.sort(key=lambda version: version.version, reverse=True)
         return tuple(versions[:limit])
+
+
+def _memory_item_sort_value(item: MemoryItem, sort: str | None) -> object:
+    if sort == "event_time":
+        return item.event_time or item.updated_at
+    if sort == "created_at":
+        return item.created_at
+    return item.updated_at
+
+
+def _review_sort_value(candidate: ForgettingReviewCandidate, sort: str | None) -> datetime:
+    if sort == "created_at":
+        return candidate.created_at
+    return candidate.updated_at
+
+
+def _page_sort_value(page: PageMemory, sort: str | None) -> datetime:
+    if sort == "created_at":
+        return page.created_at
+    return page.updated_at

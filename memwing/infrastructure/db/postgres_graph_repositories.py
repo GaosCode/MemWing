@@ -18,7 +18,7 @@ from .postgres_derived_sql import (
     _RETRY_GRAPH_WRITE_DEAD_LETTER_SQL,
     _UPSERT_MEMORY_GRAPH_LINK_SQL,
 )
-from .postgres_repositories import PostgresExecutor
+from .postgres_repositories import PostgresExecutor, control_ordered_sql
 
 
 class PostgresGraphWriteJobRepository:
@@ -43,9 +43,15 @@ class PostgresGraphWriteJobRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[GraphWriteJob, ...]:
         rows = await self._executor.fetch(
-            _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
+            control_ordered_sql(
+                _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
+                sort=sort,
+                allowed_orders=_GRAPH_WRITE_JOB_CONTROL_ORDER_BY,
+                default_order="updated_at DESC, id DESC",
+            ),
             {
                 "project_memory_space_id": project_memory_space_id,
                 "limit": limit,
@@ -237,6 +243,14 @@ def _graph_write_job_params(job: GraphWriteJob) -> dict[str, object]:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+_GRAPH_WRITE_JOB_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+    "next_run_at": "next_run_at DESC, id DESC",
+    "priority": "priority DESC, id DESC",
+}
 
 
 def _memory_graph_link_params(link: MemoryGraphLink) -> dict[str, object]:

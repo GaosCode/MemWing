@@ -174,7 +174,7 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
       %(shared_group_id)s IS NULL
       OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
   )
-ORDER BY updated_at DESC, id
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 
@@ -215,7 +215,7 @@ SELECT *
 FROM forgetting_review_candidates
 WHERE project_memory_space_id = %(project_memory_space_id)s
   AND status = 'pending'
-ORDER BY updated_at, id
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 
@@ -262,7 +262,7 @@ _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL = """
 SELECT *
 FROM push_candidates
 WHERE project_memory_space_id = %(project_memory_space_id)s
-ORDER BY updated_at DESC, id DESC
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 
@@ -388,7 +388,7 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
       %(shared_group_id)s IS NULL
       OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
   )
-ORDER BY updated_at DESC, id DESC
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 
@@ -459,7 +459,7 @@ _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL = """
 SELECT *
 FROM graph_write_jobs
 WHERE project_memory_space_id = %(project_memory_space_id)s
-ORDER BY updated_at DESC, id DESC
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 

@@ -45,7 +45,7 @@ from .postgres_derived_sql import (
     _UPSERT_MEMORY_ITEM_SQL,
     _UPSERT_MEMORY_PAGE_SQL,
 )
-from .postgres_repositories import PostgresExecutor
+from .postgres_repositories import PostgresExecutor, control_ordered_sql
 
 
 class PostgresMemoryItemRepository:
@@ -81,9 +81,15 @@ class PostgresMemoryItemRepository:
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[MemoryItem, ...]:
         rows = await self._executor.fetch(
-            _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
+            control_ordered_sql(
+                _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
+                sort=sort,
+                allowed_orders=_MEMORY_ITEM_CONTROL_ORDER_BY,
+                default_order="updated_at DESC, id",
+            ),
             {
                 "project_memory_space_id": scope.project_memory_space_id,
                 "group_ids": scope.group_ids,
@@ -249,9 +255,15 @@ class PostgresMemoryPageRepository:
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PageMemory, ...]:
         rows = await self._executor.fetch(
-            _LIST_MEMORY_PAGES_FOR_SCOPE_SQL,
+            control_ordered_sql(
+                _LIST_MEMORY_PAGES_FOR_SCOPE_SQL,
+                sort=sort,
+                allowed_orders=_MEMORY_PAGE_CONTROL_ORDER_BY,
+                default_order="updated_at DESC, id DESC",
+            ),
             {
                 "project_memory_space_id": scope.project_memory_space_id,
                 "group_ids": scope.group_ids,
@@ -432,6 +444,18 @@ def _page_memory_params(page: PageMemory) -> dict[str, object]:
         "created_at": page.created_at,
         "updated_at": page.updated_at,
     }
+
+
+_MEMORY_ITEM_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "event_time": "COALESCE(event_time, updated_at) DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+}
+
+_MEMORY_PAGE_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+}
 
 
 def _memory_page_version_params(version: MemoryPageVersion) -> dict[str, object]:

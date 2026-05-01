@@ -108,6 +108,7 @@ class OutboxJobRepositoryPort(Protocol):
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[OutboxJob, ...]:
         ...
 
@@ -228,6 +229,7 @@ class MemoryItemRepositoryPort(Protocol):
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[MemoryItem, ...]:
         ...
 
@@ -301,6 +303,7 @@ class MemoryPageRepositoryPort(Protocol):
         *,
         scope: EffectiveScope,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PageMemory, ...]:
         ...
 
@@ -346,6 +349,7 @@ class GraphWriteJobRepositoryPort(Protocol):
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[GraphWriteJob, ...]:
         ...
 
@@ -429,6 +433,7 @@ class ForgettingReviewCandidateRepositoryPort(Protocol):
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[ForgettingReviewCandidate, ...]:
         ...
 
@@ -455,6 +460,7 @@ class PushCandidateRepositoryPort(Protocol):
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PushCandidate, ...]:
         ...
 

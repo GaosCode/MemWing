@@ -39,6 +39,20 @@ class PostgresExecutor:
         raise NotImplementedError
 
 
+def control_ordered_sql(
+    sql_template: str,
+    *,
+    sort: str | None,
+    allowed_orders: Mapping[str, str],
+    default_order: str,
+) -> str:
+    if sort is None:
+        order_by = default_order
+    else:
+        order_by = allowed_orders.get(sort, default_order)
+    return sql_template.format(order_by=order_by)
+
+
 class PostgresSourceEventRepository:
     def __init__(self, executor: PostgresExecutor) -> None:
         self._executor = executor
@@ -227,9 +241,15 @@ class PostgresOutboxJobRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[OutboxJob, ...]:
         rows = await self._executor.fetch(
-            _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL,
+            control_ordered_sql(
+                _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL,
+                sort=sort,
+                allowed_orders=_OUTBOX_CONTROL_ORDER_BY,
+                default_order="updated_at DESC, id DESC",
+            ),
             {
                 "project_memory_space_id": project_memory_space_id,
                 "limit": limit,
@@ -360,3 +380,11 @@ def _outbox_job_params(job: OutboxJob) -> dict[str, object]:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+_OUTBOX_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+    "next_run_at": "next_run_at DESC, id DESC",
+    "priority": "priority DESC, id DESC",
+}

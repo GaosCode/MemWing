@@ -42,7 +42,7 @@ class ControlPageServiceMixin:
     ) -> ControlPageListProjection:
         fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
-            pages = await tx.memory_pages.list_for_scope(scope=scope, limit=fetch_limit)
+            pages = await tx.memory_pages.list_for_scope(scope=scope, limit=fetch_limit, sort=sort)
             paged = paginate_control_items(
                 pages,
                 limit=limit,

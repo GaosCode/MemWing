@@ -69,7 +69,7 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
         now = self._now()
         fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
-            items = await tx.memory_items.list_for_scope(scope=scope, limit=fetch_limit)
+            items = await tx.memory_items.list_for_scope(scope=scope, limit=fetch_limit, sort=sort)
             paged = paginate_control_items(
                 items,
                 limit=limit,
@@ -213,6 +213,7 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             candidates = await tx.forgetting_review_candidates.list_pending(
                 project_memory_space_id=scope.project_memory_space_id,
                 limit=fetch_limit,
+                sort=sort,
             )
             scoped_candidates = []
             for candidate in candidates:
@@ -267,6 +268,7 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             forgetting_reviews = await tx.forgetting_review_candidates.list_pending(
                 project_memory_space_id=scope.project_memory_space_id,
                 limit=fetch_limit,
+                sort=sort,
             )
             scoped_forgetting_reviews = []
             for candidate in forgetting_reviews:
@@ -278,6 +280,7 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
                 for candidate in await tx.push_candidates.list_for_project(
                     project_memory_space_id=scope.project_memory_space_id,
                     limit=fetch_limit,
+                    sort=sort,
                 )
                 if _scope_values_match(
                     group_id=candidate.group_id,
@@ -289,10 +292,12 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             graph_jobs = await tx.graph_write_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
                 limit=fetch_limit,
+                sort=sort,
             )
             outbox_jobs = await tx.outbox_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
                 limit=fetch_limit,
+                sort=sort,
             )
 
         pending_push_count = sum(1 for candidate in push_candidates if candidate.status == "pending")

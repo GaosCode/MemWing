@@ -168,7 +168,7 @@ _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL = """
 SELECT *
 FROM outbox_jobs
 WHERE project_memory_space_id = %(project_memory_space_id)s
-ORDER BY updated_at DESC, id DESC
+ORDER BY {order_by}
 LIMIT %(limit)s
 """
 

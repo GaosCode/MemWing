@@ -7,7 +7,7 @@ from .postgres_derived_sql import (
     _LIST_PENDING_FORGETTING_REVIEW_CANDIDATES_SQL,
     _UPSERT_FORGETTING_REVIEW_CANDIDATE_SQL,
 )
-from .postgres_repositories import PostgresExecutor
+from .postgres_repositories import PostgresExecutor, control_ordered_sql
 
 
 class PostgresForgettingReviewCandidateRepository:
@@ -31,9 +31,15 @@ class PostgresForgettingReviewCandidateRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[ForgettingReviewCandidate, ...]:
         rows = await self._executor.fetch(
-            _LIST_PENDING_FORGETTING_REVIEW_CANDIDATES_SQL,
+            control_ordered_sql(
+                _LIST_PENDING_FORGETTING_REVIEW_CANDIDATES_SQL,
+                sort=sort,
+                allowed_orders=_FORGETTING_REVIEW_CONTROL_ORDER_BY,
+                default_order="updated_at, id",
+            ),
             {
                 "project_memory_space_id": project_memory_space_id,
                 "limit": limit,
@@ -58,3 +64,9 @@ def _forgetting_review_candidate_params(
         "created_at": candidate.created_at,
         "updated_at": candidate.updated_at,
     }
+
+
+_FORGETTING_REVIEW_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+}

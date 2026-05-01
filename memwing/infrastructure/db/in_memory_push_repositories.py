@@ -64,13 +64,17 @@ class InMemoryPushCandidateRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PushCandidate, ...]:
         candidates = [
             candidate
             for candidate in self._tx.state.push_candidates.values()
             if candidate.project_memory_space_id == project_memory_space_id
         ]
-        candidates.sort(key=lambda candidate: (candidate.updated_at, candidate.id), reverse=True)
+        candidates.sort(
+            key=lambda candidate: (_push_candidate_sort_value(candidate, sort), candidate.id),
+            reverse=True,
+        )
         return tuple(candidates[:limit])
 
     async def list_pending(
@@ -87,3 +91,11 @@ class InMemoryPushCandidateRepository:
         ]
         candidates.sort(key=lambda candidate: (-candidate.priority, candidate.created_at, candidate.id))
         return tuple(candidates[:limit])
+
+
+def _push_candidate_sort_value(candidate: PushCandidate, sort: str | None) -> object:
+    if sort == "priority":
+        return candidate.priority
+    if sort == "created_at":
+        return candidate.created_at
+    return candidate.updated_at

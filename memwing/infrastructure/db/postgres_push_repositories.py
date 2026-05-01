@@ -12,7 +12,7 @@ from .postgres_derived_sql import (
     _UPDATE_PUSH_CANDIDATE_STATUS_SQL,
     _UPSERT_PUSH_CANDIDATE_SQL,
 )
-from .postgres_repositories import PostgresExecutor
+from .postgres_repositories import PostgresExecutor, control_ordered_sql
 
 
 class PostgresPushCandidateRepository:
@@ -59,9 +59,15 @@ class PostgresPushCandidateRepository:
         *,
         project_memory_space_id: str,
         limit: int,
+        sort: str | None = None,
     ) -> tuple[PushCandidate, ...]:
         rows = await self._executor.fetch(
-            _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL,
+            control_ordered_sql(
+                _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL,
+                sort=sort,
+                allowed_orders=_PUSH_CANDIDATE_CONTROL_ORDER_BY,
+                default_order="updated_at DESC, id DESC",
+            ),
             {"project_memory_space_id": project_memory_space_id, "limit": limit},
         )
         return tuple(push_candidate_from_row(row) for row in rows)
@@ -100,3 +106,10 @@ def _push_candidate_params(candidate: PushCandidate) -> dict[str, object]:
         "created_at": candidate.created_at,
         "updated_at": candidate.updated_at,
     }
+
+
+_PUSH_CANDIDATE_CONTROL_ORDER_BY = {
+    "updated_at": "updated_at DESC, id DESC",
+    "created_at": "created_at DESC, id DESC",
+    "priority": "priority DESC, id DESC",
+}
