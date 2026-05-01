@@ -207,6 +207,45 @@ ORDER BY updated_at, id
 LIMIT %(limit)s
 """
 
+_UPSERT_PUSH_CANDIDATE_SQL = """
+INSERT INTO push_candidates (
+    id, project_memory_space_id, group_id, thread_id, shared_group_id, type,
+    title, content, memory_item_ids, source_event_ids, trigger_reason,
+    trigger_source, priority, expires_at, status, cooldown_key, created_at,
+    updated_at
+) VALUES (
+    %(id)s, %(project_memory_space_id)s, %(group_id)s, %(thread_id)s,
+    %(shared_group_id)s, %(type)s, %(title)s, %(content)s, %(memory_item_ids)s,
+    %(source_event_ids)s, %(trigger_reason)s, %(trigger_source)s, %(priority)s,
+    %(expires_at)s, %(status)s, %(cooldown_key)s, %(created_at)s, %(updated_at)s
+)
+ON CONFLICT (cooldown_key, status) DO UPDATE
+SET project_memory_space_id = EXCLUDED.project_memory_space_id,
+    group_id = EXCLUDED.group_id,
+    thread_id = EXCLUDED.thread_id,
+    shared_group_id = EXCLUDED.shared_group_id,
+    type = EXCLUDED.type,
+    title = EXCLUDED.title,
+    content = EXCLUDED.content,
+    memory_item_ids = EXCLUDED.memory_item_ids,
+    source_event_ids = EXCLUDED.source_event_ids,
+    trigger_reason = EXCLUDED.trigger_reason,
+    trigger_source = EXCLUDED.trigger_source,
+    priority = EXCLUDED.priority,
+    expires_at = EXCLUDED.expires_at,
+    updated_at = EXCLUDED.updated_at
+RETURNING *
+"""
+
+_LIST_PENDING_PUSH_CANDIDATES_SQL = """
+SELECT *
+FROM push_candidates
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND status = 'pending'
+ORDER BY priority DESC, created_at, id
+LIMIT %(limit)s
+"""
+
 _INSERT_MEMORY_VERSION_SQL = """
 INSERT INTO memory_versions (
     id, memory_id, version, title, content, summary, status, source_event_ids,

@@ -41,6 +41,15 @@ MemoryGraphLinkType = Literal["fact", "episode", "entity", "redaction_marker"]
 GraphWriteJobStatus = Literal["pending", "processing", "succeeded", "retry", "dead_letter"]
 OutboxJobStatus = Literal["pending", "processing", "succeeded", "dead_letter"]
 ForgettingReviewStatus = Literal["pending", "resolved", "skipped"]
+PushCandidateType = Literal[
+    "decision_card",
+    "review_reminder",
+    "conflict",
+    "deadline",
+    "daily_digest",
+    "forgetting_review",
+]
+PushCandidateStatus = Literal["pending", "approved", "sent", "skipped", "expired", "invalid"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +217,28 @@ class ForgettingReviewCandidate:
     threshold: float
     reason: str
     status: ForgettingReviewStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PushCandidate:
+    id: str
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    shared_group_id: str | None
+    type: PushCandidateType
+    title: str
+    content: str
+    memory_item_ids: tuple[str, ...]
+    source_event_ids: tuple[str, ...]
+    trigger_reason: str
+    trigger_source: str
+    priority: int
+    expires_at: datetime | None
+    status: PushCandidateStatus
+    cooldown_key: str
     created_at: datetime
     updated_at: datetime
 

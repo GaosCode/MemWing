@@ -17,6 +17,7 @@ from memwing.core.models import (
     OutboxJob,
     PageMemory,
     PageMemoryScopeType,
+    PushCandidate,
     SourceEvent,
     WorkingMemoryEntry,
 )
@@ -324,6 +325,19 @@ class ForgettingReviewCandidateRepositoryPort(Protocol):
         ...
 
 
+class PushCandidateRepositoryPort(Protocol):
+    async def upsert(self, candidate: PushCandidate) -> PushCandidate:
+        ...
+
+    async def list_pending(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PushCandidate, ...]:
+        ...
+
+
 class EventStoreTransactionPort(Protocol):
     source_events: SourceEventRepositoryPort
     audit_events: AuditEventRepositoryPort
@@ -337,6 +351,7 @@ class EventStoreTransactionPort(Protocol):
     graph_write_jobs: GraphWriteJobRepositoryPort
     memory_graph_links: MemoryGraphLinkRepositoryPort
     forgetting_review_candidates: ForgettingReviewCandidateRepositoryPort
+    push_candidates: PushCandidateRepositoryPort
 
 
 class EventStoreUnitOfWorkPort(Protocol):

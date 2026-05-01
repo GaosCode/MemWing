@@ -13,6 +13,7 @@ from memwing.core.models import (
     PageMemory,
     PageMemorySynthesis,
     PageMemoryTopic,
+    PushCandidate,
     WorkingMemoryEntry,
 )
 
@@ -123,6 +124,34 @@ def test_page_memory_synthesis_contract_requires_structured_topics() -> None:
     assert synthesis.topics[0].source_event_ids == ("source_001",)
     assert synthesis.open_questions == ("Which warning belongs in recall?",)
     assert synthesis.next_steps == ("Wire the page memory worker.",)
+
+
+def test_push_candidate_contract_preserves_decision_card_lineage() -> None:
+    event_time = datetime(2026, 4, 28, tzinfo=UTC)
+    candidate = PushCandidate(
+        id="push_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        type="decision_card",
+        title="Skyline project codename",
+        content="The project codename changed to Skyline.",
+        memory_item_ids=("memory_001",),
+        source_event_ids=("source_001",),
+        trigger_reason="project_decision_changed",
+        trigger_source="memory_item",
+        priority=100,
+        expires_at=None,
+        status="pending",
+        cooldown_key="decision_card:project_001:memory_001",
+        created_at=event_time,
+        updated_at=event_time,
+    )
+
+    assert candidate.type == "decision_card"
+    assert candidate.memory_item_ids == ("memory_001",)
+    assert candidate.source_event_ids == ("source_001",)
 
 
 def test_lane_e_graph_link_contract_is_backend_neutral() -> None:

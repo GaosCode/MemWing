@@ -9,6 +9,7 @@ from memwing.core.models import (
     GraphWriteJob,
     MemoryGraphLink,
     OutboxJob,
+    PushCandidate,
     SourceEvent,
 )
 from memwing.core.scope_patterns import session_pattern_matches
@@ -39,6 +40,7 @@ from .in_memory_repositories import (
     InMemoryOutboxJobRepository,
     InMemorySourceEventRepository,
 )
+from .in_memory_push_repositories import InMemoryPushCandidateRepository
 from .in_memory_state import InMemoryState
 
 
@@ -71,6 +73,10 @@ class InMemoryDataStore:
     @property
     def forgetting_review_candidates(self) -> tuple[ForgettingReviewCandidate, ...]:
         return tuple(self._state.forgetting_review_candidates.values())
+
+    @property
+    def push_candidates(self) -> tuple[PushCandidate, ...]:
+        return tuple(self._state.push_candidates.values())
 
     def add_project_memory_space(self, space: ProjectMemorySpace) -> None:
         self._state.projects[space.id] = space
@@ -161,6 +167,7 @@ class _Transaction:
         self.graph_write_jobs = InMemoryGraphWriteJobRepository(self)
         self.memory_graph_links = InMemoryMemoryGraphLinkRepository(self)
         self.forgetting_review_candidates = InMemoryForgettingReviewCandidateRepository(self)
+        self.push_candidates = InMemoryPushCandidateRepository(self)
 
     async def __aenter__(self) -> _Transaction:
         await self._store._lock.acquire()

@@ -15,6 +15,7 @@ from memwing.core.models import (
     MemoryVersion,
     PageMemory,
     PageMemoryTopic,
+    PushCandidate,
     SourceEvent,
     WorkingMemoryEntry,
 )
@@ -61,6 +62,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
             review_candidate = await tx.forgetting_review_candidates.upsert(
                 _forgetting_review_candidate()
             )
+            push_candidate = await tx.push_candidates.upsert(_push_candidate())
 
         assert inserted_source is True
         assert inserted_later_source is True
@@ -78,6 +80,7 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
         assert graph_job.id == "graph_job_001"
         assert graph_link.memory_id == memory.id
         assert review_candidate.id == "forgetting_review_001"
+        assert push_candidate.id == "push_001"
 
         async with store.transaction() as tx:
             assert await tx.memory_items.get("memory_001") == memory
@@ -121,6 +124,10 @@ def test_in_memory_derived_repositories_cover_lane_d_e_f_boundaries() -> None:
                 project_memory_space_id="project_001",
                 limit=10,
             ) == (_forgetting_review_candidate(),)
+            assert await tx.push_candidates.list_pending(
+                project_memory_space_id="project_001",
+                limit=10,
+            ) == (_push_candidate(),)
             assert await tx.memory_versions.get_latest("memory_001") == version
             assert await tx.memory_graph_links.list_by_memory("memory_001") == (graph_link,)
             assert await tx.source_events.list_for_scope(
@@ -405,6 +412,29 @@ def _forgetting_review_candidate() -> ForgettingReviewCandidate:
         threshold=0.5,
         reason="score_below_threshold",
         status="pending",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+
+def _push_candidate() -> PushCandidate:
+    return PushCandidate(
+        id="push_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        type="decision_card",
+        title="Demo scope changed",
+        content="Demo scope remains Feishu plus OpenClaw.",
+        memory_item_ids=("memory_001",),
+        source_event_ids=("source_001",),
+        trigger_reason="project_decision_changed",
+        trigger_source="memory_item",
+        priority=100,
+        expires_at=None,
+        status="pending",
+        cooldown_key="decision_card:project_001:memory_001",
         created_at=NOW,
         updated_at=NOW,
     )

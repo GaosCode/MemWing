@@ -35,6 +35,7 @@ from memwing.ports.event_store import (
     EvidenceChunkRepositoryPort,
     ForgettingReviewCandidateRepositoryPort,
     GraphWriteJobRepositoryPort,
+    PushCandidateRepositoryPort,
     SourceEventRepositoryPort,
     MemoryGraphLinkRepositoryPort,
     MemoryItemRepositoryPort,
@@ -210,6 +211,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hints["graph_write_jobs"] is GraphWriteJobRepositoryPort
     assert hints["memory_graph_links"] is MemoryGraphLinkRepositoryPort
     assert hints["forgetting_review_candidates"] is ForgettingReviewCandidateRepositoryPort
+    assert hints["push_candidates"] is PushCandidateRepositoryPort
 
     assert hasattr(SourceEventRepositoryPort, "list_for_scope")
     assert hasattr(SourceEventRepositoryPort, "list_recent_for_scope")
@@ -224,6 +226,7 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(MemoryPageRepositoryPort, "list_needs_rebuild")
     assert hasattr(MemoryPageRepositoryPort, "get_by_scope_for_update")
     assert hasattr(GraphWriteJobRepositoryPort, "extend_lock")
+    assert hasattr(PushCandidateRepositoryPort, "list_pending")
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:

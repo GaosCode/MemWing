@@ -283,6 +283,31 @@ CREATE TABLE IF NOT EXISTS forgetting_review_candidates (
 CREATE INDEX IF NOT EXISTS idx_forgetting_review_candidates_project_status
     ON forgetting_review_candidates (project_memory_space_id, status, updated_at);
 
+CREATE TABLE IF NOT EXISTS push_candidates (
+    id text PRIMARY KEY,
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    group_id text,
+    thread_id text,
+    shared_group_id text,
+    type text NOT NULL,
+    title text NOT NULL,
+    content text NOT NULL,
+    memory_item_ids text[] NOT NULL DEFAULT '{}',
+    source_event_ids text[] NOT NULL DEFAULT '{}',
+    trigger_reason text NOT NULL,
+    trigger_source text NOT NULL,
+    priority integer NOT NULL,
+    expires_at timestamptz,
+    status text NOT NULL,
+    cooldown_key text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (cooldown_key, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_candidates_project_status
+    ON push_candidates (project_memory_space_id, status, priority, created_at);
+
 CREATE TABLE IF NOT EXISTS memory_versions (
     id text PRIMARY KEY,
     memory_id text NOT NULL REFERENCES memory_items(id),

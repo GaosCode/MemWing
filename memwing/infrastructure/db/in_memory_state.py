@@ -13,6 +13,7 @@ from memwing.core.models import (
     MemoryVersion,
     OutboxJob,
     PageMemory,
+    PushCandidate,
     WorkingMemoryEntry,
     SourceEvent,
 )
@@ -49,6 +50,8 @@ class InMemoryState:
     memory_graph_link_by_backend_object: dict[tuple[str, str, str, str, str], str] = field(default_factory=dict)
     forgetting_review_candidates: dict[str, ForgettingReviewCandidate] = field(default_factory=dict)
     forgetting_review_by_memory_reason_status: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    push_candidates: dict[str, PushCandidate] = field(default_factory=dict)
+    push_candidate_by_cooldown_status: dict[tuple[str, str], str] = field(default_factory=dict)
     projects: dict[str, ProjectMemorySpace] = field(default_factory=dict)
     runtime_bindings: list[RuntimeScopeBinding] = field(default_factory=list)
     platform_bindings: list[PlatformScopeBinding] = field(default_factory=list)

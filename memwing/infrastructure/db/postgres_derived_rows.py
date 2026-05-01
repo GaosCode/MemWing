@@ -13,6 +13,7 @@ from memwing.core.models import (
     MemoryVersion,
     PageMemory,
     PageMemoryTopic,
+    PushCandidate,
     WorkingMemoryEntry,
 )
 
@@ -115,6 +116,29 @@ def forgetting_review_candidate_from_row(row: Row) -> ForgettingReviewCandidate:
         threshold=_float(row, "threshold"),
         reason=_text(row, "reason"),
         status=_text(row, "status"),
+        created_at=_datetime(row, "created_at"),
+        updated_at=_datetime(row, "updated_at"),
+    )
+
+
+def push_candidate_from_row(row: Row) -> PushCandidate:
+    return PushCandidate(
+        id=_text(row, "id"),
+        project_memory_space_id=_text(row, "project_memory_space_id"),
+        group_id=_optional_text(row, "group_id"),
+        thread_id=_optional_text(row, "thread_id"),
+        shared_group_id=_optional_text(row, "shared_group_id"),
+        type=_text(row, "type"),
+        title=_text(row, "title"),
+        content=_text(row, "content"),
+        memory_item_ids=_sequence(row, "memory_item_ids"),
+        source_event_ids=_sequence(row, "source_event_ids"),
+        trigger_reason=_text(row, "trigger_reason"),
+        trigger_source=_text(row, "trigger_source"),
+        priority=_int(row, "priority"),
+        expires_at=_optional_datetime(row, "expires_at"),
+        status=_text(row, "status"),
+        cooldown_key=_text(row, "cooldown_key"),
         created_at=_datetime(row, "created_at"),
         updated_at=_datetime(row, "updated_at"),
     )

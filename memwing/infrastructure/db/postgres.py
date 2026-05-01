@@ -33,6 +33,7 @@ from .postgres_repositories import (
     PostgresOutboxJobRepository,
     PostgresSourceEventRepository,
 )
+from .postgres_push_repositories import PostgresPushCandidateRepository
 from .postgres_rows import (
     Row,
     group_memory_settings_from_row,
@@ -160,6 +161,7 @@ class PostgresTransaction(PostgresExecutor):
         self.graph_write_jobs = PostgresGraphWriteJobRepository(self)
         self.memory_graph_links = PostgresMemoryGraphLinkRepository(self)
         self.forgetting_review_candidates = PostgresForgettingReviewCandidateRepository(self)
+        self.push_candidates = PostgresPushCandidateRepository(self)
 
     async def __aenter__(self) -> PostgresTransaction:
         self._context = self._connection.transaction()
