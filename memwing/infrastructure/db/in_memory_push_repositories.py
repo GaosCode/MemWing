@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 
 from memwing.core.models import PushCandidate
 
@@ -39,6 +40,24 @@ class InMemoryPushCandidateRepository:
         self._tx.state.push_candidates[candidate.id] = candidate
         self._tx.state.push_candidate_by_cooldown_status[key] = candidate.id
         return candidate
+
+    async def get(self, candidate_id: str) -> PushCandidate | None:
+        return self._tx.state.push_candidates.get(candidate_id)
+
+    async def update_status(
+        self,
+        *,
+        candidate_id: str,
+        project_memory_space_id: str,
+        status: str,
+        updated_at: datetime,
+    ) -> PushCandidate | None:
+        candidate = self._tx.state.push_candidates.get(candidate_id)
+        if candidate is None or candidate.project_memory_space_id != project_memory_space_id:
+            return None
+        updated = replace(candidate, status=status, updated_at=updated_at)
+        self._tx.state.push_candidates[candidate_id] = updated
+        return updated
 
     async def list_for_project(
         self,

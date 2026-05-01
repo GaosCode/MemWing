@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from memwing.core.models import PushCandidate
 
 from .postgres_derived_rows import push_candidate_from_row
 from .postgres_derived_sql import (
+    _GET_PUSH_CANDIDATE_SQL,
     _LIST_PENDING_PUSH_CANDIDATES_SQL,
     _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL,
+    _UPDATE_PUSH_CANDIDATE_STATUS_SQL,
     _UPSERT_PUSH_CANDIDATE_SQL,
 )
 from .postgres_repositories import PostgresExecutor
@@ -23,6 +27,32 @@ class PostgresPushCandidateRepository:
         if row is None:
             raise RuntimeError("push candidate upsert did not return a row")
         return push_candidate_from_row(row)
+
+    async def get(self, candidate_id: str) -> PushCandidate | None:
+        row = await self._executor.fetchrow(
+            _GET_PUSH_CANDIDATE_SQL,
+            {"candidate_id": candidate_id},
+        )
+        return push_candidate_from_row(row) if row is not None else None
+
+    async def update_status(
+        self,
+        *,
+        candidate_id: str,
+        project_memory_space_id: str,
+        status: str,
+        updated_at: datetime,
+    ) -> PushCandidate | None:
+        row = await self._executor.fetchrow(
+            _UPDATE_PUSH_CANDIDATE_STATUS_SQL,
+            {
+                "candidate_id": candidate_id,
+                "project_memory_space_id": project_memory_space_id,
+                "status": status,
+                "updated_at": updated_at,
+            },
+        )
+        return push_candidate_from_row(row) if row is not None else None
 
     async def list_for_project(
         self,

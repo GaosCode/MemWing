@@ -46,6 +46,33 @@ class InMemorySourceEventRepository:
     async def get_source_event(self, source_event_id: str) -> SourceEvent | None:
         return self._tx.state.source_events.get(source_event_id)
 
+    async def redact_source_event(
+        self,
+        *,
+        source_event_id: str,
+        redacted_content: str,
+        purged_at: datetime,
+        purged_by: str,
+        purge_reason: str,
+        purge_level: str,
+        graph_backend_raw_retained: bool,
+    ) -> SourceEvent | None:
+        event = self._tx.state.source_events.get(source_event_id)
+        if event is None:
+            return None
+        updated = replace(
+            event,
+            content=redacted_content,
+            content_preview=redacted_content,
+            purged_at=purged_at,
+            purged_by=purged_by,
+            purge_reason=purge_reason,
+            purge_level=purge_level,
+            graph_backend_raw_retained=graph_backend_raw_retained,
+        )
+        self._tx.state.source_events[source_event_id] = updated
+        return updated
+
     async def list_for_scope(
         self,
         *,
@@ -260,6 +287,32 @@ class InMemoryOutboxJobRepository:
                 last_error=error,
                 updated_at=now,
             )
+        self._tx.state.outbox_jobs[job_id] = updated
+        return updated
+
+    async def retry_dead_letter(
+        self,
+        *,
+        job_id: str,
+        project_memory_space_id: str,
+        now: datetime,
+    ) -> OutboxJob | None:
+        job = self._tx.state.outbox_jobs.get(job_id)
+        if job is None or job.project_memory_space_id != project_memory_space_id:
+            return None
+        if job.status not in ("dead_letter",):
+            return None
+        updated = replace(
+            job,
+            status="pending",
+            locked_at=None,
+            locked_by=None,
+            lock_expires_at=None,
+            last_error=None,
+            dead_letter_reason=None,
+            next_run_at=now,
+            updated_at=now,
+        )
         self._tx.state.outbox_jobs[job_id] = updated
         return updated
 

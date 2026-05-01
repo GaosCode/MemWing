@@ -23,7 +23,11 @@ from .postgres_derived_rows import (
 from .postgres_derived_sql import (
     _GET_MEMORY_ITEM_SQL,
     _GET_LATEST_MEMORY_VERSION_SQL,
+    _GET_MEMORY_PAGE_FOR_UPDATE_SQL,
+    _GET_MEMORY_PAGE_SQL,
+    _GET_MEMORY_PAGE_VERSION_SQL,
     _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
+    _GET_MEMORY_VERSION_SQL,
     _INSERT_MEMORY_RECALL_EVENT_SQL,
     _LIST_MEMORY_ITEMS_DECAY_CANDIDATES_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
@@ -32,7 +36,10 @@ from .postgres_derived_sql import (
     _INSERT_MEMORY_VERSION_SQL,
     _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL,
     _LIST_MEMORY_ITEMS_BY_SOURCE_SQL,
+    _LIST_MEMORY_PAGE_VERSIONS_SQL,
+    _LIST_MEMORY_PAGES_FOR_SCOPE_SQL,
     _LIST_MEMORY_PAGES_NEEDS_REBUILD_SQL,
+    _LIST_MEMORY_VERSIONS_SQL,
     _LOCK_MEMORY_PAGE_SCOPE_SQL,
     _MARK_MEMORY_PAGES_REBUILD_FOR_SOURCE_SQL,
     _UPSERT_MEMORY_ITEM_SQL,
@@ -149,6 +156,25 @@ class PostgresMemoryVersionRepository:
         )
         return memory_version_from_row(row) if row is not None else None
 
+    async def get(self, memory_id: str, version: int) -> MemoryVersion | None:
+        row = await self._executor.fetchrow(
+            _GET_MEMORY_VERSION_SQL,
+            {"memory_id": memory_id, "version": version},
+        )
+        return memory_version_from_row(row) if row is not None else None
+
+    async def list_by_memory(
+        self,
+        *,
+        memory_id: str,
+        limit: int,
+    ) -> tuple[MemoryVersion, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_VERSIONS_SQL,
+            {"memory_id": memory_id, "limit": limit},
+        )
+        return tuple(memory_version_from_row(row) for row in rows)
+
 
 class PostgresMemoryPageRepository:
     def __init__(self, executor: PostgresExecutor) -> None:
@@ -210,6 +236,32 @@ class PostgresMemoryPageRepository:
         )
         return page_memory_from_row(row) if row is not None else None
 
+    async def get(self, page_id: str) -> PageMemory | None:
+        row = await self._executor.fetchrow(_GET_MEMORY_PAGE_SQL, {"page_id": page_id})
+        return page_memory_from_row(row) if row is not None else None
+
+    async def get_for_update(self, page_id: str) -> PageMemory | None:
+        row = await self._executor.fetchrow(_GET_MEMORY_PAGE_FOR_UPDATE_SQL, {"page_id": page_id})
+        return page_memory_from_row(row) if row is not None else None
+
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_PAGES_FOR_SCOPE_SQL,
+            {
+                "project_memory_space_id": scope.project_memory_space_id,
+                "group_ids": scope.group_ids,
+                "thread_id": scope.thread_id,
+                "shared_group_id": scope.shared_group_id,
+                "limit": limit,
+            },
+        )
+        return tuple(page_memory_from_row(row) for row in rows)
+
     async def mark_needs_rebuild_for_source(
         self,
         *,
@@ -268,6 +320,25 @@ class PostgresMemoryPageVersionRepository:
         if existing is None:
             raise RuntimeError("memory page version conflict did not resolve to an existing row")
         return memory_page_version_from_row(existing)
+
+    async def get(self, page_id: str, version: int) -> MemoryPageVersion | None:
+        row = await self._executor.fetchrow(
+            _GET_MEMORY_PAGE_VERSION_SQL,
+            {"page_id": page_id, "version": version},
+        )
+        return memory_page_version_from_row(row) if row is not None else None
+
+    async def list_by_page(
+        self,
+        *,
+        page_id: str,
+        limit: int,
+    ) -> tuple[MemoryPageVersion, ...]:
+        rows = await self._executor.fetch(
+            _LIST_MEMORY_PAGE_VERSIONS_SQL,
+            {"page_id": page_id, "limit": limit},
+        )
+        return tuple(memory_page_version_from_row(row) for row in rows)
 
 
 def _memory_item_params(item: MemoryItem) -> dict[str, object]:

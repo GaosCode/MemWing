@@ -134,6 +134,19 @@ FROM recent_source_events
 ORDER BY event_time ASC, id ASC
 """
 
+_REDACT_SOURCE_EVENT_SQL = """
+UPDATE source_events
+SET content = %(redacted_content)s,
+    content_preview = %(redacted_content)s,
+    purged_at = %(purged_at)s,
+    purged_by = %(purged_by)s,
+    purge_reason = %(purge_reason)s,
+    purge_level = %(purge_level)s,
+    graph_backend_raw_retained = %(graph_backend_raw_retained)s
+WHERE id = %(source_event_id)s
+RETURNING *
+"""
+
 _INSERT_OUTBOX_JOB_SQL = """
 INSERT INTO outbox_jobs (
     id, project_memory_space_id, source_event_id, job_type, payload_json,
@@ -221,5 +234,21 @@ SET attempts = attempts + 1,
 WHERE id = %(job_id)s
   AND status = 'processing'
   AND locked_by = %(locked_by)s
+RETURNING *
+"""
+
+_RETRY_OUTBOX_DEAD_LETTER_SQL = """
+UPDATE outbox_jobs
+SET status = 'pending',
+    locked_at = NULL,
+    locked_by = NULL,
+    lock_expires_at = NULL,
+    last_error = NULL,
+    dead_letter_reason = NULL,
+    next_run_at = %(now)s,
+    updated_at = %(now)s
+WHERE id = %(job_id)s
+  AND project_memory_space_id = %(project_memory_space_id)s
+  AND status = 'dead_letter'
 RETURNING *
 """

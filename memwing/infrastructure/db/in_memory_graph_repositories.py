@@ -198,6 +198,32 @@ class InMemoryGraphWriteJobRepository:
         self._tx.state.graph_write_jobs[job_id] = updated
         return updated
 
+    async def retry_dead_letter(
+        self,
+        *,
+        job_id: str,
+        project_memory_space_id: str,
+        now: datetime,
+    ) -> GraphWriteJob | None:
+        job = self._tx.state.graph_write_jobs.get(job_id)
+        if job is None or job.project_memory_space_id != project_memory_space_id:
+            return None
+        if job.status != "dead_letter":
+            return None
+        updated = replace(
+            job,
+            status="pending",
+            locked_at=None,
+            locked_by=None,
+            lock_expires_at=None,
+            last_error=None,
+            dead_letter_reason=None,
+            next_run_at=now,
+            updated_at=now,
+        )
+        self._tx.state.graph_write_jobs[job_id] = updated
+        return updated
+
     def _get_locked_job(self, job_id: str, locked_by: str) -> GraphWriteJob:
         job = self._tx.state.graph_write_jobs[job_id]
         if job.status != "processing" or job.locked_by != locked_by:

@@ -164,6 +164,26 @@ class InMemoryMemoryVersionRepository:
         versions.sort(key=lambda version: version.version, reverse=True)
         return versions[0] if versions else None
 
+    async def get(self, memory_id: str, version: int) -> MemoryVersion | None:
+        version_id = self._tx.state.memory_version_by_memory_version.get((memory_id, version))
+        if version_id is None:
+            return None
+        return self._tx.state.memory_versions[version_id]
+
+    async def list_by_memory(
+        self,
+        *,
+        memory_id: str,
+        limit: int,
+    ) -> tuple[MemoryVersion, ...]:
+        versions = [
+            version
+            for version in self._tx.state.memory_versions.values()
+            if version.memory_id == memory_id
+        ]
+        versions.sort(key=lambda version: version.version, reverse=True)
+        return tuple(versions[:limit])
+
 
 class InMemoryMemoryPageRepository:
     def __init__(self, tx: InMemoryTransactionView) -> None:
@@ -234,6 +254,32 @@ class InMemoryMemoryPageRepository:
             scope_id=scope_id,
         )
 
+    async def get(self, page_id: str) -> PageMemory | None:
+        return self._tx.state.memory_pages.get(page_id)
+
+    async def get_for_update(self, page_id: str) -> PageMemory | None:
+        return await self.get(page_id)
+
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        pages = [
+            page
+            for page in self._tx.state.memory_pages.values()
+            if page.project_memory_space_id == scope.project_memory_space_id
+            and effective_scope_matches(
+                group_id=page.group_id,
+                thread_id=page.thread_id,
+                shared_group_id=page.shared_group_id,
+                scope=scope,
+            )
+        ]
+        pages.sort(key=lambda page: (page.updated_at, page.id), reverse=True)
+        return tuple(pages[:limit])
+
     async def mark_needs_rebuild_for_source(
         self,
         *,
@@ -279,3 +325,23 @@ class InMemoryMemoryPageVersionRepository:
         self._tx.state.memory_page_versions[version.id] = version
         self._tx.state.memory_page_version_by_page_version[key] = version.id
         return version
+
+    async def get(self, page_id: str, version: int) -> MemoryPageVersion | None:
+        version_id = self._tx.state.memory_page_version_by_page_version.get((page_id, version))
+        if version_id is None:
+            return None
+        return self._tx.state.memory_page_versions[version_id]
+
+    async def list_by_page(
+        self,
+        *,
+        page_id: str,
+        limit: int,
+    ) -> tuple[MemoryPageVersion, ...]:
+        versions = [
+            version
+            for version in self._tx.state.memory_page_versions.values()
+            if version.page_id == page_id
+        ]
+        versions.sort(key=lambda version: version.version, reverse=True)
+        return tuple(versions[:limit])

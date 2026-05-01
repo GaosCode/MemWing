@@ -24,6 +24,8 @@ from .postgres_sql import (
     _LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
     _MARK_OUTBOX_SUCCEEDED_SQL,
+    _REDACT_SOURCE_EVENT_SQL,
+    _RETRY_OUTBOX_DEAD_LETTER_SQL,
     _SELECT_AUDIT_EVENT_BY_IDEMPOTENCY_SQL,
     _SELECT_EXISTING_SOURCE_EVENT_SQL,
 )
@@ -63,6 +65,31 @@ class PostgresSourceEventRepository:
         row = await self._executor.fetchrow(
             "SELECT * FROM source_events WHERE id = %(source_event_id)s",
             {"source_event_id": source_event_id},
+        )
+        return source_event_from_row(row) if row is not None else None
+
+    async def redact_source_event(
+        self,
+        *,
+        source_event_id: str,
+        redacted_content: str,
+        purged_at: datetime,
+        purged_by: str,
+        purge_reason: str,
+        purge_level: str,
+        graph_backend_raw_retained: bool,
+    ) -> SourceEvent | None:
+        row = await self._executor.fetchrow(
+            _REDACT_SOURCE_EVENT_SQL,
+            {
+                "source_event_id": source_event_id,
+                "redacted_content": redacted_content,
+                "purged_at": purged_at,
+                "purged_by": purged_by,
+                "purge_reason": purge_reason,
+                "purge_level": purge_level,
+                "graph_backend_raw_retained": graph_backend_raw_retained,
+            },
         )
         return source_event_from_row(row) if row is not None else None
 
@@ -266,6 +293,23 @@ class PostgresOutboxJobRepository:
         if row is None:
             raise OutboxLockOwnershipError("outbox job is not locked by this worker")
         return outbox_job_from_row(row)
+
+    async def retry_dead_letter(
+        self,
+        *,
+        job_id: str,
+        project_memory_space_id: str,
+        now: datetime,
+    ) -> OutboxJob | None:
+        row = await self._executor.fetchrow(
+            _RETRY_OUTBOX_DEAD_LETTER_SQL,
+            {
+                "job_id": job_id,
+                "project_memory_space_id": project_memory_space_id,
+                "now": now,
+            },
+        )
+        return outbox_job_from_row(row) if row is not None else None
 
 
 def _source_event_params(event: SourceEvent) -> dict[str, object]:

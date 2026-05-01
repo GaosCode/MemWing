@@ -46,6 +46,19 @@ class SourceEventRepositoryPort(Protocol):
     async def get_source_event(self, source_event_id: str) -> SourceEvent | None:
         ...
 
+    async def redact_source_event(
+        self,
+        *,
+        source_event_id: str,
+        redacted_content: str,
+        purged_at: datetime,
+        purged_by: str,
+        purge_reason: str,
+        purge_level: str,
+        graph_backend_raw_retained: bool,
+    ) -> SourceEvent | None:
+        ...
+
     async def list_for_scope(
         self,
         *,
@@ -126,6 +139,15 @@ class OutboxJobRepositoryPort(Protocol):
         error: str,
         retry_delay: timedelta,
     ) -> OutboxJob:
+        ...
+
+    async def retry_dead_letter(
+        self,
+        *,
+        job_id: str,
+        project_memory_space_id: str,
+        now: datetime,
+    ) -> OutboxJob | None:
         ...
 
 
@@ -225,6 +247,17 @@ class MemoryVersionRepositoryPort(Protocol):
     async def get_latest(self, memory_id: str) -> MemoryVersion | None:
         ...
 
+    async def get(self, memory_id: str, version: int) -> MemoryVersion | None:
+        ...
+
+    async def list_by_memory(
+        self,
+        *,
+        memory_id: str,
+        limit: int,
+    ) -> tuple[MemoryVersion, ...]:
+        ...
+
 
 class MemoryPageRepositoryPort(Protocol):
     async def upsert(self, page: PageMemory) -> PageMemory:
@@ -257,6 +290,20 @@ class MemoryPageRepositoryPort(Protocol):
     ) -> PageMemory | None:
         ...
 
+    async def get(self, page_id: str) -> PageMemory | None:
+        ...
+
+    async def get_for_update(self, page_id: str) -> PageMemory | None:
+        ...
+
+    async def list_for_scope(
+        self,
+        *,
+        scope: EffectiveScope,
+        limit: int,
+    ) -> tuple[PageMemory, ...]:
+        ...
+
     async def mark_needs_rebuild_for_source(
         self,
         *,
@@ -276,6 +323,17 @@ class MemoryPageRepositoryPort(Protocol):
 
 class MemoryPageVersionRepositoryPort(Protocol):
     async def record(self, version: MemoryPageVersion) -> MemoryPageVersion:
+        ...
+
+    async def get(self, page_id: str, version: int) -> MemoryPageVersion | None:
+        ...
+
+    async def list_by_page(
+        self,
+        *,
+        page_id: str,
+        limit: int,
+    ) -> tuple[MemoryPageVersion, ...]:
         ...
 
 
@@ -341,6 +399,15 @@ class GraphWriteJobRepositoryPort(Protocol):
     ) -> GraphWriteJob:
         ...
 
+    async def retry_dead_letter(
+        self,
+        *,
+        job_id: str,
+        project_memory_space_id: str,
+        now: datetime,
+    ) -> GraphWriteJob | None:
+        ...
+
 
 class MemoryGraphLinkRepositoryPort(Protocol):
     async def upsert(self, link: MemoryGraphLink) -> MemoryGraphLink:
@@ -368,6 +435,19 @@ class ForgettingReviewCandidateRepositoryPort(Protocol):
 
 class PushCandidateRepositoryPort(Protocol):
     async def upsert(self, candidate: PushCandidate) -> PushCandidate:
+        ...
+
+    async def get(self, candidate_id: str) -> PushCandidate | None:
+        ...
+
+    async def update_status(
+        self,
+        *,
+        candidate_id: str,
+        project_memory_space_id: str,
+        status: str,
+        updated_at: datetime,
+    ) -> PushCandidate | None:
         ...
 
     async def list_for_project(

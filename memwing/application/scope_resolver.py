@@ -73,6 +73,17 @@ class ScopeResolver:
             platform_thread_id=platform_ref.thread_id,
         )
 
+    async def resolve_control(self, scope_hint: MemoryScope) -> ResolvedScope:
+        project = await self._bindings.get_project_memory_space(scope_hint.project_memory_space_id)
+        if project is None:
+            raise ScopeResolutionError("project memory space was not found")
+        return await self._build_resolved_scope(
+            project_memory_space_id=project.id,
+            bound_group_id=None,
+            bound_thread_id=None,
+            hint=scope_hint,
+        )
+
     async def resolve_page_memory_rebuild(self, page: PageMemory) -> ResolvedScope:
         project = await self._bindings.get_project_memory_space(page.project_memory_space_id)
         if project is None:

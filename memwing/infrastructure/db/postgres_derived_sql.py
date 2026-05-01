@@ -266,6 +266,17 @@ ORDER BY updated_at DESC, id DESC
 LIMIT %(limit)s
 """
 
+_GET_PUSH_CANDIDATE_SQL = "SELECT * FROM push_candidates WHERE id = %(candidate_id)s"
+
+_UPDATE_PUSH_CANDIDATE_STATUS_SQL = """
+UPDATE push_candidates
+SET status = %(status)s,
+    updated_at = %(updated_at)s
+WHERE id = %(candidate_id)s
+  AND project_memory_space_id = %(project_memory_space_id)s
+RETURNING *
+"""
+
 _INSERT_MEMORY_VERSION_SQL = """
 INSERT INTO memory_versions (
     id, memory_id, version, title, content, summary, status, source_event_ids,
@@ -285,6 +296,21 @@ FROM memory_versions
 WHERE memory_id = %(memory_id)s
 ORDER BY version DESC
 LIMIT 1
+"""
+
+_GET_MEMORY_VERSION_SQL = """
+SELECT *
+FROM memory_versions
+WHERE memory_id = %(memory_id)s
+  AND version = %(version)s
+"""
+
+_LIST_MEMORY_VERSIONS_SQL = """
+SELECT *
+FROM memory_versions
+WHERE memory_id = %(memory_id)s
+ORDER BY version DESC
+LIMIT %(limit)s
 """
 
 _UPSERT_MEMORY_PAGE_SQL = """
@@ -343,6 +369,29 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
 FOR UPDATE
 """
 
+_GET_MEMORY_PAGE_SQL = "SELECT * FROM memory_pages WHERE id = %(page_id)s"
+
+_GET_MEMORY_PAGE_FOR_UPDATE_SQL = """
+SELECT *
+FROM memory_pages
+WHERE id = %(page_id)s
+FOR UPDATE
+"""
+
+_LIST_MEMORY_PAGES_FOR_SCOPE_SQL = """
+SELECT *
+FROM memory_pages
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
+  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (
+      %(shared_group_id)s IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+  )
+ORDER BY updated_at DESC, id DESC
+LIMIT %(limit)s
+"""
+
 _MARK_MEMORY_PAGES_REBUILD_FOR_SOURCE_SQL = """
 UPDATE memory_pages
 SET needs_rebuild = true,
@@ -358,6 +407,21 @@ FROM memory_pages
 WHERE project_memory_space_id = %(project_memory_space_id)s
   AND needs_rebuild = true
 ORDER BY updated_at ASC, id
+LIMIT %(limit)s
+"""
+
+_GET_MEMORY_PAGE_VERSION_SQL = """
+SELECT *
+FROM memory_page_versions
+WHERE page_id = %(page_id)s
+  AND version = %(version)s
+"""
+
+_LIST_MEMORY_PAGE_VERSIONS_SQL = """
+SELECT *
+FROM memory_page_versions
+WHERE page_id = %(page_id)s
+ORDER BY version DESC
 LIMIT %(limit)s
 """
 
@@ -537,6 +601,22 @@ SET attempts = attempts + 1,
 WHERE id = %(job_id)s
   AND status = 'processing'
   AND locked_by = %(locked_by)s
+RETURNING *
+"""
+
+_RETRY_GRAPH_WRITE_DEAD_LETTER_SQL = """
+UPDATE graph_write_jobs
+SET status = 'pending',
+    locked_at = NULL,
+    locked_by = NULL,
+    lock_expires_at = NULL,
+    last_error = NULL,
+    dead_letter_reason = NULL,
+    next_run_at = %(now)s,
+    updated_at = %(now)s
+WHERE id = %(job_id)s
+  AND project_memory_space_id = %(project_memory_space_id)s
+  AND status = 'dead_letter'
 RETURNING *
 """
 
