@@ -2,12 +2,26 @@ import { useState } from "react";
 import { Check, Clock3, Eye, FileText, MoreHorizontal, Pause, Play, RotateCcw, ShieldCheck, TrendingDown } from "lucide-react";
 import { maintenanceItems, memories } from "../../shared/api/mockData";
 import { Button, IconButton, Metric, PageHeader, ScrollableTabs, StatusPill, StrengthMeter } from "../../shared/components/ui";
-import { severityStatus } from "../../shared/design-system/status";
+import { severityTone } from "../../shared/design-system/status";
+import { curveStateLabel, maintenanceStateLabel } from "../../shared/i18n/formatters";
+import { useI18n } from "../../shared/i18n";
+import type { LocaleDictionary } from "../../shared/i18n/locales/zh-CN";
 import type { MaintenanceItem, MemoryItem } from "../../shared/types/entities";
 import { jobHistoryRows, workerHealthRows } from "./maintenanceData";
 
 const maintenanceTabs = ["Overview", "Needs Attention", "Review Queue", "Recent Failures", "Push Candidates", "Forgetting Review", "Worker Health", "Job History"];
 const chips = ["All", "Failed", "Review", "Push", "Forgetting"];
+
+function chipLabel(dictionary: LocaleDictionary, chip: string) {
+  const chipMap: Record<string, string> = {
+    All: dictionary.maintenance.chips.all,
+    Failed: dictionary.maintenance.chips.failed,
+    Review: dictionary.maintenance.chips.review,
+    Push: dictionary.maintenance.chips.push,
+    Forgetting: dictionary.maintenance.chips.forgetting,
+  };
+  return chipMap[chip] ?? chip;
+}
 
 export function MaintenancePage({
   selected,
@@ -16,11 +30,12 @@ export function MaintenancePage({
   selected: MaintenanceItem;
   onSelect: (item: MaintenanceItem) => void;
 }) {
+  const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Needs Attention");
   const [activeChip, setActiveChip] = useState("All");
   const [queuePaused, setQueuePaused] = useState(false);
   const [taskActions, setTaskActions] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState("Automation queue is live");
+  const [notice, setNotice] = useState(dictionary.maintenance.noticeLive);
 
   function itemKey(item: MaintenanceItem) {
     return `${item.type}:${item.title}:${item.updated}`;
@@ -44,26 +59,26 @@ export function MaintenancePage({
   return (
     <>
       <PageHeader
-        title="Maintenance"
-        subtitle="Monitor memory automation, review maintenance tasks, and recover failed jobs safely."
+        title={dictionary.maintenance.title}
+        subtitle={dictionary.maintenance.subtitle}
         actions={
           <>
-            <Button icon={queuePaused ? Play : Pause} label={queuePaused ? "Resume Queue" : "Pause Queue"} onClick={() => {
+            <Button icon={queuePaused ? Play : Pause} label={queuePaused ? dictionary.actions.resumeQueue : dictionary.actions.pauseQueue} onClick={() => {
               setQueuePaused((value) => !value);
-              setNotice(queuePaused ? "Queue resumed" : "Queue paused for manual review");
+              setNotice(queuePaused ? dictionary.maintenance.queueResumed : dictionary.maintenance.queuePaused);
             }} />
-            <Button icon={RotateCcw} label="Retry Failed" onClick={() => setNotice("Retry scheduled for 2 failed jobs")} />
-            <IconButton label="More" icon={MoreHorizontal} onClick={() => setNotice("Maintenance command menu opened")} />
+            <Button icon={RotateCcw} label={dictionary.actions.retryFailed} onClick={() => setNotice(dictionary.maintenance.retryScheduled)} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Maintenance command menu opened")} />
           </>
         }
       />
 
       <div className="status-strip">
-        <Metric label="Queue" value={queuePaused ? "Paused" : "Running"} tone={queuePaused ? "orange" : "green"} />
-        <Metric label="Needs Review" value="7" tone="orange" />
-        <Metric label="Failed Jobs" value="2" tone="red" />
-        <Metric label="Workers Healthy" value="4 / 5" tone="green" />
-        <Metric label="Last Run" value="2026-04-27 11:32" />
+        <Metric label={dictionary.maintenance.metrics.queue} value={queuePaused ? dictionary.status.queue.Paused : dictionary.status.queue.Running} tone={queuePaused ? "orange" : "green"} />
+        <Metric label={dictionary.maintenance.metrics.needsReview} value="7" tone="orange" />
+        <Metric label={dictionary.maintenance.metrics.failedJobs} value="2" tone="red" />
+        <Metric label={dictionary.maintenance.metrics.workersHealthy} value="4 / 5" tone="green" />
+        <Metric label={dictionary.maintenance.metrics.lastRun} value="2026-04-27 11:32" />
       </div>
 
       <ScrollableTabs
@@ -147,13 +162,14 @@ function NeedsAttention({
   onSelect: (item: MaintenanceItem) => void;
   onChip: (chip: string) => void;
 }) {
+  const { dictionary } = useI18n();
   return (
     <>
       <div className="section-toolbar">
-        <h2>Needs Attention</h2>
+        <h2>{dictionary.maintenance.tabs.needsAttention}</h2>
         <div className="chip-row">
           {chips.map((chip) => (
-            <button key={chip} className={activeChip === chip ? "is-active" : ""} type="button" onClick={() => onChip(chip)}>{chip}</button>
+            <button key={chip} className={activeChip === chip ? "is-active" : ""} type="button" onClick={() => onChip(chip)}>{chipLabel(dictionary, chip)}</button>
           ))}
         </div>
       </div>
@@ -211,6 +227,7 @@ function RecentFailures({
   onSelect: (item: MaintenanceItem) => void;
   onAction: (item: MaintenanceItem, action: string) => void;
 }) {
+  const { dictionary } = useI18n();
   return (
     <>
       <div className="section-toolbar">
@@ -224,13 +241,13 @@ function RecentFailures({
       <div className="failure-recovery">
         {items.map((item) => (
           <section key={item.title} className="failure-card">
-            <StatusPill label="Blocked" tone="red" />
+            <StatusPill label={dictionary.status.queue.Blocked} tone="red" />
             <strong>{item.title}</strong>
             <p>{item.reason}. Review audit before retrying the worker.</p>
             <div className="inline-action-row">
-              <Button primary icon={RotateCcw} label="Retry Job" onClick={() => onAction(item, "Retry scheduled after review")} />
-              <Button icon={ShieldCheck} label="Open Audit" onClick={() => onAction(item, "Audit opened")} />
-              <Button icon={Eye} label="View Source" onClick={() => onSelect(item)} />
+              <Button primary icon={RotateCcw} label={dictionary.actions.retryJob} onClick={() => onAction(item, "Retry scheduled after review")} />
+              <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={() => onAction(item, "Audit opened")} />
+              <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => onSelect(item)} />
             </div>
           </section>
         ))}
@@ -304,15 +321,16 @@ function MaintenanceTable({
   actions?: Record<string, string>;
   onSelect: (item: MaintenanceItem) => void;
 }) {
+  const { dictionary } = useI18n();
   return (
     <div className="maintenance-table">
       <div className="maintenance-row maintenance-row--head">
-        <span>Type</span>
-        <span>Item</span>
-        <span>Source</span>
-        <span>Reason</span>
-        <span>State</span>
-        <span>Updated</span>
+        <span>{dictionary.maintenance.table.type}</span>
+        <span>{dictionary.maintenance.table.item}</span>
+        <span>{dictionary.maintenance.table.source}</span>
+        <span>{dictionary.maintenance.table.reason}</span>
+        <span>{dictionary.maintenance.table.state}</span>
+        <span>{dictionary.maintenance.table.updated}</span>
       </div>
       {items.map((item) => (
         <button
@@ -320,11 +338,11 @@ function MaintenanceTable({
           className={`maintenance-row ${selected?.title === item.title ? "is-selected" : ""}`}
           onClick={() => onSelect(item)}
         >
-          <StatusPill label={item.type} tone={severityStatus[item.severity].tone} />
+          <StatusPill label={item.type} tone={severityTone[item.severity]} />
           <span>{item.title}</span>
           <span>{item.source}</span>
           <span>{item.reason}</span>
-          <span><StatusPill label={actions?.[`${item.type}:${item.title}:${item.updated}`] ?? item.state} tone={item.state === "Failed" ? "red" : item.state === "Open" ? "green" : "orange"} /></span>
+          <span><StatusPill label={actions?.[`${item.type}:${item.title}:${item.updated}`] ?? maintenanceStateLabel(dictionary, item.state)} tone={item.state === "Failed" ? "red" : item.state === "Open" ? "green" : "orange"} /></span>
           <span>{item.updated}</span>
         </button>
       ))}
@@ -343,6 +361,7 @@ function ForgettingReview({
   onDecision: (key: string, decision: string) => void;
   decisions: Record<string, string>;
 }) {
+  const { dictionary } = useI18n();
   const forgettingItems = maintenanceItems.filter((item) => item.type === "Forgetting" || item.state === "Ready to forget");
   const fadingMemories = memories.filter((memory) => memory.forgetting.curveState !== "stable").slice(0, 4);
   const decayPoints = [
@@ -363,7 +382,7 @@ function ForgettingReview({
           <h2>Forgetting Curve Review</h2>
           <p className="section-subtitle">Review decay score, next review, and retention reason before memory is forgotten.</p>
         </div>
-        <Button icon={TrendingDown} label="Refresh Decay Scores" onClick={onRefresh} />
+        <Button icon={TrendingDown} label={dictionary.actions.refreshDecayScores} onClick={onRefresh} />
       </div>
       <div className="curve-review-grid">
         <section className="curve-panel">
@@ -404,7 +423,7 @@ function ForgettingReview({
               <Clock3 size={17} />
               <span>{item.title}</span>
               <StrengthMeter value={0.48} compact />
-              <StatusPill label={decisions[`${item.type}:${item.title}:${item.updated}`] ?? item.state} tone="orange" />
+              <StatusPill label={decisions[`${item.type}:${item.title}:${item.updated}`] ?? maintenanceStateLabel(dictionary, item.state)} tone="orange" />
             </button>
           ))}
         </section>
@@ -422,12 +441,13 @@ function ForgettingMemoryRow({
   decision?: string;
   onDecision: (key: string, decision: string) => void;
 }) {
+  const { dictionary } = useI18n();
   return (
     <section className="curve-review-row curve-review-row--memory">
       <FileText size={17} />
       <span>{memory.title}</span>
       <StrengthMeter value={memory.forgetting.decayScore} compact />
-      <StatusPill label={decision ?? memory.forgetting.curveState.replace(/_/g, " ")} tone={memory.forgetting.curveState === "ready_to_forget" ? "red" : "orange"} />
+      <StatusPill label={decision ?? curveStateLabel(dictionary, memory.forgetting.curveState)} tone={memory.forgetting.curveState === "ready_to_forget" ? "red" : "orange"} />
       <small>next review {memory.forgetting.nextReviewAt}</small>
       <div className="inline-action-row">
         <button type="button" onClick={() => onDecision(memory.id, "Reinforced")}>reinforce</button>

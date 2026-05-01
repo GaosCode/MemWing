@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { ChevronDown, ExternalLink, Pin, X, type LucideIcon } from "lucide-react";
-import { lifecycleStatus } from "../design-system/status";
+import { lifecycleTone, type StatusTone } from "../design-system/status";
+import { lifecycleDescription, lifecycleLabel } from "../i18n/formatters";
+import { useI18n } from "../i18n";
 import type { LifecycleStatus } from "../types/lifecycle";
 
 const MIN_INSPECTOR_WIDTH = 320;
@@ -46,6 +48,7 @@ export function SplitSurface({
   onInspectorWidthChange?: (width: number) => void;
   onReopenInspector?: () => void;
 }) {
+  const { dictionary } = useI18n();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const handleDragState = useRef<{ startX: number; startY: number; startTop: number; moved: boolean } | null>(null);
@@ -154,7 +157,7 @@ export function SplitSurface({
           <div
             className="inspector-resizer"
             role="separator"
-            aria-label="Resize inspector"
+            aria-label={dictionary.common.resizeInspector}
             aria-orientation="vertical"
             aria-valuemin={MIN_INSPECTOR_WIDTH}
             aria-valuemax={MAX_INSPECTOR_WIDTH}
@@ -174,8 +177,8 @@ export function SplitSurface({
         <div
           className="inspector-floating-handle"
           role="button"
-          aria-label="Open inspector"
-          title="Open inspector"
+          aria-label={dictionary.common.openInspector}
+          title={dictionary.common.openInspector}
           tabIndex={0}
           style={handleStyle}
           onKeyDown={handleHandleKeyDown}
@@ -184,7 +187,7 @@ export function SplitSurface({
           onPointerUp={clearHandleDrag}
           onPointerCancel={clearHandleDrag}
         >
-          <span>Inspector</span>
+          <span>{dictionary.common.inspector}</span>
         </div>
       )}
     </div>
@@ -336,16 +339,17 @@ export function SelectMenu({
 }
 
 export function StatusBadge({ status }: { status: LifecycleStatus }) {
-  const meta = lifecycleStatus[status];
+  const { dictionary } = useI18n();
+  const tone = lifecycleTone[status];
   return (
-    <span className={`status-badge status-badge--${meta.tone}`} title={meta.description}>
-      <span className={`status-dot status-dot--${meta.tone}`} aria-hidden="true" />
-      {meta.label}
+    <span className={`status-badge status-badge--${tone}`} title={lifecycleDescription(dictionary, status)}>
+      <span className={`status-dot status-dot--${tone}`} aria-hidden="true" />
+      {lifecycleLabel(dictionary, status)}
     </span>
   );
 }
 
-export function StatusPill({ label, tone }: { label: string; tone: "green" | "orange" | "red" | "gray" }) {
+export function StatusPill({ label, tone }: { label: string; tone: StatusTone }) {
   return (
     <span className={`status-pill status-pill--${tone}`}>
       <span className={`status-dot status-dot--${tone}`} />
@@ -407,13 +411,14 @@ export function InspectorHeader({
   onPin?: () => void;
   pinned?: boolean;
 }) {
+  const { dictionary } = useI18n();
   return (
     <div className="inspector-header">
       <h1>{title}</h1>
       <div>
-        <IconButton label="Open full detail" icon={ExternalLink} onClick={onOpen} />
-        <IconButton label={pinned ? "Unpin inspector" : "Pin inspector"} icon={Pin} onClick={onPin} />
-        <IconButton label="Close inspector" icon={X} onClick={onClose} />
+        <IconButton label={dictionary.common.openFullDetail} icon={ExternalLink} onClick={onOpen} />
+        <IconButton label={pinned ? dictionary.common.unpinInspector : dictionary.common.pinInspector} icon={Pin} onClick={onPin} />
+        <IconButton label={dictionary.common.closeInspector} icon={X} onClick={onClose} />
       </div>
     </div>
   );

@@ -1,62 +1,66 @@
 import { useState } from "react";
 import { Check, RefreshCcw, ShieldCheck } from "lucide-react";
 import { Button, PageHeader, StatusPill } from "../../shared/components/ui";
+import { useI18n } from "../../shared/i18n";
 
-const initialSettings = [
-  { title: "Project Space", value: "产品记忆治理", body: "Default workspace for current memory governance.", mutable: false },
-  { title: "OpenClaw Integration", value: "Connected", body: "ContextEngine hooks are ready for ingest, assemble, and compact.", mutable: false },
-  { title: "Feishu Integration", value: "Connected", body: "Webhook verification and source preview are enabled.", mutable: false },
-  { title: "Graph Backend", value: "GraphitiAdapter", body: "Core contracts stay backend-neutral.", mutable: false },
-  { title: "LLM Filter", value: "Enabled", body: "Candidate extraction and review suggestions are queued.", mutable: true },
-  { title: "Safety", value: "safe_mode off", body: "Cross-group recall stays controlled by configured scope rules.", mutable: true },
-  { title: "Automation", value: "Queue running", body: "Background jobs update status without modal interruptions.", mutable: true },
-  { title: "Debug", value: "Collapsed", body: "Raw ids are hidden unless debug mode is opened.", mutable: true },
+type SettingKey = "projectSpace" | "openClaw" | "feishu" | "graphBackend" | "llmFilter" | "safety" | "automation" | "debug";
+
+const initialSettings: Array<{ key: SettingKey; value: string; mutable: boolean }> = [
+  { key: "projectSpace", value: "产品记忆治理", mutable: false },
+  { key: "openClaw", value: "Connected", mutable: false },
+  { key: "feishu", value: "Connected", mutable: false },
+  { key: "graphBackend", value: "GraphitiAdapter", mutable: false },
+  { key: "llmFilter", value: "Enabled", mutable: true },
+  { key: "safety", value: "safe_mode off", mutable: true },
+  { key: "automation", value: "Queue running", mutable: true },
+  { key: "debug", value: "Collapsed", mutable: true },
 ];
 
 export function SettingsPage() {
+  const { dictionary } = useI18n();
   const [settings, setSettings] = useState(initialSettings);
-  const [notice, setNotice] = useState("Settings are loaded");
+  const [notice, setNotice] = useState(dictionary.settings.loaded);
 
-  function toggleSetting(title: string) {
+  function toggleSetting(key: SettingKey) {
     setSettings((current) => current.map((setting) => {
-      if (setting.title !== title || !setting.mutable) {
+      if (setting.key !== key || !setting.mutable) {
         return setting;
       }
 
       const nextValue: Record<string, string> = {
-        "LLM Filter": setting.value === "Enabled" ? "Disabled" : "Enabled",
-        Safety: setting.value === "safe_mode off" ? "safe_mode on" : "safe_mode off",
-        Automation: setting.value === "Queue running" ? "Queue paused" : "Queue running",
-        Debug: setting.value === "Collapsed" ? "Expanded" : "Collapsed",
+        llmFilter: setting.value === "Enabled" ? "Disabled" : "Enabled",
+        safety: setting.value === "safe_mode off" ? "safe_mode on" : "safe_mode off",
+        automation: setting.value === "Queue running" ? "Queue paused" : "Queue running",
+        debug: setting.value === "Collapsed" ? "Expanded" : "Collapsed",
       };
 
-      return { ...setting, value: nextValue[title] ?? setting.value };
+      return { ...setting, value: nextValue[key] ?? setting.value };
     }));
-    setNotice(`${title} updated locally`);
+    setNotice(`${dictionary.settings.sections[key].title} updated locally`);
   }
 
   return (
     <section className="settings-page">
       <PageHeader
-        title="Settings"
-        subtitle="Configure integrations, safety boundaries, automation behavior, and debug visibility."
+        title={dictionary.settings.title}
+        subtitle={dictionary.settings.subtitle}
         actions={
           <>
-            <Button icon={RefreshCcw} label="Test Connections" onClick={() => setNotice("Integration checks passed")} />
-            <Button primary icon={ShieldCheck} label="Save Settings" onClick={() => setNotice("Settings saved locally")} />
+            <Button icon={RefreshCcw} label={dictionary.actions.testConnections} onClick={() => setNotice(dictionary.settings.checksPassed)} />
+            <Button primary icon={ShieldCheck} label={dictionary.actions.saveSettings} onClick={() => setNotice(dictionary.settings.saved)} />
           </>
         }
       />
       <div className="notice-row"><Check size={15} />{notice}</div>
       <div className="settings-grid">
-        {settings.map(({ title, value, body, mutable }) => (
-          <button className="settings-section" type="button" key={title} onClick={() => toggleSetting(title)} disabled={!mutable}>
+        {settings.map(({ key, value, mutable }) => (
+          <button className="settings-section" type="button" key={key} onClick={() => toggleSetting(key)} disabled={!mutable}>
             <div>
-              <h2>{title}</h2>
+              <h2>{dictionary.settings.sections[key].title}</h2>
               <StatusPill label={value} tone={settingTone(value)} />
             </div>
-            <p>{body}</p>
-            <span className="settings-action">{mutable ? "Toggle" : "Locked"}</span>
+            <p>{dictionary.settings.sections[key].body}</p>
+            <span className="settings-action">{mutable ? dictionary.settings.toggle : dictionary.settings.locked}</span>
           </button>
         ))}
       </div>

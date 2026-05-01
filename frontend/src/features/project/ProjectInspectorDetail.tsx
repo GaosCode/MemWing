@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { ArrowLeft, Check, CircleAlert, Database, Eye, FileText, GitBranch, GitCompare, MoreHorizontal, Network, RefreshCcw, ShieldCheck, Trash2, User } from "lucide-react";
 import { Button, Definition, DetailTabs, DocSection, IconButton, InspectorSection, Metric, SimpleTable, StatusPill, Timeline } from "../../shared/components/ui";
+import { useI18n } from "../../shared/i18n";
 import { auditEvents, projectSources, projectVersions, rebuildChanges } from "./projectData";
 import { ProjectRebuildChangeList } from "./ProjectRebuildChangeList";
 
 export function ProjectInspectorDetail({ onBack }: { onBack: () => void }) {
+  const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Overview");
   const [reviewState, setReviewState] = useState("Review Pending");
   const [notice, setNotice] = useState("Project inspector is ready");
@@ -34,14 +36,14 @@ export function ProjectInspectorDetail({ onBack }: { onBack: () => void }) {
         <div className="inline-action-row">
           <Button primary icon={Check} label="Confirm Changes" onClick={confirmChanges} />
           <Button icon={Trash2} label="Discard" onClick={discardChanges} />
-          <Button icon={Eye} label="View Source" onClick={() => setActiveTab("Sources")} />
-          <IconButton label="More" icon={MoreHorizontal} onClick={() => setNotice("Project inspector command menu opened")} />
+          <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Sources")} />
+          <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Project inspector command menu opened")} />
         </div>
       </header>
 
       <div className="status-strip status-strip--detail">
-        <Metric label="Strength" value="0.84" meter />
-        <Metric label="Lifecycle" value={`Active · ${reviewState}`} tone={reviewState === "Confirmed" ? "green" : "orange"} />
+        <Metric label={dictionary.inspector.strength} value="0.84" meter />
+        <Metric label="Lifecycle" value={`${dictionary.status.lifecycle.active.label} · ${reviewState}`} tone={reviewState === "Confirmed" ? "green" : "orange"} />
         <Metric label="Last Rebuild" value="2026-04-27 11:32" />
         <Metric label="Version" value="v3 current" />
       </div>
@@ -83,6 +85,7 @@ export function ProjectInspectorDetail({ onBack }: { onBack: () => void }) {
 }
 
 function ProjectInspectorOverview() {
+  const { dictionary } = useI18n();
   return (
     <>
       <DocSection icon={FileText} title="Project Status Summary">
@@ -106,9 +109,9 @@ function ProjectInspectorOverview() {
       </DocSection>
       <DocSection icon={CircleAlert} title="Open Risks">
         <ul className="two-column-list">
-          <li>Overwriting stable project context during rebuild.<StatusPill label="High" tone="red" /></li>
-          <li>Insufficient evidence for promoted decisions.<StatusPill label="Medium" tone="orange" /></li>
-          <li>Stale unresolved questions staying active too long.<StatusPill label="Low" tone="green" /></li>
+          <li>Overwriting stable project context during rebuild.<StatusPill label={dictionary.status.severity.high} tone="red" /></li>
+          <li>Insufficient evidence for promoted decisions.<StatusPill label={dictionary.status.severity.medium} tone="orange" /></li>
+          <li>Stale unresolved questions staying active too long.<StatusPill label={dictionary.status.severity.low} tone="green" /></li>
         </ul>
       </DocSection>
     </>

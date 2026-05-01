@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Archive, ArrowLeft, Check, CircleAlert, Database, Edit3, Eye, EyeOff, FileText, GitBranch, Link2, MoreHorizontal, Pin, RotateCcw } from "lucide-react";
 import { Button, Definition, DetailTabs, DocSection, IconButton, InspectorSection, StatusBadge, StatusPill, StrengthMeter, Timeline } from "../../shared/components/ui";
+import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
 
 const memoryTabs = ["Overview", "Sources", "Evidence", "Graph", "Versions", "Audit", "Recalls", "Pushes"];
 
 export function MemoryDetailPage({ memory, onBack }: { memory: MemoryItem; onBack: () => void }) {
+  const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Overview");
   const [pinned, setPinned] = useState(memory.flags.includes("pinned"));
   const [lifecycleAction, setLifecycleAction] = useState("Ready for lifecycle review");
@@ -32,15 +34,15 @@ export function MemoryDetailPage({ memory, onBack }: { memory: MemoryItem; onBac
         </div>
         <div className="detail-actions">
           <div className="inline-action-row">
-            <Button primary icon={Check} label="Confirm" onClick={confirmMemory} />
-            <Button icon={Edit3} label="Edit" onClick={() => markAction("Edit draft opened")} />
-            <Button icon={Pin} label={pinned ? "Pinned" : "Pin"} onClick={togglePin} />
-            <Button icon={Eye} label="View Source" onClick={() => setActiveTab("Sources")} />
-            <IconButton label="More" icon={MoreHorizontal} onClick={() => markAction("Memory command menu opened")} />
+            <Button primary icon={Check} label={dictionary.actions.confirm} onClick={confirmMemory} />
+            <Button icon={Edit3} label={dictionary.actions.edit} onClick={() => markAction("Edit draft opened")} />
+            <Button icon={Pin} label={pinned ? dictionary.actions.pinned : dictionary.actions.pin} onClick={togglePin} />
+            <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Sources")} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => markAction("Memory command menu opened")} />
           </div>
           <div className="danger-row">
-            <Button danger icon={Archive} label="Archive" onClick={() => markAction("Archive requested; audit remains visible")} />
-            <Button danger icon={EyeOff} label="Hide" onClick={() => markAction("Memory hidden from default recall preview")} />
+            <Button danger icon={Archive} label={dictionary.actions.archive} onClick={() => markAction("Archive requested; audit remains visible")} />
+            <Button danger icon={EyeOff} label={dictionary.actions.hide} onClick={() => markAction("Memory hidden from default recall preview")} />
           </div>
         </div>
       </header>
@@ -67,14 +69,14 @@ export function MemoryDetailPage({ memory, onBack }: { memory: MemoryItem; onBac
         <aside className="detail-side">
           <InspectorSection title="Lifecycle Controls">
             <div className="inline-action-row">
-              <Button primary icon={Check} label="Confirm" onClick={confirmMemory} />
-              <Button icon={Edit3} label="Edit" onClick={() => markAction("Edit draft opened")} />
-              <Button icon={Pin} label={pinned ? "Pinned" : "Pin"} onClick={togglePin} />
-              <Button icon={Eye} label="View Source" onClick={() => setActiveTab("Sources")} />
+              <Button primary icon={Check} label={dictionary.actions.confirm} onClick={confirmMemory} />
+              <Button icon={Edit3} label={dictionary.actions.edit} onClick={() => markAction("Edit draft opened")} />
+              <Button icon={Pin} label={pinned ? dictionary.actions.pinned : dictionary.actions.pin} onClick={togglePin} />
+              <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Sources")} />
             </div>
             <div className="danger-row">
-              <Button danger icon={Archive} label="Archive" onClick={() => markAction("Archive requested; audit remains visible")} />
-              <Button danger icon={EyeOff} label="Hide" onClick={() => markAction("Memory hidden from default recall preview")} />
+              <Button danger icon={Archive} label={dictionary.actions.archive} onClick={() => markAction("Archive requested; audit remains visible")} />
+              <Button danger icon={EyeOff} label={dictionary.actions.hide} onClick={() => markAction("Memory hidden from default recall preview")} />
             </div>
           </InspectorSection>
           <InspectorSection title="Metadata">
@@ -93,6 +95,7 @@ export function MemoryDetailPage({ memory, onBack }: { memory: MemoryItem; onBac
 }
 
 function MemoryOverview({ memory }: { memory: MemoryItem }) {
+  const { dictionary } = useI18n();
   return (
     <>
       <DocSection icon={FileText} index="1" title="Current Memory">
@@ -108,7 +111,7 @@ function MemoryOverview({ memory }: { memory: MemoryItem }) {
             <strong>自动化维护能力 & 机制设计（规划）</strong>
             <p>/ Products / AI Memory / Governance</p>
           </div>
-          <StatusPill label="Active" tone="green" />
+          <StatusPill label={dictionary.status.lifecycle.active.label} tone="green" />
         </div>
       </DocSection>
       <DocSection icon={Database} index="4" title="Forgetting Curve">

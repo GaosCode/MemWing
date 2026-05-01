@@ -2,17 +2,20 @@ import { useState } from "react";
 import { ArrowLeft, Check, CircleAlert, Database, Eye, ExternalLink, FileText, Link2, MoreHorizontal, RotateCcw, ShieldCheck, UserCheck, Wrench } from "lucide-react";
 import { memories } from "../../shared/api/mockData";
 import { Button, Definition, DetailTabs, DocSection, IconButton, InspectorSection, Metric, StatusBadge, StatusPill, Timeline } from "../../shared/components/ui";
-import { memoryTypeLabel, severityStatus } from "../../shared/design-system/status";
+import { severityTone } from "../../shared/design-system/status";
+import { maintenanceStateLabel, memoryTypeLabel, severityLabel } from "../../shared/i18n/formatters";
+import { useI18n } from "../../shared/i18n";
 import type { MaintenanceItem } from "../../shared/types/entities";
 import { auditTrailRows, linkedReferences, retryHistoryRows } from "./maintenanceData";
 
 export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem; onBack: () => void }) {
+  const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Overview");
   const [notice, setNotice] = useState("Promotion remains blocked until conflict review is complete");
   const [retryState, setRetryState] = useState(item.state);
   const tabs = ["Overview", "Failure Trace", "Linked Evidence", "Affected Memories", "Audit", "Retries", "Logs"];
-  const severityMeta = severityStatus[item.severity];
   const isFailedJob = item.state === "Failed";
+  const severityMetricTone = severityTone[item.severity] === "gray" ? undefined : severityTone[item.severity] as "green" | "orange" | "red";
 
   return (
     <section className="detail-page">
@@ -23,23 +26,23 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
           <p>{item.type} · {item.source} · 2026-04-27 {item.updated}</p>
         </div>
         <div className="inline-action-row">
-          <Button icon={RotateCcw} label={isFailedJob ? "Retry Job" : "Re-run Check"} onClick={() => {
+          <Button icon={RotateCcw} label={isFailedJob ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={() => {
             setRetryState(isFailedJob ? "Review Pending" : item.state);
             setNotice(isFailedJob ? "Retry requested; waiting for conflict review" : "Maintenance check queued");
           }} />
-          <Button icon={ShieldCheck} label="Open Audit" onClick={() => setActiveTab("Audit")} />
-          <Button icon={Eye} label="View Source" onClick={() => setActiveTab("Linked Evidence")} />
-          <IconButton label="More" icon={MoreHorizontal} onClick={() => setNotice("Job command menu opened")} />
+          <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={() => setActiveTab("Audit")} />
+          <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Linked Evidence")} />
+          <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Job command menu opened")} />
         </div>
       </header>
 
       <div className="status-strip status-strip--detail">
-        <Metric label="Status" value={retryState} tone={retryState === "Failed" ? "red" : retryState === "Open" ? "green" : "orange"} />
-        <Metric label="Severity" value={severityMeta.label} tone={severityMeta.tone === "gray" ? undefined : severityMeta.tone} />
-        <Metric label="Retry Count" value={isFailedJob ? "2" : "0"} />
-        <Metric label="Affected Memories" value={isFailedJob ? "3" : "1"} />
-        <Metric label="Worker" value={isFailedJob ? "PushWorker" : item.type === "Forgetting" ? "DecayWorker" : "LongTermFilter"} />
-        <Metric label="Last Run" value={`2026-04-27 ${item.updated}`} />
+        <Metric label={dictionary.maintenance.metrics.status} value={maintenanceStateLabel(dictionary, retryState)} tone={retryState === "Failed" ? "red" : retryState === "Open" ? "green" : "orange"} />
+        <Metric label={dictionary.maintenance.metrics.severity} value={severityLabel(dictionary, item.severity)} tone={severityMetricTone} />
+        <Metric label={dictionary.maintenance.metrics.retryCount} value={isFailedJob ? "2" : "0"} />
+        <Metric label={dictionary.maintenance.metrics.affectedMemories} value={isFailedJob ? "3" : "1"} />
+        <Metric label={dictionary.maintenance.metrics.worker} value={isFailedJob ? "PushWorker" : item.type === "Forgetting" ? "DecayWorker" : "LongTermFilter"} />
+        <Metric label={dictionary.maintenance.metrics.lastRun} value={`2026-04-27 ${item.updated}`} />
       </div>
       <DetailTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
       <div className="notice-row"><Check size={15} />{notice}</div>
@@ -67,7 +70,7 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
             {memories.slice(0, 3).map((memory) => (
               <div className="affected-memory" key={memory.id}>
                 <span>{memory.title}</span>
-                <StatusPill label={memoryTypeLabel[memory.type]} tone="gray" />
+                <StatusPill label={memoryTypeLabel(dictionary, memory.type)} tone="gray" />
                 <StatusBadge status={memory.status} />
                 <span>{memory.strength.toFixed(2)}</span>
               </div>
@@ -91,7 +94,7 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
           </InspectorSection>
           <InspectorSection title="Failure Classification">
             <Definition label="Type">{item.reason}</Definition>
-            <Definition label="Severity">{severityMeta.label}</Definition>
+            <Definition label="Severity">{severityLabel(dictionary, item.severity)}</Definition>
             <Definition label="Write State">{isFailedJob ? "Blocked before write" : "No unsafe write"}</Definition>
             <Definition label="Recovery">{isFailedJob ? "Manual review then retry" : "Reviewer decision required"}</Definition>
           </InspectorSection>
@@ -102,7 +105,7 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
             <Timeline rows={[...auditTrailRows]} compact />
           </InspectorSection>
           <InspectorSection title="Worker Health">
-            <Definition label="Current status"><StatusPill label={retryState} tone={retryState === "Failed" ? "red" : "orange"} /></Definition>
+            <Definition label="Current status"><StatusPill label={maintenanceStateLabel(dictionary, retryState)} tone={retryState === "Failed" ? "red" : "orange"} /></Definition>
             <Definition label="Avg duration">4.6s</Definition>
             <Definition label="Failures in 24h">2</Definition>
             <Definition label="Last healthy run">2026-04-27 10:33</Definition>
@@ -187,12 +190,13 @@ function LinkedEvidence({ item }: { item: MaintenanceItem }) {
 }
 
 function AffectedMemories() {
+  const { dictionary } = useI18n();
   return (
     <DocSection icon={Database} title="Affected Memories">
       {memories.slice(0, 3).map((memory) => (
         <div className="affected-memory" key={memory.id}>
           <span>{memory.title}</span>
-          <StatusPill label={memoryTypeLabel[memory.type]} tone="gray" />
+          <StatusPill label={memoryTypeLabel(dictionary, memory.type)} tone="gray" />
           <StatusBadge status={memory.status} />
           <span>{memory.strength.toFixed(2)}</span>
         </div>

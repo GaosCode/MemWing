@@ -19,17 +19,27 @@ export const layoutTokens = {
   radius: 8,
 } as const;
 
-export const colorTokens = {
-  canvas: "#f7f7f4",
-  surface: "#ffffff",
-  surfaceMuted: "#efefea",
-  textPrimary: "#20231f",
-  textSecondary: "#62665d",
-  accent: "#2f6f5e",
-  info: "#3f5f8f",
-  warning: "#b65f1d",
-  danger: "#b42318",
-  success: "#257a4f",
-  focus: "#5b6ee1",
-  borderSubtle: "#d9d8cf",
-} as const;
+export const colorTokenNames = [
+  "canvas",
+  "surface",
+  "surface-muted",
+  "surface-raised",
+  "text-primary",
+  "text-secondary",
+  "text-muted",
+  "accent",
+  "accent-strong",
+  "info",
+  "warning",
+  "danger",
+  "success",
+  "focus",
+  "border-subtle",
+  "border-strong",
+] as const;
+
+export type ColorTokenName = (typeof colorTokenNames)[number];
+
+export function cssToken(name: ColorTokenName) {
+  return `var(--${name})`;
+}

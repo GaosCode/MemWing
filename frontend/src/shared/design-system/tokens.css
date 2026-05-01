@@ -1,0 +1,88 @@
+:root {
+  color-scheme: light;
+  --canvas: #f7f7f4;
+  --surface: #ffffff;
+  --surface-muted: #efefea;
+  --surface-raised: #fbfbf8;
+  --text-primary: #20231f;
+  --text-secondary: #62665d;
+  --text-muted: #84877e;
+  --accent: #2f6f5e;
+  --accent-strong: #006b3f;
+  --info: #3f5f8f;
+  --warning: #b65f1d;
+  --danger: #b42318;
+  --success: #257a4f;
+  --focus: #5b6ee1;
+  --border-subtle: #d9d8cf;
+  --border-strong: #c5c4ba;
+  --on-accent: #ffffff;
+  --sidebar-gradient-start: #fbfbf7;
+  --sidebar-gradient-end: #f2f3ee;
+  --active-gradient-start: #007a4a;
+  --active-gradient-end: #006338;
+  --active-shadow: rgba(0, 97, 54, 0.18);
+  --avatar-gradient-start: #d9d4c8;
+  --avatar-gradient-end: #9a8d7a;
+  --queue-critical: #e42318;
+  --queue-warning: #e08900;
+  --meter-track-muted: #d7d9d5;
+  --rebuild-band-start: #fbf8ef;
+  --rebuild-band-end: #f9f6ee;
+  --shadow-panel: 0 18px 60px rgba(31, 34, 29, 0.08);
+  --sidebar-width: 260px;
+  --topbar-height: 64px;
+  --statusbar-height: 36px;
+  --inspector-width: 400px;
+  --inspector-compact-width: 360px;
+  --space-page-x: 32px;
+  --space-page-y: 24px;
+  --space-section-gap: 28px;
+  --space-section-inner-gap: 16px;
+  --space-row-gap: 0;
+  --space-column-gap: 24px;
+  --row-compact: 44px;
+  --row-default: 56px;
+  --row-comfortable: 64px;
+  --row-detail: 72px;
+  --control-icon-button: 32px;
+  --control-button-height: 40px;
+  --control-chip-height: 36px;
+  --control-input-height: 40px;
+  --radius: 8px;
+  --font-body: "Noto Sans SC", "Geist", sans-serif;
+  --font-latin: "Geist", "Noto Sans SC", sans-serif;
+  --font-code: "JetBrains Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --canvas: #171915;
+    --surface: #1f221e;
+    --surface-muted: #2b2e29;
+    --surface-raised: #242721;
+    --text-primary: #eceee7;
+    --text-secondary: #b8bdb1;
+    --text-muted: #8d9488;
+    --accent: #6aa892;
+    --accent-strong: #57a47f;
+    --info: #8aa8d6;
+    --warning: #d88b38;
+    --danger: #ff6b61;
+    --success: #78c29d;
+    --focus: #9aa7ff;
+    --border-subtle: #3a3d36;
+    --border-strong: #4b5046;
+    --sidebar-gradient-start: #20231f;
+    --sidebar-gradient-end: #191c18;
+    --active-gradient-start: #007a4a;
+    --active-gradient-end: #006338;
+    --avatar-gradient-start: #5f665c;
+    --avatar-gradient-end: #394035;
+    --meter-track-muted: #454a42;
+    --rebuild-band-start: #29251c;
+    --rebuild-band-end: #29251c;
+    --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.28);
+  }
+}

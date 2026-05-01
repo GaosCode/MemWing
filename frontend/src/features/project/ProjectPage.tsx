@@ -20,12 +20,14 @@ import {
 } from "lucide-react";
 import { memories } from "../../shared/api/mockData";
 import { Button, DetailTabs, DocSection, IconButton, PageHeader, StatusPill } from "../../shared/components/ui";
+import { useI18n } from "../../shared/i18n";
 import { auditEvents, projectSources, projectVersions, rebuildChanges } from "./projectData";
 import { ProjectRebuildChangeList } from "./ProjectRebuildChangeList";
 
 const projectTabs = ["Document", "Rebuild Preview", "Sources", "Versions", "Audit", "Graph"];
 
 export function ProjectPage() {
+  const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Document");
   const [previewState, setPreviewState] = useState<"pending" | "confirmed" | "discarded">("pending");
   const [linkedCount, setLinkedCount] = useState(3);
@@ -62,7 +64,7 @@ export function ProjectPage() {
             <span className="header-meta">Last rebuilt: 2026-04-27 11:32</span>
             <StatusPill label={previewState === "confirmed" ? "v4 preview confirmed" : "v3 current"} tone={previewState === "confirmed" ? "green" : "orange"} />
             <Button icon={RefreshCcw} label="Run Rebuild" onClick={startRebuild} />
-            <IconButton label="More" icon={MoreHorizontal} onClick={() => setNotice("Project command menu opened")} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Project command menu opened")} />
           </>
         }
       />
@@ -74,7 +76,7 @@ export function ProjectPage() {
             <span className="outline-chip">3 changes</span>
             <p>Review candidate changes before confirming to the project memory. Current v3 remains untouched until confirmation.</p>
             <div className="inline-action-row">
-              <Button primary icon={Check} label="Confirm" onClick={confirmPreview} />
+              <Button primary icon={Check} label={dictionary.actions.confirm} onClick={confirmPreview} />
               <Button icon={Trash2} label="Discard" onClick={discardPreview} />
             </div>
           </div>
@@ -126,16 +128,16 @@ export function ProjectPage() {
         </DocSection>
         <DocSection icon={CircleAlert} index="4" title="Open Questions">
           <ul className="two-column-list">
-            <li>How should automatic pushes into Page Memory be reviewed?<StatusPill label="Open" tone="orange" /></li>
-            <li>When should project memory rebuilds be triggered?<StatusPill label="Open" tone="orange" /></li>
-            <li>How visible should stale sections become?<StatusPill label="Open" tone="orange" /></li>
+            <li>How should automatic pushes into Page Memory be reviewed?<StatusPill label={dictionary.status.maintenanceState.Open} tone="orange" /></li>
+            <li>When should project memory rebuilds be triggered?<StatusPill label={dictionary.status.maintenanceState.Open} tone="orange" /></li>
+            <li>How visible should stale sections become?<StatusPill label={dictionary.status.maintenanceState.Open} tone="orange" /></li>
           </ul>
         </DocSection>
         <DocSection icon={List} index="5" title="Next Steps">
           <ol className="two-column-list">
-            <li>Refine rebuild preview interaction.<StatusPill label="Open" tone="green" /></li>
-            <li>Connect linked memory confirmation flow.<StatusPill label="Open" tone="green" /></li>
-            <li>Define project memory drift rules.<StatusPill label="Open" tone="green" /></li>
+            <li>Refine rebuild preview interaction.<StatusPill label={dictionary.status.maintenanceState.Open} tone="green" /></li>
+            <li>Connect linked memory confirmation flow.<StatusPill label={dictionary.status.maintenanceState.Open} tone="green" /></li>
+            <li>Define project memory drift rules.<StatusPill label={dictionary.status.maintenanceState.Open} tone="green" /></li>
           </ol>
         </DocSection>
         <DocSection icon={Link2} index="6" title="Linked Memories">
@@ -145,7 +147,7 @@ export function ProjectPage() {
                 <FileText size={20} />
                 <span>{memory.title}</span>
                 <small>{memory.source} · 04-27</small>
-                <StatusPill label="Active" tone="green" />
+                <StatusPill label={dictionary.status.lifecycle.active.label} tone="green" />
               </button>
             ))}
             <button className="link-memory-button" type="button" onClick={() => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Archive, Check, Edit3, Eye, EyeOff, Pin } from "lucide-react";
 import { Button, Definition, InspectorHeader, InspectorSection, StatusBadge, StrengthMeter, Timeline } from "../../shared/components/ui";
+import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
 
 export function MemoryInspector({
@@ -14,48 +15,49 @@ export function MemoryInspector({
   onClose?: () => void;
   libraryMode?: boolean;
 }) {
+  const { dictionary } = useI18n();
   const [pinned, setPinned] = useState(memory.flags.includes("pinned"));
-  const [notice, setNotice] = useState("Inspector ready");
+  const [notice, setNotice] = useState(dictionary.inspector.ready);
 
   useEffect(() => {
     setPinned(memory.flags.includes("pinned"));
-    setNotice("Inspector ready");
-  }, [memory.id, memory.flags]);
+    setNotice(dictionary.inspector.ready);
+  }, [dictionary.inspector.ready, memory.id, memory.flags]);
 
   return (
     <div className="inspector-panel">
-      <InspectorHeader title="Inspector" onOpen={onOpenDetail} onClose={onClose} pinned={pinned} onPin={() => {
+      <InspectorHeader title={dictionary.inspector.memoryTitle} onOpen={onOpenDetail} onClose={onClose} pinned={pinned} onPin={() => {
         setPinned((value) => !value);
-        setNotice(pinned ? "Pin removed" : "Memory pinned");
+        setNotice(pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned);
       }} />
       <h2>{memory.title}</h2>
       <div className="inspector-notice">{notice}</div>
 
       <div className="inspector-metrics">
-        <Definition label="Lifecycle Status"><StatusBadge status={memory.status} /></Definition>
-        <Definition label="Strength"><StrengthMeter value={memory.strength} /></Definition>
+        <Definition label={dictionary.inspector.lifecycleStatus}><StatusBadge status={memory.status} /></Definition>
+        <Definition label={dictionary.inspector.strength}><StrengthMeter value={memory.strength} /></Definition>
       </div>
 
-      <InspectorSection title={libraryMode ? "Why it was kept" : "为何保留"}>
+      <InspectorSection title={dictionary.inspector.whyKept}>
         <p>{memory.reason}</p>
       </InspectorSection>
-      <InspectorSection title="Source Preview">
+      <InspectorSection title={dictionary.inspector.sourcePreview}>
         <p>{memory.source} · 2026-04-27 · 12 messages</p>
         <blockquote>希望自动维护动作可解释，能看到改了哪些关系。</blockquote>
       </InspectorSection>
-      <InspectorSection title="Latest Audit Events" action="View all" onAction={() => setNotice("Audit events opened in detail preview")}>
-        <Timeline rows={["Strength recalculated (0.84)", "Source linked (Feishu · 产品群)", "Evidence updated"]} compact />
+      <InspectorSection title={dictionary.inspector.latestAuditEvents} action={dictionary.common.viewAll} onAction={() => setNotice(dictionary.inspector.auditOpened)}>
+        <Timeline rows={[dictionary.inspector.timeline.strengthRecalculated, dictionary.inspector.timeline.sourceLinked, dictionary.inspector.timeline.evidenceUpdated]} compact />
       </InspectorSection>
       <div className="action-grid">
-        <Button primary icon={Check} label="Confirm" onClick={() => setNotice("Memory confirmed")} />
-        <Button icon={Edit3} label="Edit" onClick={() => setNotice("Edit draft opened")} />
-        <Button icon={Pin} label={pinned ? "Pinned" : "Pin"} onClick={() => {
+        <Button primary icon={Check} label={dictionary.actions.confirm} onClick={() => setNotice(dictionary.inspector.memoryConfirmed)} />
+        <Button icon={Edit3} label={dictionary.actions.edit} onClick={() => setNotice(dictionary.inspector.editOpened)} />
+        <Button icon={Pin} label={pinned ? dictionary.actions.pinned : dictionary.actions.pin} onClick={() => {
           setPinned((value) => !value);
-          setNotice(pinned ? "Pin removed" : "Memory pinned");
+          setNotice(pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned);
         }} />
-        <Button icon={Archive} label="Archive" onClick={() => setNotice("Archive requested")} />
-        <Button icon={EyeOff} label="Hide" onClick={() => setNotice("Memory hidden from default recall")} />
-        <Button icon={Eye} label="View Source" onClick={onOpenDetail} />
+        <Button icon={Archive} label={dictionary.actions.archive} onClick={() => setNotice(dictionary.inspector.archiveRequested)} />
+        <Button icon={EyeOff} label={dictionary.actions.hide} onClick={() => setNotice(dictionary.inspector.hiddenFromRecall)} />
+        <Button icon={Eye} label={dictionary.actions.viewSource} onClick={onOpenDetail} />
       </div>
     </div>
   );
