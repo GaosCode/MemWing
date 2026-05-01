@@ -2585,6 +2585,7 @@ blockquote {
 @media (max-width: 1023px) {
   .app-shell {
     grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-rows: var(--topbar-height) minmax(0, 1fr);
   }
 
   .brand span:last-child,
@@ -2596,6 +2597,8 @@ blockquote {
 
   .topbar {
     grid-template-columns: minmax(0, 1fr) auto;
+    padding-inline: 12px;
+    gap: 10px;
   }
 
   .global-search {
@@ -2604,10 +2607,18 @@ blockquote {
 
   .sync-user {
     grid-column: 2;
+    gap: 6px;
   }
 
-  .sync-text {
+  .sync-text,
+  .user-name,
+  .sync-user > .avatar,
+  .sync-user > svg:last-child {
     display: none;
+  }
+
+  .language-switch {
+    min-width: 82px;
   }
 
   .split-surface {
@@ -2618,14 +2629,118 @@ blockquote {
     display: none;
   }
 
-  .inspector-rail {
+  .inspector-rail,
+  .inspector-floating-handle,
+  .statusbar {
     display: none;
+  }
+
+  .workspace {
+    grid-row: 2;
+    overflow: auto;
+  }
+
+  .work-area {
+    overflow-x: auto;
+  }
+
+  .split-surface--closed .work-area {
+    padding-right: 0;
+  }
+
+  .page-header,
+  .table-toolbar,
+  .section-toolbar,
+  .detail-header {
+    padding-inline: 18px;
+  }
+
+  .page-header,
+  .table-toolbar,
+  .section-toolbar,
+  .detail-header,
+  .rebuild-band,
+  .project-state-band {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .header-actions,
+  .toolbar-actions,
+  .inline-action-row,
+  .danger-row {
+    flex-wrap: wrap;
+  }
+
+  .memory-table,
+  .maintenance-table {
+    margin-inline: 18px;
+    min-width: 760px;
+  }
+
+  .queue-section,
+  .collapsed-queue-group {
+    min-width: 620px;
+  }
+
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+    padding-inline: 18px;
+  }
+
+  .filter-search {
+    grid-column: 1 / -1;
   }
 
   .detail-layout,
   .maintenance-detail-grid,
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --topbar-height: 58px;
+  }
+
+  .app-shell {
+    grid-template-columns: 60px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    padding-inline: 8px;
+  }
+
+  .brand {
+    padding-inline: 0;
+  }
+
+  .brand-mark {
+    width: 34px;
+  }
+
+  .nav-item {
+    height: 48px;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .global-search {
+    min-width: 0;
+  }
+
+  .global-search kbd,
+  .search-result-hint {
+    display: none;
+  }
+
+  .language-switch {
+    min-width: 74px;
+  }
+
+  .language-select__label {
+    display: none;
   }
 }
 
