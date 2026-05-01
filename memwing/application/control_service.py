@@ -157,6 +157,11 @@ class ControlService:
                 project_memory_space_id=scope.project_memory_space_id,
                 limit=limit,
             )
+            scoped_forgetting_reviews = []
+            for candidate in forgetting_reviews:
+                item = await tx.memory_items.get(candidate.memory_id)
+                if item is not None and _memory_item_in_scope(item, scope):
+                    scoped_forgetting_reviews.append(candidate)
             push_candidates = tuple(
                 candidate
                 for candidate in await tx.push_candidates.list_for_project(
@@ -185,7 +190,7 @@ class ControlService:
         )
         jobs = jobs[:limit]
         return ControlMaintenanceProjection(
-            forgetting_review_count=len(forgetting_reviews),
+            forgetting_review_count=len(scoped_forgetting_reviews),
             pending_push_count=pending_push_count,
             job_count=len(jobs),
             warning_count=sum(1 for job in jobs if job.status == "dead_letter"),

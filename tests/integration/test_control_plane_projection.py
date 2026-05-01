@@ -72,6 +72,13 @@ def test_control_plane_projection_lists_detail_and_maintenance_models() -> None:
             await tx.memory_graph_links.upsert(_graph_link())
             await tx.audit_events.record(_audit_event("audit_001", entity_id="memory_001"))
             await tx.forgetting_review_candidates.upsert(_forgetting_review())
+            await tx.forgetting_review_candidates.upsert(
+                _forgetting_review(
+                    review_id="forgetting_review_other",
+                    memory_id="memory_other",
+                    group_id="group_other",
+                )
+            )
             await tx.push_candidates.upsert(_push_candidate())
             await tx.outbox_jobs.enqueue(_outbox_job())
             await tx.graph_write_jobs.enqueue(_graph_job())
@@ -268,12 +275,17 @@ def _audit_event(audit_id: str, *, entity_id: str) -> AuditEvent:
     )
 
 
-def _forgetting_review() -> ForgettingReviewCandidate:
+def _forgetting_review(
+    *,
+    review_id: str = "forgetting_review_001",
+    memory_id: str = "memory_001",
+    group_id: str = "group_001",
+) -> ForgettingReviewCandidate:
     return ForgettingReviewCandidate(
-        id="forgetting_review_001",
-        memory_id="memory_001",
+        id=review_id,
+        memory_id=memory_id,
         project_memory_space_id="project_001",
-        group_id="group_001",
+        group_id=group_id,
         thread_id="thread_001",
         decayed_score=0.4,
         threshold=DEFAULT_FORGETTING_REVIEW_THRESHOLD,
