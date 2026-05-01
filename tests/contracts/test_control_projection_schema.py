@@ -3,8 +3,12 @@ from __future__ import annotations
 import pytest
 
 from memwing.api.control import (
+    ControlIntegrationsResponse,
     ControlForgettingReviewItemResponse,
     ControlMaintenanceResponse,
+    ControlPageListResponse,
+    ControlSettingsResponse,
+    ControlSummaryResponse,
     MemoryDetailResponse,
     MemoryListItemResponse,
     MemoryListResponse,
@@ -141,6 +145,75 @@ def test_forgetting_review_and_maintenance_contracts_are_backend_derived() -> No
     assert review.memory.decay_score == 0.42
     assert maintenance.jobs[0].retryable is False
     assert maintenance.push_candidates[0].type == "forgetting_review"
+
+
+def test_control_page_summary_settings_and_integrations_contracts_are_backend_owned() -> None:
+    pages = ControlPageListResponse.from_json(
+        {
+            "items": [
+                {
+                    "id": "page_001",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "group_001",
+                    "thread_id": "thread_001",
+                    "shared_group_id": None,
+                    "scope_type": "thread",
+                    "scope_id": "thread_001",
+                    "title": "Demo page",
+                    "brief": "Demo page brief.",
+                    "topics": [
+                        {
+                            "title": "Demo",
+                            "summary": "Demo summary",
+                            "source_event_ids": ["source_001"],
+                            "linked_memory_item_ids": ["memory_001"],
+                        }
+                    ],
+                    "open_questions": ["What ships next?"],
+                    "next_steps": ["Review scope"],
+                    "source_event_ids": ["source_001"],
+                    "linked_memory_item_ids": ["memory_001"],
+                    "version": 2,
+                    "needs_rebuild": False,
+                    "graph_backend_raw_retained": True,
+                    "warning_count": 1,
+                    "updated_at": "2026-04-30T00:00:00+00:00",
+                }
+            ],
+            "next_cursor": None,
+            "trace_id": "trace_pages",
+        }
+    )
+    summary = ControlSummaryResponse.from_json(
+        {
+            "pending_memory_count": 1,
+            "forgetting_review_count": 1,
+            "pending_push_count": 1,
+            "dead_letter_job_count": 0,
+            "warning_count": 1,
+            "trace_id": "trace_summary",
+        }
+    )
+    settings = ControlSettingsResponse.from_json(
+        {
+            "project_memory_space_id": "project_001",
+            "safe_mode_enabled": True,
+            "shared_group_id": "shared_001",
+            "settings_mutation_supported": False,
+            "trace_id": "trace_settings",
+        }
+    )
+    integrations = ControlIntegrationsResponse.from_json(
+        {
+            "items": [{"name": "feishu", "configured": True, "writable": False}],
+            "trace_id": "trace_integrations",
+        }
+    )
+
+    assert pages.items[0].topics[0].source_event_ids == ("source_001",)
+    assert summary.dead_letter_job_count == 0
+    assert settings.settings_mutation_supported is False
+    assert integrations.items[0].writable is False
 
 
 def _memory_item_payload(

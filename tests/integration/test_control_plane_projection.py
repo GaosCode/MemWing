@@ -16,6 +16,9 @@ from memwing.core.models import (
     MemoryDisplayType,
     MemoryGraphLink,
     MemoryItem,
+    MemoryPageVersion,
+    PageMemory,
+    PageMemoryTopic,
     MemoryRoute,
     MemoryStatus,
     OutboxJob,
@@ -174,6 +177,68 @@ def test_control_plane_detail_uses_safe_non_leaky_scope_errors() -> None:
     asyncio.run(scenario())
 
 
+def test_control_plane_page_edit_restore_push_and_job_retry() -> None:
+    store = InMemoryDataStore()
+    service = ControlService(store, now=lambda: NOW)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.memory_pages.upsert(_page())
+            await tx.memory_page_versions.record(_page_version(version=1, title="Old title"))
+            await tx.push_candidates.upsert(_push_candidate())
+            await tx.graph_write_jobs.enqueue(_graph_job())
+
+        edited = await service.edit_page(
+            page_id="page_001",
+            scope=SCOPE,
+            title="Edited title",
+            brief="Edited brief",
+            actor_id="user_001",
+            reason="manual edit",
+            idempotency_key="edit-page-001",
+            trace_id="trace_edit",
+        )
+        assert edited.page.title == "Edited title"
+        assert edited.versions[0].version == 2
+
+        restored = await service.restore_page_version(
+            page_id="page_001",
+            version=1,
+            scope=SCOPE,
+            actor_id="user_001",
+            reason="restore old version",
+            idempotency_key="restore-page-001",
+            trace_id="trace_restore",
+        )
+        assert restored.page.title == "Old title"
+        assert restored.versions[0].version == 3
+
+        approved = await service.approve_push_candidate(
+            candidate_id="push_001",
+            scope=SCOPE,
+            actor_id="user_001",
+            reason="approve candidate",
+            idempotency_key="approve-push-001",
+            trace_id="trace_push",
+        )
+        assert approved.status == "approved"
+
+        maintenance = await service.retry_job(
+            job_id="graph_job_001",
+            kind="graph_write",
+            scope=SCOPE,
+            actor_id="user_001",
+            reason="retry graph job",
+            idempotency_key="retry-graph-001",
+            trace_id="trace_retry",
+        )
+        assert maintenance.jobs[0].id == "graph_job_001"
+        assert maintenance.jobs[0].status == "pending"
+
+    asyncio.run(scenario())
+
+
 def _memory_item(memory_id: str) -> MemoryItem:
     return MemoryItem(
         id=memory_id,
@@ -235,6 +300,55 @@ def _source_event(source_event_id: str) -> SourceEvent:
         graph_backend_raw_retained=False,
         created_at=NOW - timedelta(days=10),
         runtime_event_idempotency_key=None,
+    )
+
+
+def _page() -> PageMemory:
+    return PageMemory(
+        id="page_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        scope_type="thread",
+        scope_id="thread_001",
+        title="Current title",
+        brief="Current brief",
+        topics=(
+            PageMemoryTopic(
+                title="Demo",
+                summary="Demo scope remains stable.",
+                source_event_ids=("source_001",),
+                linked_memory_item_ids=("memory_001",),
+            ),
+        ),
+        open_questions=("What ships next?",),
+        next_steps=("Review scope",),
+        source_event_ids=("source_001",),
+        linked_memory_item_ids=("memory_001",),
+        version=1,
+        needs_rebuild=False,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+
+def _page_version(*, version: int, title: str) -> MemoryPageVersion:
+    page = _page()
+    return MemoryPageVersion(
+        id=f"page_version_{version}",
+        page_id=page.id,
+        version=version,
+        title=title,
+        brief=page.brief,
+        topics=page.topics,
+        open_questions=page.open_questions,
+        next_steps=page.next_steps,
+        source_event_ids=page.source_event_ids,
+        linked_memory_item_ids=page.linked_memory_item_ids,
+        changed_by="user",
+        change_reason="seed",
+        created_at=NOW,
     )
 
 

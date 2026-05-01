@@ -3,6 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
+from memwing.api.control_pages import (
+    ControlPageListResponse as ControlPageListResponse,
+    ControlPageResponse as ControlPageResponse,
+    ControlPageTopicResponse as ControlPageTopicResponse,
+)
+from memwing.api.control_schema_support import (
+    _bounded_score,
+    _non_negative_int,
+    _object_field,
+    _object_item,
+    _optional_text,
+    _positive_int,
+    _require_exact_fields,
+    _required_bool,
+    _required_int,
+    _required_number,
+    _required_text,
+    _required_text_tuple,
+    _text_tuple,
+)
 from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError, require_text
 from memwing.core.models import (
@@ -354,6 +374,100 @@ class ControlMaintenanceResponse:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ControlSummaryResponse:
+    pending_memory_count: int
+    forgetting_review_count: int
+    pending_push_count: int
+    dead_letter_job_count: int
+    warning_count: int
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlSummaryResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "pending_memory_count",
+                "forgetting_review_count",
+                "pending_push_count",
+                "dead_letter_job_count",
+                "warning_count",
+                "trace_id",
+            },
+        )
+        return cls(
+            pending_memory_count=_required_int(payload, "pending_memory_count"),
+            forgetting_review_count=_required_int(payload, "forgetting_review_count"),
+            pending_push_count=_required_int(payload, "pending_push_count"),
+            dead_letter_job_count=_required_int(payload, "dead_letter_job_count"),
+            warning_count=_required_int(payload, "warning_count"),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlSettingsResponse:
+    project_memory_space_id: str
+    safe_mode_enabled: bool
+    shared_group_id: str | None
+    settings_mutation_supported: bool
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlSettingsResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "project_memory_space_id",
+                "safe_mode_enabled",
+                "shared_group_id",
+                "settings_mutation_supported",
+                "trace_id",
+            },
+        )
+        return cls(
+            project_memory_space_id=_required_text(payload, "project_memory_space_id"),
+            safe_mode_enabled=_required_bool(payload, "safe_mode_enabled"),
+            shared_group_id=_optional_text(payload, "shared_group_id"),
+            settings_mutation_supported=_required_bool(payload, "settings_mutation_supported"),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlIntegrationResponse:
+    name: str
+    configured: bool
+    writable: bool
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlIntegrationResponse:
+        _require_exact_fields(payload, {"name", "configured", "writable"})
+        return cls(
+            name=_required_text(payload, "name"),
+            configured=_required_bool(payload, "configured"),
+            writable=_required_bool(payload, "writable"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlIntegrationsResponse:
+    items: tuple[ControlIntegrationResponse, ...]
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlIntegrationsResponse:
+        _require_exact_fields(payload, {"items", "trace_id"})
+        items = payload.get("items")
+        if not isinstance(items, list | tuple):
+            raise SchemaValidationError("items must be a list")
+        return cls(
+            items=tuple(ControlIntegrationResponse.from_json(_object_item(item, "items")) for item in items),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
 _MEMORY_LIST_ITEM_FIELDS = {
     "id",
     "title",
@@ -380,96 +494,6 @@ _MEMORY_LIST_ITEM_FIELDS = {
     "updated_at",
 }
 
-
-def _require_exact_fields(payload: JsonObject, allowed: set[str]) -> None:
-    missing = allowed - payload.keys()
-    if missing:
-        raise SchemaValidationError(f"{sorted(missing)[0]} is required")
-    extra = payload.keys() - allowed
-    if extra:
-        raise SchemaValidationError(f"unsupported field: {sorted(extra)[0]}")
-
-
-def _object_field(payload: JsonObject, field_name: str) -> JsonObject:
-    return _object_item(payload.get(field_name), field_name)
-
-
-def _object_item(value: object, field_name: str) -> JsonObject:
-    if not isinstance(value, dict):
-        raise SchemaValidationError(f"{field_name} must contain objects")
-    return cast(JsonObject, value)
-
-
-def _required_text(payload: JsonObject, field_name: str) -> str:
-    value = payload.get(field_name)
-    if not isinstance(value, str):
-        raise SchemaValidationError(f"{field_name} is required")
-    return require_text(value, field_name)
-
-
-def _optional_text(payload: JsonObject, field_name: str) -> str | None:
-    value = payload.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise SchemaValidationError(f"{field_name} must be text")
-    return require_text(value, field_name)
-
-
-def _required_text_tuple(payload: JsonObject, field_name: str) -> tuple[str, ...]:
-    value = payload.get(field_name)
-    if not isinstance(value, list | tuple):
-        raise SchemaValidationError(f"{field_name} must be a list")
-    return _text_tuple(value, field_name)
-
-
-def _text_tuple(value: tuple[str, ...] | list[object] | tuple[object, ...], field_name: str) -> tuple[str, ...]:
-    return tuple(require_text(item, field_name) for item in value)
-
-
-def _required_number(payload: JsonObject, field_name: str) -> float:
-    value = payload.get(field_name)
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be a number")
-    return float(value)
-
-
-def _required_int(payload: JsonObject, field_name: str) -> int:
-    value = payload.get(field_name)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be an integer")
-    return value
-
-
-def _required_bool(payload: JsonObject, field_name: str) -> bool:
-    value = payload.get(field_name)
-    if not isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be boolean")
-    return value
-
-
-def _bounded_score(value: float, field_name: str) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be a number")
-    if value < 0 or value > 1:
-        raise SchemaValidationError(f"{field_name} must be between 0 and 1")
-    return float(value)
-
-
-def _positive_int(value: int, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be an integer")
-    if value <= 0:
-        raise SchemaValidationError(f"{field_name} must be positive")
-    return value
-
-
-def _non_negative_int(value: int, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise SchemaValidationError(f"{field_name} must be an integer")
-    if value < 0:
-        raise SchemaValidationError(f"{field_name} must be non-negative")
-    return value
 
 
 def _memory_display_type(payload: JsonObject) -> MemoryDisplayType:
