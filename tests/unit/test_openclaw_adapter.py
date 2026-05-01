@@ -12,6 +12,7 @@ from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.gateway_service import MemoryGateway
 from memwing.application.scope_resolver import ScopeResolver
+from memwing.core.models import MemoryDisplayType, MemoryItem, MemoryRoute, MemoryStatus, SourceEvent
 from memwing.core.scope import MemoryScope, ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
@@ -19,7 +20,8 @@ from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 
 def test_openclaw_adapter_returns_empty_context_envelope() -> None:
     async def run() -> None:
-        adapter, _store = _make_adapter()
+        adapter, store = _make_adapter()
+        await _seed_memory(store)
         runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
@@ -43,7 +45,8 @@ def test_openclaw_adapter_returns_empty_context_envelope() -> None:
 
 def test_openclaw_adapter_routes_memory_search_through_access_service() -> None:
     async def run() -> None:
-        adapter, _store = _make_adapter()
+        adapter, store = _make_adapter()
+        await _seed_memory(store)
         runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
@@ -55,8 +58,8 @@ def test_openclaw_adapter_routes_memory_search_through_access_service() -> None:
             )
         )
 
-        assert result.results == ()
-        assert result.contexts == ()
+        assert tuple(item.id for item in result.results) == ("memory_001",)
+        assert result.contexts == ("Demo scope remains Feishu plus OpenClaw.",)
         assert result.trace_id == "memory_access:search:main"
 
     asyncio.run(run())
@@ -125,7 +128,8 @@ def test_openclaw_adapter_records_runtime_event_through_real_gateway_once() -> N
 
 def test_openclaw_adapter_routes_memory_detail_access_through_access_service() -> None:
     async def run() -> None:
-        adapter, _store = _make_adapter()
+        adapter, store = _make_adapter()
+        await _seed_memory(store)
         runtime_ref = _bound_runtime_ref()
         scope = MemoryScope(project_memory_space_id="project_001")
 
@@ -146,15 +150,16 @@ def test_openclaw_adapter_routes_memory_detail_access_through_access_service() -
         )
         status = await adapter.runtime_status(AgentRuntimeStatusRequest(runtime_ref))
 
-        assert get_result.item is None
-        assert get_result.evidence == ()
+        assert get_result.item is not None
+        assert get_result.item.id == "memory_001"
+        assert tuple(item.id for item in get_result.evidence) == ("source_001",)
         assert explain_result.memory_id == "memory_001"
-        assert explain_result.source_event_ids == ()
+        assert explain_result.source_event_ids == ("source_001",)
         assert status.healthy is True
         assert "mock" not in status.trace_id
         assert all("mock" not in capability for capability in status.capabilities)
         assert "memwing_tools_empty_envelope" not in status.capabilities
-        assert "memory_access_empty_result" in status.capabilities
+        assert "memory_access_read_model" in status.capabilities
         assert "memory_access_unavailable" not in status.capabilities
         assert "native_memory_shim" in status.capabilities
         assert "runtime_compaction_delegation" in status.capabilities
@@ -181,7 +186,7 @@ def _make_adapter() -> tuple[OpenClawAdapter, InMemoryDataStore]:
         )
     )
     resolver = ScopeResolver(store)
-    return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver)), store
+    return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver, store)), store
 
 
 def _bound_runtime_ref() -> AgentRuntimeRef:
@@ -191,3 +196,69 @@ def _bound_runtime_ref() -> AgentRuntimeRef:
         workspace_id="workspace_001",
         session_id="session_001",
     )
+
+
+async def _seed_memory(store: InMemoryDataStore) -> None:
+    async with store.transaction() as tx:
+        await tx.source_events.insert_if_absent(
+            SourceEvent(
+                id="source_001",
+                project_memory_space_id="project_001",
+                group_id=None,
+                thread_id=None,
+                shared_group_id=None,
+                author_id="user_001",
+                author_name="Ada",
+                source_type="agent_runtime.message_ingested",
+                content="Demo scope remains Feishu plus OpenClaw.",
+                content_preview="Demo scope remains Feishu plus OpenClaw.",
+                source_url=None,
+                event_time=datetime(2026, 4, 28, tzinfo=UTC),
+                raw_payload_hash="hash_001",
+                metadata={},
+                purged_at=None,
+                purged_by=None,
+                purge_reason=None,
+                purge_level="none",
+                graph_backend_raw_retained=False,
+                created_at=datetime(2026, 4, 28, tzinfo=UTC),
+                runtime_event_idempotency_key="runtime:source_001",
+            )
+        )
+        await tx.memory_items.upsert(
+            MemoryItem(
+                id="memory_001",
+                project_memory_space_id="project_001",
+                group_id=None,
+                thread_id=None,
+                shared_group_id=None,
+                route=MemoryRoute.VECTOR_ONLY,
+                display_type=MemoryDisplayType.NOTE,
+                title="Demo scope",
+                content="Demo scope remains Feishu plus OpenClaw.",
+                summary=None,
+                source_event_ids=("source_001",),
+                primary_source_event_id="source_001",
+                status=MemoryStatus.ACTIVE,
+                event_time=datetime(2026, 4, 28, tzinfo=UTC),
+                valid_from=None,
+                valid_to=None,
+                original_score=0.9,
+                half_life_days=30,
+                last_reviewed_at=None,
+                last_confirmed_at=None,
+                last_recalled_at=None,
+                recall_count=0,
+                cached_decayed_score=0.9,
+                last_decay_computed_at=datetime(2026, 4, 28, tzinfo=UTC),
+                pinned=False,
+                created_by="system",
+                created_at=datetime(2026, 4, 28, tzinfo=UTC),
+                activated_at=datetime(2026, 4, 28, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 28, tzinfo=UTC),
+                archived_at=None,
+                hidden_at=None,
+                invalidated_at=None,
+                removed_at=None,
+            )
+        )

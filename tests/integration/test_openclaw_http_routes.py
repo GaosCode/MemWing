@@ -181,7 +181,7 @@ def test_openclaw_tool_boundary_returns_scope_error_envelope() -> None:
 
 def _runtime(store: InMemoryDataStore) -> OpenClawAdapter:
     resolver = ScopeResolver(store)
-    return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver))
+    return OpenClawAdapter(MemoryGateway(store, resolver), MemoryAccessService(resolver, store))
 
 
 def _store() -> InMemoryDataStore:

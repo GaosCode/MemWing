@@ -56,7 +56,7 @@ class OpenClawAdapter:
                 "context_engine",
                 "hook_event_mapping",
                 "memory_gateway_remember_event",
-                "memory_access_empty_result",
+                "memory_access_read_model",
                 "native_memory_shim",
                 "runtime_compaction_delegation",
             ),
