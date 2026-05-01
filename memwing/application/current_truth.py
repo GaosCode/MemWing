@@ -308,7 +308,15 @@ def _is_current_recallable(item: MemoryItem) -> bool:
 
 
 def _memory_item_covers_source_event(item: MemoryItem, query: MemorySearchQuery) -> bool:
-    return item.removed_at is None and _memory_item_in_scope(item, query.scope)
+    if not _memory_item_in_scope(item, query.scope):
+        return False
+    if item.status in (MemoryStatus.HIDDEN, MemoryStatus.INVALID, MemoryStatus.REMOVED):
+        return False
+    if item.removed_at is not None or item.hidden_at is not None:
+        return False
+    if item.invalidated_at is not None or item.valid_to is not None:
+        return False
+    return True
 
 
 def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:

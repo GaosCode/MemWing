@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from memwing.application.current_truth import CurrentTruthModule
@@ -71,6 +72,46 @@ def test_current_truth_includes_raw_event_branch_as_last_resort_evidence() -> No
         assert result.warnings == ()
 
     asyncio.run(scenario())
+
+
+def test_current_truth_raw_event_fallback_ignores_unavailable_memory_items() -> None:
+    unavailable_items = (
+        _memory_item("memory_invalid", MemoryStatus.INVALID),
+        replace(
+            _memory_item("memory_hidden", MemoryStatus.HIDDEN),
+            hidden_at=NOW,
+        ),
+        replace(
+            _memory_item("memory_expired", MemoryStatus.ACTIVE),
+            valid_to=NOW,
+        ),
+        replace(
+            _memory_item("memory_removed", MemoryStatus.REMOVED),
+            removed_at=NOW,
+        ),
+    )
+
+    async def scenario(item: MemoryItem) -> None:
+        store = InMemoryDataStore()
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event())
+            await tx.memory_items.upsert(item)
+
+        result = await CurrentTruthModule(store, now=lambda: NOW).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert result.current_facts == ()
+        assert tuple(item.id for item in result.raw_events) == ("source_001",)
+        assert result.raw_events[0].source == "raw_event"
+
+    for item in unavailable_items:
+        asyncio.run(scenario(item))
 
 
 def test_current_truth_branch_timeouts_return_warnings_without_empty_success_lie() -> None:
