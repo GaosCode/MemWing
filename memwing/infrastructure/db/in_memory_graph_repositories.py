@@ -22,6 +22,20 @@ class InMemoryGraphWriteJobRepository:
         self._tx.state.graph_job_by_idempotency_key[job.idempotency_key] = job.id
         return job
 
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        jobs = [
+            job
+            for job in self._tx.state.graph_write_jobs.values()
+            if job.project_memory_space_id == project_memory_space_id
+        ]
+        jobs.sort(key=lambda job: (job.updated_at, job.id), reverse=True)
+        return tuple(jobs[:limit])
+
     async def claim_pending(
         self,
         *,

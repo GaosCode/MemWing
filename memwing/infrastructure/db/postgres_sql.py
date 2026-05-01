@@ -88,6 +88,15 @@ WHERE entity_type = %(entity_type)s
 LIMIT 1
 """
 
+_LIST_AUDIT_EVENTS_FOR_ENTITY_SQL = """
+SELECT *
+FROM audit_events
+WHERE entity_type = %(entity_type)s
+  AND entity_id = %(entity_id)s
+ORDER BY created_at DESC, id DESC
+LIMIT %(limit)s
+"""
+
 _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL = """
 SELECT *
 FROM source_events
@@ -140,6 +149,14 @@ INSERT INTO outbox_jobs (
 )
 ON CONFLICT (idempotency_key) DO NOTHING
 RETURNING *
+"""
+
+_LIST_OUTBOX_JOBS_FOR_PROJECT_SQL = """
+SELECT *
+FROM outbox_jobs
+WHERE project_memory_space_id = %(project_memory_space_id)s
+ORDER BY updated_at DESC, id DESC
+LIMIT %(limit)s
 """
 
 _CLAIM_OUTBOX_JOBS_SQL = """

@@ -36,6 +36,7 @@ from memwing.ports.event_store import (
     EvidenceChunkRepositoryPort,
     ForgettingReviewCandidateRepositoryPort,
     GraphWriteJobRepositoryPort,
+    OutboxJobRepositoryPort,
     PushCandidateRepositoryPort,
     SourceEventRepositoryPort,
     MemoryGraphLinkRepositoryPort,
@@ -228,7 +229,9 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
 
     assert hasattr(SourceEventRepositoryPort, "list_for_scope")
     assert hasattr(SourceEventRepositoryPort, "list_recent_for_scope")
+    assert hasattr(AuditEventRepositoryPort, "list_for_entity")
     assert hasattr(AuditEventRepositoryPort, "get_by_idempotency_key")
+    assert hasattr(OutboxJobRepositoryPort, "list_for_project")
     assert hasattr(WorkingMemoryRepositoryPort, "next_sequence")
     assert hasattr(WorkingMemoryRepositoryPort, "sum_unflushed_tokens")
     assert hasattr(MemoryItemRepositoryPort, "list_for_scope")
@@ -241,6 +244,8 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(hints["memory_recall_events"], "record")
     assert hasattr(GraphWriteJobRepositoryPort, "extend_lock")
     assert hasattr(GraphWriteJobRepositoryPort, "mark_dead_letter")
+    assert hasattr(GraphWriteJobRepositoryPort, "list_for_project")
+    assert hasattr(PushCandidateRepositoryPort, "list_for_project")
     assert hasattr(PushCandidateRepositoryPort, "list_pending")
 
 

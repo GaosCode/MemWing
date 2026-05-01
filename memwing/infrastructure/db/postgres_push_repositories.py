@@ -5,6 +5,7 @@ from memwing.core.models import PushCandidate
 from .postgres_derived_rows import push_candidate_from_row
 from .postgres_derived_sql import (
     _LIST_PENDING_PUSH_CANDIDATES_SQL,
+    _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL,
     _UPSERT_PUSH_CANDIDATE_SQL,
 )
 from .postgres_repositories import PostgresExecutor
@@ -22,6 +23,18 @@ class PostgresPushCandidateRepository:
         if row is None:
             raise RuntimeError("push candidate upsert did not return a row")
         return push_candidate_from_row(row)
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PushCandidate, ...]:
+        rows = await self._executor.fetch(
+            _LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL,
+            {"project_memory_space_id": project_memory_space_id, "limit": limit},
+        )
+        return tuple(push_candidate_from_row(row) for row in rows)
 
     async def list_pending(
         self,

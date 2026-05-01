@@ -67,6 +67,15 @@ class AuditEventRepositoryPort(Protocol):
     async def record(self, event: AuditEvent) -> AuditEvent:
         ...
 
+    async def list_for_entity(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        limit: int,
+    ) -> tuple[AuditEvent, ...]:
+        ...
+
     async def get_by_idempotency_key(
         self,
         *,
@@ -79,6 +88,14 @@ class AuditEventRepositoryPort(Protocol):
 
 class OutboxJobRepositoryPort(Protocol):
     async def enqueue(self, job: OutboxJob) -> OutboxJob:
+        ...
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
         ...
 
     async def claim_pending(
@@ -266,6 +283,14 @@ class GraphWriteJobRepositoryPort(Protocol):
     async def enqueue(self, job: GraphWriteJob) -> GraphWriteJob:
         ...
 
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        ...
+
     async def claim_pending(
         self,
         *,
@@ -343,6 +368,14 @@ class ForgettingReviewCandidateRepositoryPort(Protocol):
 
 class PushCandidateRepositoryPort(Protocol):
     async def upsert(self, candidate: PushCandidate) -> PushCandidate:
+        ...
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PushCandidate, ...]:
         ...
 
     async def list_pending(

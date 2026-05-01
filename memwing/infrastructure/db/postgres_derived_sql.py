@@ -258,6 +258,14 @@ ORDER BY priority DESC, created_at, id
 LIMIT %(limit)s
 """
 
+_LIST_PUSH_CANDIDATES_FOR_PROJECT_SQL = """
+SELECT *
+FROM push_candidates
+WHERE project_memory_space_id = %(project_memory_space_id)s
+ORDER BY updated_at DESC, id DESC
+LIMIT %(limit)s
+"""
+
 _INSERT_MEMORY_VERSION_SQL = """
 INSERT INTO memory_versions (
     id, memory_id, version, title, content, summary, status, source_event_ids,
@@ -381,6 +389,14 @@ INSERT INTO graph_write_jobs (
 )
 ON CONFLICT (idempotency_key) DO NOTHING
 RETURNING *
+"""
+
+_LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL = """
+SELECT *
+FROM graph_write_jobs
+WHERE project_memory_space_id = %(project_memory_space_id)s
+ORDER BY updated_at DESC, id DESC
+LIMIT %(limit)s
 """
 
 _CLAIM_GRAPH_WRITE_JOBS_SQL = """

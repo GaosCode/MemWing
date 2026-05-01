@@ -40,6 +40,20 @@ class InMemoryPushCandidateRepository:
         self._tx.state.push_candidate_by_cooldown_status[key] = candidate.id
         return candidate
 
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[PushCandidate, ...]:
+        candidates = [
+            candidate
+            for candidate in self._tx.state.push_candidates.values()
+            if candidate.project_memory_space_id == project_memory_space_id
+        ]
+        candidates.sort(key=lambda candidate: (candidate.updated_at, candidate.id), reverse=True)
+        return tuple(candidates[:limit])
+
     async def list_pending(
         self,
         *,

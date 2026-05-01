@@ -18,6 +18,8 @@ from .postgres_sql import (
     _INSERT_AUDIT_EVENT_SQL,
     _INSERT_OUTBOX_JOB_SQL,
     _INSERT_SOURCE_EVENT_SQL,
+    _LIST_AUDIT_EVENTS_FOR_ENTITY_SQL,
+    _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL,
     _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
@@ -141,6 +143,23 @@ class PostgresAuditEventRepository:
             return existing
         return audit_event_from_row(row)
 
+    async def list_for_entity(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        limit: int,
+    ) -> tuple[AuditEvent, ...]:
+        rows = await self._executor.fetch(
+            _LIST_AUDIT_EVENTS_FOR_ENTITY_SQL,
+            {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "limit": limit,
+            },
+        )
+        return tuple(audit_event_from_row(row) for row in rows)
+
     async def get_by_idempotency_key(
         self,
         *,
@@ -175,6 +194,21 @@ class PostgresOutboxJobRepository:
         if existing is None:
             raise RuntimeError("outbox insert conflict did not resolve to an existing row")
         return outbox_job_from_row(existing)
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        rows = await self._executor.fetch(
+            _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "limit": limit,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
 
     async def claim_pending(
         self,

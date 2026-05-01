@@ -5,49 +5,110 @@ from typing import cast
 
 from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError, require_text
-from memwing.core.models import MemoryDisplayType, MemoryStatus
+from memwing.core.models import (
+    MemoryDisplayType,
+    MemoryRoute,
+    MemoryStatus,
+    PushCandidateType,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryListItemResponse:
     id: str
     title: str
+    summary: str | None
     display_type: MemoryDisplayType
-    source_label: str
-    last_seen: str
+    route: MemoryRoute
     status: MemoryStatus
-    strength: float
+    group_id: str | None
+    thread_id: str | None
+    source_event_ids: tuple[str, ...]
+    decay_score: float
+    original_score: float
+    half_life_days: int
+    recall_threshold: float
+    curve_state: str
+    last_reinforced_at: str
+    next_review_at: str | None
+    retention_reason: str
     flags: tuple[str, ...]
-    reason: str
+    source_state: str
+    graph_backend_raw_retained: bool
+    available_actions: tuple[str, ...]
+    warning_count: int
+    updated_at: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", require_text(self.id, "id"))
         object.__setattr__(self, "title", require_text(self.title, "title"))
-        object.__setattr__(self, "source_label", require_text(self.source_label, "source_label"))
-        object.__setattr__(self, "last_seen", require_text(self.last_seen, "last_seen"))
-        object.__setattr__(self, "reason", require_text(self.reason, "reason"))
-        if not isinstance(self.strength, int | float) or isinstance(self.strength, bool):
-            raise SchemaValidationError("strength must be a number")
-        if self.strength < 0 or self.strength > 1:
-            raise SchemaValidationError("strength must be between 0 and 1")
-        object.__setattr__(self, "strength", float(self.strength))
-        object.__setattr__(self, "flags", tuple(require_text(flag, "flags") for flag in self.flags))
+        if self.summary is not None:
+            object.__setattr__(self, "summary", require_text(self.summary, "summary"))
+        object.__setattr__(self, "source_event_ids", _text_tuple(self.source_event_ids, "source_event_ids"))
+        object.__setattr__(self, "decay_score", _bounded_score(self.decay_score, "decay_score"))
+        object.__setattr__(self, "original_score", _bounded_score(self.original_score, "original_score"))
+        object.__setattr__(self, "half_life_days", _positive_int(self.half_life_days, "half_life_days"))
+        object.__setattr__(
+            self,
+            "recall_threshold",
+            _bounded_score(self.recall_threshold, "recall_threshold"),
+        )
+        object.__setattr__(self, "curve_state", require_text(self.curve_state, "curve_state"))
+        object.__setattr__(
+            self,
+            "last_reinforced_at",
+            require_text(self.last_reinforced_at, "last_reinforced_at"),
+        )
+        if self.next_review_at is not None:
+            object.__setattr__(
+                self,
+                "next_review_at",
+                require_text(self.next_review_at, "next_review_at"),
+            )
+        object.__setattr__(
+            self,
+            "retention_reason",
+            require_text(self.retention_reason, "retention_reason"),
+        )
+        object.__setattr__(self, "flags", _text_tuple(self.flags, "flags"))
+        object.__setattr__(self, "source_state", require_text(self.source_state, "source_state"))
+        if not isinstance(self.graph_backend_raw_retained, bool):
+            raise SchemaValidationError("graph_backend_raw_retained must be boolean")
+        object.__setattr__(
+            self,
+            "available_actions",
+            _text_tuple(self.available_actions, "available_actions"),
+        )
+        object.__setattr__(self, "warning_count", _non_negative_int(self.warning_count, "warning_count"))
+        object.__setattr__(self, "updated_at", require_text(self.updated_at, "updated_at"))
 
     @classmethod
     def from_json(cls, payload: JsonObject) -> MemoryListItemResponse:
-        flags = payload.get("flags")
-        if not isinstance(flags, list | tuple):
-            raise SchemaValidationError("flags must be a list")
+        _require_exact_fields(payload, _MEMORY_LIST_ITEM_FIELDS)
         return cls(
             id=_required_text(payload, "id"),
             title=_required_text(payload, "title"),
+            summary=_optional_text(payload, "summary"),
             display_type=_memory_display_type(payload),
-            source_label=_required_text(payload, "source_label"),
-            last_seen=_required_text(payload, "last_seen"),
+            route=_memory_route(payload),
             status=_memory_status(payload),
-            strength=_required_number(payload, "strength"),
-            flags=tuple(cast(tuple[str, ...], tuple(flags))),
-            reason=_required_text(payload, "reason"),
+            group_id=_optional_text(payload, "group_id"),
+            thread_id=_optional_text(payload, "thread_id"),
+            source_event_ids=_required_text_tuple(payload, "source_event_ids"),
+            decay_score=_required_number(payload, "decay_score"),
+            original_score=_required_number(payload, "original_score"),
+            half_life_days=_required_int(payload, "half_life_days"),
+            recall_threshold=_required_number(payload, "recall_threshold"),
+            curve_state=_required_text(payload, "curve_state"),
+            last_reinforced_at=_required_text(payload, "last_reinforced_at"),
+            next_review_at=_optional_text(payload, "next_review_at"),
+            retention_reason=_required_text(payload, "retention_reason"),
+            flags=_required_text_tuple(payload, "flags"),
+            source_state=_required_text(payload, "source_state"),
+            graph_backend_raw_retained=_required_bool(payload, "graph_backend_raw_retained"),
+            available_actions=_required_text_tuple(payload, "available_actions"),
+            warning_count=_required_int(payload, "warning_count"),
+            updated_at=_required_text(payload, "updated_at"),
         )
 
 
@@ -60,15 +121,12 @@ class MemoryListResponse:
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", tuple(self.items))
         if self.next_cursor is not None:
-            object.__setattr__(
-                self,
-                "next_cursor",
-                require_text(self.next_cursor, "next_cursor"),
-            )
+            object.__setattr__(self, "next_cursor", require_text(self.next_cursor, "next_cursor"))
         object.__setattr__(self, "trace_id", require_text(self.trace_id, "trace_id"))
 
     @classmethod
     def from_json(cls, payload: JsonObject) -> MemoryListResponse:
+        _require_exact_fields(payload, {"items", "next_cursor", "trace_id"})
         items = payload.get("items")
         if not isinstance(items, list | tuple):
             raise SchemaValidationError("items must be a list")
@@ -84,6 +142,258 @@ class MemoryListResponse:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ControlGraphLinkResponse:
+    id: str
+    backend: str
+    backend_object_type: str
+    backend_object_id: str
+    link_type: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlGraphLinkResponse:
+        _require_exact_fields(
+            payload,
+            {"id", "backend", "backend_object_type", "backend_object_id", "link_type"},
+        )
+        return cls(
+            id=_required_text(payload, "id"),
+            backend=_required_text(payload, "backend"),
+            backend_object_type=_required_text(payload, "backend_object_type"),
+            backend_object_id=_required_text(payload, "backend_object_id"),
+            link_type=_required_text(payload, "link_type"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryDetailResponse:
+    item: MemoryListItemResponse
+    content: str
+    source_event_ids: tuple[str, ...]
+    memory_item_ids: tuple[str, ...]
+    graph_links: tuple[ControlGraphLinkResponse, ...]
+    audit_refs: tuple[str, ...]
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> MemoryDetailResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "item",
+                "content",
+                "source_event_ids",
+                "memory_item_ids",
+                "graph_links",
+                "audit_refs",
+                "trace_id",
+            },
+        )
+        graph_links = payload.get("graph_links")
+        if not isinstance(graph_links, list | tuple):
+            raise SchemaValidationError("graph_links must be a list")
+        return cls(
+            item=MemoryListItemResponse.from_json(_object_field(payload, "item")),
+            content=_required_text(payload, "content"),
+            source_event_ids=_required_text_tuple(payload, "source_event_ids"),
+            memory_item_ids=_required_text_tuple(payload, "memory_item_ids"),
+            graph_links=tuple(
+                ControlGraphLinkResponse.from_json(_object_item(link, "graph_links"))
+                for link in graph_links
+            ),
+            audit_refs=_required_text_tuple(payload, "audit_refs"),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlForgettingReviewItemResponse:
+    id: str
+    memory: MemoryListItemResponse
+    threshold: float
+    reason: str
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlForgettingReviewItemResponse:
+        _require_exact_fields(payload, {"id", "memory", "threshold", "reason", "created_at", "updated_at"})
+        return cls(
+            id=_required_text(payload, "id"),
+            memory=MemoryListItemResponse.from_json(_object_field(payload, "memory")),
+            threshold=_required_number(payload, "threshold"),
+            reason=_required_text(payload, "reason"),
+            created_at=_required_text(payload, "created_at"),
+            updated_at=_required_text(payload, "updated_at"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlJobResponse:
+    id: str
+    kind: str
+    status: str
+    attempts: int
+    max_attempts: int
+    next_run_at: str
+    last_error: str | None
+    dead_letter_reason: str | None
+    retryable: bool
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlJobResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "id",
+                "kind",
+                "status",
+                "attempts",
+                "max_attempts",
+                "next_run_at",
+                "last_error",
+                "dead_letter_reason",
+                "retryable",
+            },
+        )
+        return cls(
+            id=_required_text(payload, "id"),
+            kind=_required_text(payload, "kind"),
+            status=_required_text(payload, "status"),
+            attempts=_required_int(payload, "attempts"),
+            max_attempts=_required_int(payload, "max_attempts"),
+            next_run_at=_required_text(payload, "next_run_at"),
+            last_error=_optional_text(payload, "last_error"),
+            dead_letter_reason=_optional_text(payload, "dead_letter_reason"),
+            retryable=_required_bool(payload, "retryable"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPushCandidateResponse:
+    id: str
+    type: PushCandidateType
+    title: str
+    status: str
+    priority: int
+    memory_item_ids: tuple[str, ...]
+    source_event_ids: tuple[str, ...]
+    trigger_reason: str
+    created_at: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlPushCandidateResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "id",
+                "type",
+                "title",
+                "status",
+                "priority",
+                "memory_item_ids",
+                "source_event_ids",
+                "trigger_reason",
+                "created_at",
+            },
+        )
+        return cls(
+            id=_required_text(payload, "id"),
+            type=cast(PushCandidateType, _required_text(payload, "type")),
+            title=_required_text(payload, "title"),
+            status=_required_text(payload, "status"),
+            priority=_required_int(payload, "priority"),
+            memory_item_ids=_required_text_tuple(payload, "memory_item_ids"),
+            source_event_ids=_required_text_tuple(payload, "source_event_ids"),
+            trigger_reason=_required_text(payload, "trigger_reason"),
+            created_at=_required_text(payload, "created_at"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlMaintenanceResponse:
+    forgetting_review_count: int
+    pending_push_count: int
+    job_count: int
+    warning_count: int
+    jobs: tuple[ControlJobResponse, ...]
+    push_candidates: tuple[ControlPushCandidateResponse, ...]
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlMaintenanceResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "forgetting_review_count",
+                "pending_push_count",
+                "job_count",
+                "warning_count",
+                "jobs",
+                "push_candidates",
+                "trace_id",
+            },
+        )
+        jobs = payload.get("jobs")
+        push_candidates = payload.get("push_candidates")
+        if not isinstance(jobs, list | tuple):
+            raise SchemaValidationError("jobs must be a list")
+        if not isinstance(push_candidates, list | tuple):
+            raise SchemaValidationError("push_candidates must be a list")
+        return cls(
+            forgetting_review_count=_required_int(payload, "forgetting_review_count"),
+            pending_push_count=_required_int(payload, "pending_push_count"),
+            job_count=_required_int(payload, "job_count"),
+            warning_count=_required_int(payload, "warning_count"),
+            jobs=tuple(ControlJobResponse.from_json(_object_item(job, "jobs")) for job in jobs),
+            push_candidates=tuple(
+                ControlPushCandidateResponse.from_json(_object_item(candidate, "push_candidates"))
+                for candidate in push_candidates
+            ),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+_MEMORY_LIST_ITEM_FIELDS = {
+    "id",
+    "title",
+    "summary",
+    "display_type",
+    "route",
+    "status",
+    "group_id",
+    "thread_id",
+    "source_event_ids",
+    "decay_score",
+    "original_score",
+    "half_life_days",
+    "recall_threshold",
+    "curve_state",
+    "last_reinforced_at",
+    "next_review_at",
+    "retention_reason",
+    "flags",
+    "source_state",
+    "graph_backend_raw_retained",
+    "available_actions",
+    "warning_count",
+    "updated_at",
+}
+
+
+def _require_exact_fields(payload: JsonObject, allowed: set[str]) -> None:
+    missing = allowed - payload.keys()
+    if missing:
+        raise SchemaValidationError(f"{sorted(missing)[0]} is required")
+    extra = payload.keys() - allowed
+    if extra:
+        raise SchemaValidationError(f"unsupported field: {sorted(extra)[0]}")
+
+
+def _object_field(payload: JsonObject, field_name: str) -> JsonObject:
+    return _object_item(payload.get(field_name), field_name)
+
+
 def _object_item(value: object, field_name: str) -> JsonObject:
     if not isinstance(value, dict):
         raise SchemaValidationError(f"{field_name} must contain objects")
@@ -97,11 +407,69 @@ def _required_text(payload: JsonObject, field_name: str) -> str:
     return require_text(value, field_name)
 
 
+def _optional_text(payload: JsonObject, field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SchemaValidationError(f"{field_name} must be text")
+    return require_text(value, field_name)
+
+
+def _required_text_tuple(payload: JsonObject, field_name: str) -> tuple[str, ...]:
+    value = payload.get(field_name)
+    if not isinstance(value, list | tuple):
+        raise SchemaValidationError(f"{field_name} must be a list")
+    return _text_tuple(value, field_name)
+
+
+def _text_tuple(value: tuple[str, ...] | list[object] | tuple[object, ...], field_name: str) -> tuple[str, ...]:
+    return tuple(require_text(item, field_name) for item in value)
+
+
 def _required_number(payload: JsonObject, field_name: str) -> float:
     value = payload.get(field_name)
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise SchemaValidationError(f"{field_name} must be a number")
     return float(value)
+
+
+def _required_int(payload: JsonObject, field_name: str) -> int:
+    value = payload.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be an integer")
+    return value
+
+
+def _required_bool(payload: JsonObject, field_name: str) -> bool:
+    value = payload.get(field_name)
+    if not isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be boolean")
+    return value
+
+
+def _bounded_score(value: float, field_name: str) -> float:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be a number")
+    if value < 0 or value > 1:
+        raise SchemaValidationError(f"{field_name} must be between 0 and 1")
+    return float(value)
+
+
+def _positive_int(value: int, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be an integer")
+    if value <= 0:
+        raise SchemaValidationError(f"{field_name} must be positive")
+    return value
+
+
+def _non_negative_int(value: int, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise SchemaValidationError(f"{field_name} must be an integer")
+    if value < 0:
+        raise SchemaValidationError(f"{field_name} must be non-negative")
+    return value
 
 
 def _memory_display_type(payload: JsonObject) -> MemoryDisplayType:
@@ -110,6 +478,14 @@ def _memory_display_type(payload: JsonObject) -> MemoryDisplayType:
         return MemoryDisplayType(value)
     except ValueError as exc:
         raise SchemaValidationError("display_type is not supported") from exc
+
+
+def _memory_route(payload: JsonObject) -> MemoryRoute:
+    value = _required_text(payload, "route")
+    try:
+        return MemoryRoute(value)
+    except ValueError as exc:
+        raise SchemaValidationError("route is not supported") from exc
 
 
 def _memory_status(payload: JsonObject) -> MemoryStatus:

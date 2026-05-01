@@ -111,6 +111,21 @@ class InMemoryAuditEventRepository:
         self._tx.state.audit_events[event.id] = event
         return event
 
+    async def list_for_entity(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        limit: int,
+    ) -> tuple[AuditEvent, ...]:
+        events = [
+            event
+            for event in self._tx.state.audit_events.values()
+            if event.entity_type == entity_type and event.entity_id == entity_id
+        ]
+        events.sort(key=lambda event: (event.created_at, event.id), reverse=True)
+        return tuple(events[:limit])
+
     async def get_by_idempotency_key(
         self,
         *,
@@ -143,6 +158,20 @@ class InMemoryOutboxJobRepository:
         self._tx.state.outbox_jobs[job.id] = job
         self._tx.state.outbox_by_idempotency_key[job.idempotency_key] = job.id
         return job
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        jobs = [
+            job
+            for job in self._tx.state.outbox_jobs.values()
+            if job.project_memory_space_id == project_memory_space_id
+        ]
+        jobs.sort(key=lambda job: (job.updated_at, job.id), reverse=True)
+        return tuple(jobs[:limit])
 
     async def claim_pending(
         self,

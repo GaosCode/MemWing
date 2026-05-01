@@ -22,7 +22,16 @@ from memwing.api.agent_runtime import (
     RememberEventResult,
     SortOrder,
 )
-from memwing.api.control import MemoryListItemResponse, MemoryListResponse
+from memwing.api.control import (
+    ControlForgettingReviewItemResponse,
+    ControlGraphLinkResponse,
+    ControlJobResponse,
+    ControlMaintenanceResponse,
+    ControlPushCandidateResponse,
+    MemoryDetailResponse,
+    MemoryListItemResponse,
+    MemoryListResponse,
+)
 from memwing.api.envelopes import ErrorResponse, ListResponse, MutationEnvelope
 from memwing.api.platform import (
     PlatformEvent,
@@ -57,10 +66,16 @@ __all__ = [
     "AgentRuntimeStatusRequest",
     "AgentRuntimeStatusResult",
     "ErrorResponse",
+    "ControlForgettingReviewItemResponse",
+    "ControlGraphLinkResponse",
+    "ControlJobResponse",
+    "ControlMaintenanceResponse",
+    "ControlPushCandidateResponse",
     "JsonObject",
     "JsonValue",
     "ListResponse",
     "MutationEnvelope",
+    "MemoryDetailResponse",
     "MemoryListItemResponse",
     "MemoryListResponse",
     "OpenClawNativeMemorySearchRequest",

@@ -10,6 +10,7 @@ from .postgres_derived_sql import (
     _CLAIM_GRAPH_WRITE_JOBS_SQL,
     _EXTEND_GRAPH_WRITE_LOCK_SQL,
     _INSERT_GRAPH_WRITE_JOB_SQL,
+    _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
     _LIST_MEMORY_GRAPH_LINKS_BY_MEMORY_SQL,
     _MARK_GRAPH_WRITE_DEAD_LETTER_SQL,
     _MARK_GRAPH_WRITE_FAILED_SQL,
@@ -35,6 +36,21 @@ class PostgresGraphWriteJobRepository:
         if existing is None:
             raise RuntimeError("graph write job conflict did not resolve to an existing row")
         return graph_write_job_from_row(existing)
+
+    async def list_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        rows = await self._executor.fetch(
+            _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "limit": limit,
+            },
+        )
+        return tuple(graph_write_job_from_row(row) for row in rows)
 
     async def claim_pending(
         self,
