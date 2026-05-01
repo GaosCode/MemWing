@@ -7,11 +7,7 @@ from pathlib import Path
 import sys
 from typing import Protocol
 
-from memwing.api.agent_memory import (
-    AgentMemoryQuery,
-    AgentMemoryResultItem,
-    AgentMemorySearchResult,
-)
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import GraphFact, GraphWriteResult
 from memwing.core.scope import EffectiveScope
 from memwing.ports.graph_backend import GraphWriteRequest
@@ -70,10 +66,10 @@ class GraphitiAdapter:
         )
         return cls(graphiti)
 
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         return await self._search(query, trace_suffix="current")
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         return await self._search(query, trace_suffix="history")
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
@@ -108,17 +104,17 @@ class GraphitiAdapter:
 
     async def _search(
         self,
-        query: AgentMemoryQuery,
+        query: MemorySearchQuery,
         *,
         trace_suffix: str,
-    ) -> AgentMemorySearchResult:
+    ) -> MemorySearchResult:
         edges = await self._graphiti.search(
             query.query,
             group_ids=[query.scope.project_memory_space_id],
             num_results=query.limit,
         )
         items = tuple(_edge_to_result_item(edge) for edge in edges)
-        return AgentMemorySearchResult(
+        return MemorySearchResult(
             contexts=tuple(item.text for item in items),
             results=items,
             next_cursor=None,
@@ -126,10 +122,10 @@ class GraphitiAdapter:
         )
 
 
-def _edge_to_result_item(edge: object) -> AgentMemoryResultItem:
+def _edge_to_result_item(edge: object) -> MemorySearchResultItem:
     edge_id = _required_text_attr(edge, "uuid")
     fact = _required_text_attr(edge, "fact")
-    return AgentMemoryResultItem(
+    return MemorySearchResultItem(
         id=edge_id,
         text=fact,
         score=_optional_float_attr(edge, "score"),

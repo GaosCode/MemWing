@@ -3,8 +3,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import uuid
 
-from memwing.api.agent_runtime import AgentMemoryQuery, AgentMemorySearchResult
 from memwing.core.models import AuditEvent
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult
 from memwing.core.models import (
     GraphFact,
     GraphWriteJob,
@@ -149,10 +149,10 @@ class FakeGraphBackend:
         self._result = result
         self.requests: tuple[GraphWriteRequest, ...] = ()
 
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
@@ -167,10 +167,10 @@ class FailingGraphBackend:
     def __init__(self, error: str) -> None:
         self._error = error
 
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
@@ -181,10 +181,10 @@ class FailingGraphBackend:
 
 
 class HangingGraphBackend:
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
@@ -199,10 +199,10 @@ class ReclaimingGraphBackend:
         self._store = store
         self._result = result
 
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:

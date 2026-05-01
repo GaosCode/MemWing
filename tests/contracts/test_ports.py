@@ -19,6 +19,7 @@ from memwing.api.schemas import (
     PushCandidate,
     RememberEventResult,
 )
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult
 from memwing.core.models import (
     GraphWriteResult,
     LongTermFilterItem,
@@ -127,10 +128,10 @@ def test_agent_runtime_port_method_names_and_types_are_frozen() -> None:
 
 def test_graph_backend_port_accepts_adapter_with_required_methods() -> None:
     class FakeGraphBackend:
-        async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
             raise NotImplementedError
 
-        async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+        async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
             raise NotImplementedError
 
         async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
@@ -140,6 +141,16 @@ def test_graph_backend_port_accepts_adapter_with_required_methods() -> None:
             raise NotImplementedError
 
     assert isinstance(FakeGraphBackend(), GraphBackendPort)
+
+
+def test_graph_backend_port_search_uses_internal_memory_search_contract() -> None:
+    for method_name in ("search_current", "search_history"):
+        signature = inspect.signature(getattr(GraphBackendPort, method_name))
+        parameters = list(signature.parameters.values())
+        hints = get_type_hints(getattr(GraphBackendPort, method_name))
+
+        assert hints[parameters[1].name] is MemorySearchQuery
+        assert hints["return"] is MemorySearchResult
 
 
 def test_graph_backend_port_uses_graph_write_request_contract() -> None:

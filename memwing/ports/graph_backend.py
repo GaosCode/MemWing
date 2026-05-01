@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from memwing.api.agent_runtime import AgentMemoryQuery, AgentMemorySearchResult
-from memwing.core.models import GraphWriteJob, GraphWriteResult, MemoryItem, SourceEvent
+from memwing.core.models import (
+    GraphWriteJob,
+    GraphWriteResult,
+    MemoryItem,
+    SourceEvent,
+)
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult
 from memwing.core.scope import EffectiveScope
 
 
@@ -17,10 +22,10 @@ class GraphWriteRequest:
 
 @runtime_checkable
 class GraphBackendPort(Protocol):
-    async def search_current(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         ...
 
-    async def search_history(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
         ...
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:

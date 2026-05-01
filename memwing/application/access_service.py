@@ -11,8 +11,10 @@ from memwing.api.agent_knowledge import (
     AgentKnowledgeGetResult,
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemoryResultItem, AgentMemorySearchResult
+from memwing.application.current_truth import CurrentTruthModule, CurrentTruthResult
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResultItem
 from memwing.core.models import MemoryItem, MemoryStatus, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
@@ -37,36 +39,35 @@ class MemoryAccessService:
         scope_resolver: ScopeResolver,
         unit_of_work: EventStoreUnitOfWorkPort,
         *,
+        current_truth: CurrentTruthModule | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._scope_resolver = scope_resolver
         self._unit_of_work = unit_of_work
+        self._current_truth = current_truth or CurrentTruthModule(unit_of_work, now=now)
         self._now = now or (lambda: datetime.now(UTC))
 
     async def build_context(self, request: AgentContextRequest) -> AgentContextResult:
         resolved = await self._scope_resolver.resolve_runtime(request.runtime_ref, request.scope)
         query_text = request.prompt or "current memory"
-        async with self._unit_of_work.transaction() as tx:
-            items = await tx.memory_items.list_for_scope(
+        current = await self._current_truth.recall_current(
+            MemorySearchQuery(
+                query=query_text,
                 scope=resolved.effective_scope,
                 limit=8,
+                trace_id=_trace_id("context", request.runtime_ref.agent_id),
             )
-        results = _rank_memory_items(
-            query=query_text,
-            items=items,
-            mode="current",
-            min_score=0,
-            now=self._now(),
         )
+        result = _current_truth_to_agent_result(current, limit=8)
         context_blocks = tuple(
             {
-                "type": "memory_item",
+                "type": item.source,
                 "id": item.id,
-                "title": item.title,
-                "content": item.content,
+                "title": item.metadata.get("title"),
+                "content": item.text,
                 "source_event_ids": item.source_event_ids,
             }
-            for item, _score in results
+            for item in result.results
         )
         return AgentContextResult(
             messages=None,
@@ -78,6 +79,21 @@ class MemoryAccessService:
 
     async def search(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
         resolved = await self._scope_resolver.resolve_runtime(query.runtime_ref, query.scope)
+        if query.mode == "current":
+            current = await self._current_truth.recall_current(
+                MemorySearchQuery(
+                    query=query.query,
+                    scope=resolved.effective_scope,
+                    mode="current",
+                    limit=query.limit,
+                    cursor=query.cursor,
+                    sort=query.sort,
+                    min_score=query.min_score,
+                    trace_id=_trace_id("search", query.runtime_ref.agent_id),
+                )
+            )
+            return _current_truth_to_agent_result(current, limit=query.limit)
+
         async with self._unit_of_work.transaction() as tx:
             items = await tx.memory_items.list_for_scope(
                 scope=resolved.effective_scope,
@@ -263,6 +279,47 @@ def _memory_item_to_result_item(
             "display_type": item.display_type.value,
             "summary": item.summary,
         },
+    )
+
+
+def _current_truth_to_agent_result(
+    current: CurrentTruthResult,
+    *,
+    limit: int,
+) -> AgentMemorySearchResult:
+    items = (
+        *current.current_facts,
+        *current.background,
+        *current.supporting_evidence,
+    )[:limit]
+    results = tuple(_memory_search_item_to_agent_item(item) for item in items)
+    return AgentMemorySearchResult(
+        contexts=tuple(item.text for item in results),
+        results=results,
+        next_cursor=None,
+        trace_id=current.trace_id,
+        warnings=tuple(
+            {
+                "branch": warning.branch,
+                "reason_code": warning.reason_code,
+                "message": warning.message,
+            }
+            for warning in current.warnings
+        ),
+    )
+
+
+def _memory_search_item_to_agent_item(item: MemorySearchResultItem) -> AgentMemoryResultItem:
+    return AgentMemoryResultItem(
+        id=item.id,
+        text=item.text,
+        score=item.score,
+        source=item.source if item.source != "raw_event" else "evidence",
+        source_event_ids=item.source_event_ids,
+        memory_item_ids=item.memory_item_ids,
+        valid_from=item.valid_from,
+        valid_to=item.valid_to,
+        metadata=item.metadata,
     )
 
 

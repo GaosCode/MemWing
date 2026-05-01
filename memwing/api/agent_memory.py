@@ -86,10 +86,12 @@ class AgentMemorySearchResult:
     results: tuple[AgentMemoryResultItem, ...]
     next_cursor: str | None
     trace_id: str
+    warnings: tuple[dict[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "contexts", tuple(self.contexts))
         object.__setattr__(self, "results", tuple(self.results))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
         if self.next_cursor is not None:
             object.__setattr__(
                 self,

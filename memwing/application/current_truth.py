@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from memwing.application.failure_semantics import classify_failure
+from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
+from memwing.core.memory_search import (
+    MemorySearchQuery,
+    MemorySearchResult,
+    MemorySearchResultItem,
+)
+from memwing.core.models import (
+    MemoryItem,
+    MemoryStatus,
+    PageMemory,
+    WorkingMemoryEntry,
+)
+from memwing.ports.evidence_index import EvidenceIndexPort
+from memwing.ports.event_store import EventStoreUnitOfWorkPort
+from memwing.ports.graph_backend import GraphBackendPort
+
+
+_CURRENT_RECALL_STATUSES = frozenset((MemoryStatus.ACTIVE,))
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTruthWarning:
+    branch: str
+    reason_code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTruthResult:
+    working_memory: tuple[MemorySearchResultItem, ...]
+    current_facts: tuple[MemorySearchResultItem, ...]
+    background: tuple[MemorySearchResultItem, ...]
+    supporting_evidence: tuple[MemorySearchResultItem, ...]
+    warnings: tuple[CurrentTruthWarning, ...]
+    trace_id: str
+
+
+class CurrentTruthModule:
+    def __init__(
+        self,
+        unit_of_work: EventStoreUnitOfWorkPort,
+        *,
+        graph_backend: GraphBackendPort | None = None,
+        evidence_index: EvidenceIndexPort | None = None,
+        now: Callable[[], datetime] | None = None,
+        graph_timeout: timedelta = timedelta(seconds=2),
+        evidence_timeout: timedelta = timedelta(seconds=2),
+    ) -> None:
+        self._unit_of_work = unit_of_work
+        self._graph_backend = graph_backend
+        self._evidence_index = evidence_index
+        self._now = now or (lambda: datetime.now(UTC))
+        self._graph_timeout = graph_timeout
+        self._evidence_timeout = evidence_timeout
+
+    async def recall_current(self, query: MemorySearchQuery) -> CurrentTruthResult:
+        graph_result, graph_warning = await self._graph_current(query)
+        evidence_result, evidence_warning = await self._evidence(query)
+        working_memory, memory_items, page_memory = await self._local_current(query)
+
+        warnings = tuple(
+            warning for warning in (graph_warning, evidence_warning) if warning is not None
+        )
+        current_facts = (
+            *_current_graph_items(graph_result),
+            *memory_items,
+        )
+        return CurrentTruthResult(
+            working_memory=working_memory,
+            current_facts=tuple(current_facts[: query.limit]),
+            background=page_memory,
+            supporting_evidence=evidence_result.results if evidence_result is not None else (),
+            warnings=warnings,
+            trace_id=query.trace_id or "current_truth:recall_current",
+        )
+
+    async def _graph_current(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[MemorySearchResult | None, CurrentTruthWarning | None]:
+        if self._graph_backend is None:
+            return None, None
+        try:
+            result = await asyncio.wait_for(
+                self._graph_backend.search_current(query),
+                timeout=self._graph_timeout.total_seconds(),
+            )
+        except Exception as exc:
+            failure = classify_failure(exc, audit_stage="current_truth.graph")
+            return None, CurrentTruthWarning(
+                branch="graph_backend",
+                reason_code=failure.reason_code,
+                message=failure.safe_message,
+            )
+        return result, None
+
+    async def _evidence(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[MemorySearchResult | None, CurrentTruthWarning | None]:
+        if self._evidence_index is None:
+            return None, None
+        try:
+            result = await asyncio.wait_for(
+                self._evidence_index.search(query),
+                timeout=self._evidence_timeout.total_seconds(),
+            )
+        except Exception as exc:
+            failure = classify_failure(exc, audit_stage="current_truth.evidence")
+            return None, CurrentTruthWarning(
+                branch="evidence_index",
+                reason_code=failure.reason_code,
+                message=failure.safe_message,
+            )
+        return result, None
+
+    async def _local_current(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[
+        tuple[MemorySearchResultItem, ...],
+        tuple[MemorySearchResultItem, ...],
+        tuple[MemorySearchResultItem, ...],
+    ]:
+        async with self._unit_of_work.transaction() as tx:
+            working_entries = await tx.working_memory_entries.list_recent(
+                project_memory_space_id=query.scope.project_memory_space_id,
+                thread_id=query.scope.thread_id,
+                limit=query.limit,
+            )
+            memory_items = await tx.memory_items.list_for_scope(
+                scope=query.scope,
+                limit=max(query.limit * 4, query.limit),
+            )
+            page = await _load_page_memory(tx.memory_pages, query)
+
+        ranked_items = _rank_memory_items(
+            query=query.query,
+            items=memory_items,
+            min_score=query.min_score,
+            now=self._now(),
+        )
+        return (
+            tuple(_working_memory_to_result_item(entry) for entry in working_entries),
+            tuple(
+                _memory_item_to_result_item(item, score=score)
+                for item, score in ranked_items[: query.limit]
+            ),
+            (() if page is None else (_page_memory_to_result_item(page),)),
+        )
+
+
+async def _load_page_memory(repository: object, query: MemorySearchQuery) -> PageMemory | None:
+    if query.scope.thread_id is not None:
+        return await repository.get_by_scope(
+            project_memory_space_id=query.scope.project_memory_space_id,
+            scope_type="thread",
+            scope_id=query.scope.thread_id,
+        )
+    if query.scope.group_ids is not None and len(query.scope.group_ids) == 1:
+        return await repository.get_by_scope(
+            project_memory_space_id=query.scope.project_memory_space_id,
+            scope_type="group",
+            scope_id=query.scope.group_ids[0],
+        )
+    return await repository.get_by_scope(
+        project_memory_space_id=query.scope.project_memory_space_id,
+        scope_type="project",
+        scope_id=query.scope.project_memory_space_id,
+    )
+
+
+def _current_graph_items(result: MemorySearchResult | None) -> tuple[MemorySearchResultItem, ...]:
+    if result is None:
+        return ()
+    return tuple(item for item in result.results if item.valid_to is None)
+
+
+def _rank_memory_items(
+    *,
+    query: str,
+    items: tuple[MemoryItem, ...],
+    min_score: float,
+    now: datetime,
+) -> list[tuple[MemoryItem, float]]:
+    ranked: list[tuple[MemoryItem, float]] = []
+    for item in items:
+        if not _is_current_recallable(item):
+            continue
+        score = _memory_item_score(item, now=now)
+        if score < min_score:
+            continue
+        if query and not _matches_query(item, query):
+            continue
+        ranked.append((item, score))
+    return sorted(ranked, key=lambda pair: (pair[1], pair[0].updated_at, pair[0].id), reverse=True)
+
+
+def _is_current_recallable(item: MemoryItem) -> bool:
+    return (
+        item.status in _CURRENT_RECALL_STATUSES
+        and item.removed_at is None
+        and item.hidden_at is None
+        and item.invalidated_at is None
+        and item.valid_to is None
+    )
+
+
+def _memory_item_score(item: MemoryItem, *, now: datetime) -> float:
+    if item.cached_decayed_score is not None:
+        return item.cached_decayed_score
+    return compute_decayed_score(
+        original_score=item.original_score,
+        effective_last_touched_at=effective_last_touched_at(item),
+        now=now,
+        half_life_days=item.half_life_days,
+    )
+
+
+def _matches_query(item: MemoryItem, query: str) -> bool:
+    normalized_query = query.casefold()
+    searchable = " ".join(
+        text for text in (item.title, item.content, item.summary) if text is not None
+    ).casefold()
+    return normalized_query in searchable
+
+
+def _memory_item_to_result_item(item: MemoryItem, *, score: float) -> MemorySearchResultItem:
+    return MemorySearchResultItem(
+        id=item.id,
+        text=item.content,
+        score=score,
+        source="memory_item",
+        source_event_ids=item.source_event_ids,
+        memory_item_ids=(item.id,),
+        valid_from=item.valid_from,
+        valid_to=item.valid_to,
+        metadata={
+            "title": item.title,
+            "status": item.status.value,
+            "route": item.route.value,
+            "display_type": item.display_type.value,
+            "summary": item.summary,
+        },
+    )
+
+
+def _working_memory_to_result_item(entry: WorkingMemoryEntry) -> MemorySearchResultItem:
+    return MemorySearchResultItem(
+        id=entry.id,
+        text=entry.content,
+        score=None,
+        source="working_memory",
+        source_event_ids=(entry.source_event_id,),
+        memory_item_ids=(),
+        valid_from=entry.created_at,
+        valid_to=entry.flushed_at,
+        metadata={"sequence": entry.sequence},
+    )
+
+
+def _page_memory_to_result_item(page: PageMemory) -> MemorySearchResultItem:
+    return MemorySearchResultItem(
+        id=page.id,
+        text=page.brief,
+        score=None,
+        source="page_memory",
+        source_event_ids=page.source_event_ids,
+        memory_item_ids=page.linked_memory_item_ids,
+        valid_from=page.created_at,
+        valid_to=None,
+        metadata={
+            "title": page.title,
+            "scope_type": page.scope_type,
+            "scope_id": page.scope_id,
+            "needs_rebuild": page.needs_rebuild,
+        },
+    )

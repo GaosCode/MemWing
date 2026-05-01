@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import uuid
 
+from memwing.application.failure_semantics import classify_failure
 from memwing.core.lifecycle import LifecycleAction
 from memwing.core.models import (
     AuditEvent,
@@ -82,9 +83,11 @@ class GraphWriteWorker:
                 raise
             except Exception as exc:
                 completion_at = now or datetime.now(UTC)
+                failure = classify_failure(exc, audit_stage="graph_write.failed")
                 updated = await self._record_failure(
                     job=job,
                     error=_safe_error_summary(exc),
+                    reason_code=failure.reason_code,
                     now=completion_at,
                 )
                 if updated.status == "dead_letter":
@@ -287,6 +290,7 @@ class GraphWriteWorker:
         *,
         job: GraphWriteJob,
         error: str,
+        reason_code: str,
         now: datetime,
     ) -> GraphWriteJob:
         async with self._unit_of_work.transaction() as tx:
@@ -304,6 +308,7 @@ class GraphWriteWorker:
                     stage="graph_write.dead_letter" if is_dead_letter else "graph_write.retry",
                     decision="dead_letter" if is_dead_letter else "retry",
                     output_ref=updated.status,
+                    reason_code=reason_code,
                     reason_text=error,
                     now=now,
                 )
@@ -353,6 +358,7 @@ def _audit_event(
     output_ref: str | None,
     reason_text: str | None,
     now: datetime,
+    reason_code: str | None = None,
 ) -> AuditEvent:
     return AuditEvent(
         id=str(uuid.uuid4()),
@@ -363,7 +369,7 @@ def _audit_event(
         input_ref=job.id,
         output_ref=output_ref,
         decision=decision,
-        reason_code=None,
+        reason_code=reason_code,
         reason_text=reason_text,
         source_event_ids=job.source_event_ids,
         latency_ms=None,

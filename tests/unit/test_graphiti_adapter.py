@@ -6,8 +6,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from memwing.api.agent_common import AgentRuntimeRef
-from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.core.models import (
     GraphWriteJob,
     MemoryDisplayType,
@@ -16,7 +14,8 @@ from memwing.core.models import (
     MemoryStatus,
     SourceEvent,
 )
-from memwing.core.scope import EffectiveScope, MemoryScope
+from memwing.core.memory_search import MemorySearchQuery
+from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.graph.graphiti_adapter import (
     GraphitiAdapter,
     GraphitiConnectionConfig,
@@ -176,10 +175,16 @@ def test_graphiti_adapter_ingests_graph_job_through_add_episode() -> None:
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     graphiti = FakeGraphiti()
     adapter = GraphitiAdapter(graphiti)
-    query = AgentMemoryQuery(
-        runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+    query = MemorySearchQuery(
         query="roadmap",
-        scope=MemoryScope(project_memory_space_id="project_001", group_id="group_001"),
+        scope=EffectiveScope(
+            project_memory_space_id="project_001",
+            group_ids=("group_001",),
+            thread_id=None,
+            shared_group_id=None,
+            safe_mode_enabled=False,
+            cross_group_allowed=True,
+        ),
         limit=3,
     )
 

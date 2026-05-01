@@ -93,6 +93,7 @@ def test_graph_write_worker_retries_backend_timeout_without_hanging() -> None:
         assert retry_job.last_error == "TimeoutError"
         assert retry_job.next_run_at == NOW + timedelta(seconds=30)
         assert store.audit_events[-1].stage == "graph_write.retry"
+        assert store.audit_events[-1].reason_code == "provider_timeout"
         assert store.audit_events[-1].reason_text == "TimeoutError"
 
     asyncio.run(scenario())

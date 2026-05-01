@@ -8,8 +8,6 @@ import sys
 
 import pytest
 
-from memwing.api.agent_common import AgentRuntimeRef
-from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.core.models import (
     GraphWriteJob,
     MemoryDisplayType,
@@ -18,7 +16,8 @@ from memwing.core.models import (
     MemoryStatus,
     SourceEvent,
 )
-from memwing.core.scope import MemoryScope
+from memwing.core.memory_search import MemorySearchQuery
+from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.graph.graphiti_adapter import (
     GraphitiAdapter,
     GraphitiConnectionConfig,
@@ -91,10 +90,16 @@ async def _run_graphiti_live(adapter: GraphitiAdapter):
         )
     )
     search = await adapter.search_current(
-        AgentMemoryQuery(
-            runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_live_001"),
+        MemorySearchQuery(
             query="Skyline codename owner",
-            scope=MemoryScope(project_memory_space_id="project_graphiti_live_001"),
+            scope=EffectiveScope(
+                project_memory_space_id="project_graphiti_live_001",
+                group_ids=None,
+                thread_id=None,
+                shared_group_id=None,
+                safe_mode_enabled=False,
+                cross_group_allowed=True,
+            ),
             limit=5,
         )
     )
