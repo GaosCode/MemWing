@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Callable
 
+from memwing.application.control_pagination import control_fetch_limit, paginate_control_items
 from memwing.application.control_projection import (
     ControlPageDetailProjection,
     ControlPageListProjection,
@@ -17,6 +18,9 @@ from memwing.application.control_service_support import (
     _scope_values_match,
     _uuid,
 )
+from memwing.application.page_memory_rebuild import PageMemoryRebuildCommand
+from memwing.application.page_memory_service import PageMemoryService
+from memwing.core.errors import ConfigurationFailure
 from memwing.core.models import MemoryPageVersion, PageMemory, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
@@ -25,6 +29,7 @@ from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitO
 class ControlPageServiceMixin:
     _unit_of_work: EventStoreUnitOfWorkPort
     _now: Callable[[], datetime]
+    _page_memory_service: PageMemoryService | None
 
     async def list_pages(
         self,
@@ -32,14 +37,24 @@ class ControlPageServiceMixin:
         scope: EffectiveScope,
         limit: int,
         trace_id: str,
+        cursor: str | None = None,
+        sort: str = "updated_at",
     ) -> ControlPageListProjection:
+        fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
-            pages = await tx.memory_pages.list_for_scope(scope=scope, limit=limit)
+            pages = await tx.memory_pages.list_for_scope(scope=scope, limit=fetch_limit)
+            paged = paginate_control_items(
+                pages,
+                limit=limit,
+                cursor=cursor,
+                sort=sort,
+                key=lambda page: (_page_sort_value(page, sort), page.id),
+            )
             projections = []
-            for page in pages:
+            for page in paged.items:
                 source_events = await _source_events_for_page(tx, page)
                 projections.append(project_page(page, source_events=source_events))
-        return ControlPageListProjection(items=tuple(projections), next_cursor=None, trace_id=trace_id)
+        return ControlPageListProjection(items=tuple(projections), next_cursor=paged.next_cursor, trace_id=trace_id)
 
     async def get_page_detail(
         self,
@@ -192,6 +207,69 @@ class ControlPageServiceMixin:
                 )
         return await self.get_page_detail(page_id=page_id, scope=scope, limit=20, trace_id=trace_id)
 
+    async def rebuild_page(
+        self,
+        *,
+        page_id: str,
+        scope: EffectiveScope,
+        actor_id: str,
+        reason: str,
+        idempotency_key: str,
+        trace_id: str,
+    ) -> ControlPageDetailProjection:
+        if self._page_memory_service is None:
+            raise ConfigurationFailure(
+                "page_memory_service_missing",
+                "Page memory service is not configured.",
+            )
+        now = self._now()
+        async with self._unit_of_work.transaction() as tx:
+            existing_audit = await tx.audit_events.get_by_idempotency_key(
+                entity_type="memory_page",
+                entity_id=page_id,
+                idempotency_key=idempotency_key,
+            )
+            page = await tx.memory_pages.get(page_id)
+            if page is None or not _page_in_scope(page, scope):
+                await tx.audit_events.record(
+                    _rejected_audit_event(
+                        entity_type="control_page_rebuild",
+                        entity_id=page_id,
+                        trace_id=trace_id,
+                        now=now,
+                    )
+                )
+                raise _not_found()
+            scope_type = page.scope_type
+            scope_id = page.scope_id
+        if existing_audit is None:
+            await self._page_memory_service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=scope,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    actor_id=actor_id,
+                    reason=reason,
+                    trace_id=trace_id,
+                )
+            )
+            async with self._unit_of_work.transaction() as tx:
+                await tx.audit_events.record(
+                    _audit_event(
+                        entity_type="memory_page",
+                        entity_id=page_id,
+                        stage="control.page.rebuilt",
+                        decision="rebuilt",
+                        reason_text=reason,
+                        source_event_ids=(),
+                        actor_id=actor_id,
+                        idempotency_key=idempotency_key,
+                        trace_id=trace_id,
+                        now=self._now(),
+                    )
+                )
+        return await self.get_page_detail(page_id=page_id, scope=scope, limit=20, trace_id=trace_id)
+
 
 def _page_in_scope(page: PageMemory, scope: EffectiveScope) -> bool:
     return page.project_memory_space_id == scope.project_memory_space_id and _scope_values_match(
@@ -230,3 +308,9 @@ def _page_version(page: PageMemory, *, changed_by: str, reason: str, now: dateti
         change_reason=reason,
         created_at=now,
     )
+
+
+def _page_sort_value(page: PageMemory, sort: str) -> datetime:
+    if sort == "created_at":
+        return page.created_at
+    return page.updated_at

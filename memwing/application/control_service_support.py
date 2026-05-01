@@ -42,6 +42,7 @@ def _audit_event(
     idempotency_key: str | None,
     trace_id: str,
     now: datetime,
+    output_ref: str | None = None,
 ) -> AuditEvent:
     return AuditEvent(
         id=_uuid("audit", entity_type, entity_id, idempotency_key or stage),
@@ -50,7 +51,7 @@ def _audit_event(
         entity_id=entity_id,
         stage=stage,
         input_ref=None,
-        output_ref=None,
+        output_ref=output_ref,
         decision=decision,
         reason_code=None,
         reason_text=reason_text,

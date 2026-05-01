@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Callable, Mapping
 
 from memwing.application.control_page_service import ControlPageServiceMixin
+from memwing.application.control_pagination import (
+    control_fetch_limit,
+    paginate_control_items,
+)
 from memwing.application.control_projection import (
     ControlIntegrationsProjection,
     ControlIntegrationProjection,
@@ -22,6 +26,7 @@ from memwing.application.control_projection import (
     project_outbox_job,
     project_push_candidate,
 )
+from memwing.application.control_push_service import ControlPushServiceMixin
 from memwing.application.control_service_support import (
     _audit_event,
     _not_found,
@@ -34,18 +39,23 @@ from memwing.core.models import MemoryItem, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
 from memwing.ports.lifecycle_transition import LifecycleTransitionRequest
+from memwing.ports.platform_connector import PlatformConnectorPort
 
 
-class ControlService(ControlPageServiceMixin):
+class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
     def __init__(
         self,
         unit_of_work: EventStoreUnitOfWorkPort,
         *,
         now: Callable[[], datetime] | None = None,
+        page_memory_service: object | None = None,
+        platform_connectors: Mapping[str, PlatformConnectorPort] | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._now = now or (lambda: datetime.now(UTC))
         self._lifecycle = LifecycleTransitionService(unit_of_work)
+        self._page_memory_service = page_memory_service
+        self._platform_connectors = platform_connectors or {}
 
     async def list_memories(
         self,
@@ -53,12 +63,22 @@ class ControlService(ControlPageServiceMixin):
         scope: EffectiveScope,
         limit: int,
         trace_id: str,
+        cursor: str | None = None,
+        sort: str = "updated_at",
     ) -> ControlMemoryListProjection:
         now = self._now()
+        fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
-            items = await tx.memory_items.list_for_scope(scope=scope, limit=limit)
+            items = await tx.memory_items.list_for_scope(scope=scope, limit=fetch_limit)
+            paged = paginate_control_items(
+                items,
+                limit=limit,
+                cursor=cursor,
+                sort=sort,
+                key=lambda item: (_memory_sort_value(item, sort), item.id),
+            )
             projections = []
-            for item in items:
+            for item in paged.items:
                 source_events = await _source_events_for_item(tx, item)
                 graph_links = await tx.memory_graph_links.list_by_memory(item.id)
                 projections.append(
@@ -71,7 +91,7 @@ class ControlService(ControlPageServiceMixin):
                 )
         return ControlMemoryListProjection(
             items=tuple(projections),
-            next_cursor=None,
+            next_cursor=paged.next_cursor,
             trace_id=trace_id,
         )
 
@@ -184,18 +204,31 @@ class ControlService(ControlPageServiceMixin):
         scope: EffectiveScope,
         limit: int,
         trace_id: str,
+        cursor: str | None = None,
+        sort: str = "updated_at",
     ) -> ControlForgettingReviewProjection:
         now = self._now()
+        fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
             candidates = await tx.forgetting_review_candidates.list_pending(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=limit,
+                limit=fetch_limit,
             )
-            projections = []
+            scoped_candidates = []
             for candidate in candidates:
                 item = await tx.memory_items.get(candidate.memory_id)
                 if item is None or not _memory_item_in_scope(item, scope):
                     continue
+                scoped_candidates.append((candidate, item))
+            paged = paginate_control_items(
+                scoped_candidates,
+                limit=limit,
+                cursor=cursor,
+                sort=sort,
+                key=lambda pair: (_forgetting_review_sort_value(pair[0], sort), pair[0].id),
+            )
+            projections = []
+            for candidate, item in paged.items:
                 source_events = await _source_events_for_item(tx, item)
                 graph_links = await tx.memory_graph_links.list_by_memory(item.id)
                 projections.append(
@@ -216,7 +249,7 @@ class ControlService(ControlPageServiceMixin):
                 )
         return ControlForgettingReviewProjection(
             items=tuple(projections),
-            next_cursor=None,
+            next_cursor=paged.next_cursor,
             trace_id=trace_id,
         )
 
@@ -226,11 +259,14 @@ class ControlService(ControlPageServiceMixin):
         scope: EffectiveScope,
         limit: int,
         trace_id: str,
+        cursor: str | None = None,
+        sort: str = "updated_at",
     ) -> ControlMaintenanceProjection:
+        fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
         async with self._unit_of_work.transaction() as tx:
             forgetting_reviews = await tx.forgetting_review_candidates.list_pending(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=limit,
+                limit=fetch_limit,
             )
             scoped_forgetting_reviews = []
             for candidate in forgetting_reviews:
@@ -241,7 +277,7 @@ class ControlService(ControlPageServiceMixin):
                 candidate
                 for candidate in await tx.push_candidates.list_for_project(
                     project_memory_space_id=scope.project_memory_space_id,
-                    limit=limit,
+                    limit=fetch_limit,
                 )
                 if _scope_values_match(
                     group_id=candidate.group_id,
@@ -252,25 +288,45 @@ class ControlService(ControlPageServiceMixin):
             )
             graph_jobs = await tx.graph_write_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=limit,
+                limit=fetch_limit,
             )
             outbox_jobs = await tx.outbox_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=limit,
+                limit=fetch_limit,
             )
 
         pending_push_count = sum(1 for candidate in push_candidates if candidate.status == "pending")
-        jobs = tuple(project_graph_job(job) for job in graph_jobs) + tuple(
-            project_outbox_job(job) for job in outbox_jobs
+        jobs = tuple(graph_jobs) + tuple(outbox_jobs)
+        paged_jobs = paginate_control_items(
+            jobs,
+            limit=limit,
+            cursor=cursor,
+            sort=sort,
+            key=lambda job: (_job_sort_value(job, sort), _job_kind_rank(job), job.id),
         )
-        jobs = jobs[:limit]
         return ControlMaintenanceProjection(
             forgetting_review_count=len(scoped_forgetting_reviews),
             pending_push_count=pending_push_count,
-            job_count=len(jobs),
-            warning_count=sum(1 for job in jobs if job.status == "dead_letter"),
-            jobs=jobs,
-            push_candidates=tuple(project_push_candidate(candidate) for candidate in push_candidates),
+            job_count=len(paged_jobs.items),
+            warning_count=sum(1 for job in paged_jobs.items if job.status == "dead_letter"),
+            jobs=tuple(
+                project_graph_job(job) if hasattr(job, "backend") else project_outbox_job(job)
+                for job in paged_jobs.items
+            ),
+            push_candidates=tuple(
+                project_push
+                for project_push in (
+                    project_push_candidate(candidate)
+                    for candidate in paginate_control_items(
+                        push_candidates,
+                        limit=limit,
+                        cursor=cursor,
+                        sort=sort,
+                        key=lambda candidate: (_push_candidate_sort_value(candidate, sort), candidate.id),
+                    ).items
+                )
+            ),
+            next_cursor=paged_jobs.next_cursor,
             trace_id=trace_id,
         )
 
@@ -294,46 +350,6 @@ class ControlService(ControlPageServiceMixin):
             pending_push_count=maintenance.pending_push_count,
             dead_letter_job_count=sum(1 for job in maintenance.jobs if job.status == "dead_letter"),
             warning_count=maintenance.warning_count,
-            trace_id=trace_id,
-        )
-
-    async def approve_push_candidate(
-        self,
-        *,
-        candidate_id: str,
-        scope: EffectiveScope,
-        actor_id: str,
-        reason: str,
-        idempotency_key: str,
-        trace_id: str,
-    ):
-        return await self._transition_push_candidate(
-            candidate_id=candidate_id,
-            scope=scope,
-            next_status="approved",
-            actor_id=actor_id,
-            reason=reason,
-            idempotency_key=idempotency_key,
-            trace_id=trace_id,
-        )
-
-    async def skip_push_candidate(
-        self,
-        *,
-        candidate_id: str,
-        scope: EffectiveScope,
-        actor_id: str,
-        reason: str,
-        idempotency_key: str,
-        trace_id: str,
-    ):
-        return await self._transition_push_candidate(
-            candidate_id=candidate_id,
-            scope=scope,
-            next_status="skipped",
-            actor_id=actor_id,
-            reason=reason,
-            idempotency_key=idempotency_key,
             trace_id=trace_id,
         )
 
@@ -416,65 +432,6 @@ class ControlService(ControlPageServiceMixin):
             trace_id=trace_id,
         )
 
-    async def _transition_push_candidate(
-        self,
-        *,
-        candidate_id: str,
-        scope: EffectiveScope,
-        next_status: str,
-        actor_id: str,
-        reason: str,
-        idempotency_key: str,
-        trace_id: str,
-    ):
-        now = self._now()
-        async with self._unit_of_work.transaction() as tx:
-            existing_audit = await tx.audit_events.get_by_idempotency_key(
-                entity_type="push_candidate",
-                entity_id=candidate_id,
-                idempotency_key=idempotency_key,
-            )
-            candidate = await tx.push_candidates.get(candidate_id)
-            if candidate is None or not _scope_values_match(
-                group_id=candidate.group_id,
-                thread_id=candidate.thread_id,
-                shared_group_id=candidate.shared_group_id,
-                scope=scope,
-            ):
-                await tx.audit_events.record(
-                    _rejected_audit_event(
-                        entity_type="control_push_candidate",
-                        entity_id=candidate_id,
-                        trace_id=trace_id,
-                        now=now,
-                    )
-                )
-                raise _not_found()
-            if existing_audit is None:
-                candidate = await tx.push_candidates.update_status(
-                    candidate_id=candidate_id,
-                    project_memory_space_id=scope.project_memory_space_id,
-                    status=next_status,
-                    updated_at=now,
-                )
-                await tx.audit_events.record(
-                    _audit_event(
-                        entity_type="push_candidate",
-                        entity_id=candidate_id,
-                        stage=f"control.push_candidate.{next_status}",
-                        decision=next_status,
-                        reason_text=reason,
-                        source_event_ids=candidate.source_event_ids if candidate is not None else (),
-                        actor_id=actor_id,
-                        idempotency_key=idempotency_key,
-                        trace_id=trace_id,
-                        now=now,
-                    )
-                )
-            if candidate is None:
-                raise _not_found()
-            return project_push_candidate(candidate)
-
 
 async def _source_events_for_item(
     tx: EventStoreTransactionPort,
@@ -495,3 +452,39 @@ def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:
         shared_group_id=item.shared_group_id,
         scope=scope,
     )
+
+
+def _memory_sort_value(item: object, sort: str) -> object:
+    if sort == "event_time":
+        return getattr(item, "event_time", None) or getattr(item, "updated_at")
+    if sort == "created_at":
+        return getattr(item, "created_at")
+    return getattr(item, "updated_at")
+
+
+def _forgetting_review_sort_value(candidate: object, sort: str) -> object:
+    if sort == "created_at":
+        return getattr(candidate, "created_at")
+    return getattr(candidate, "updated_at")
+
+
+def _job_sort_value(job: object, sort: str) -> object:
+    if sort == "created_at":
+        return getattr(job, "created_at")
+    if sort == "next_run_at":
+        return getattr(job, "next_run_at")
+    if sort == "priority":
+        return getattr(job, "priority")
+    return getattr(job, "updated_at")
+
+
+def _job_kind_rank(job: object) -> int:
+    return 1 if hasattr(job, "backend") else 0
+
+
+def _push_candidate_sort_value(candidate: object, sort: str) -> object:
+    if sort == "priority":
+        return getattr(candidate, "priority")
+    if sort == "created_at":
+        return getattr(candidate, "created_at")
+    return getattr(candidate, "updated_at")

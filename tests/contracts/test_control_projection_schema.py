@@ -138,6 +138,7 @@ def test_forgetting_review_and_maintenance_contracts_are_backend_derived() -> No
                     "created_at": "2026-04-30T00:00:00+00:00",
                 }
             ],
+            "next_cursor": "offset:2",
             "trace_id": "trace_maintenance",
         }
     )
@@ -145,6 +146,7 @@ def test_forgetting_review_and_maintenance_contracts_are_backend_derived() -> No
     assert review.memory.decay_score == 0.42
     assert maintenance.jobs[0].retryable is False
     assert maintenance.push_candidates[0].type == "forgetting_review"
+    assert maintenance.next_cursor == "offset:2"
 
 
 def test_control_page_summary_settings_and_integrations_contracts_are_backend_owned() -> None:
