@@ -54,7 +54,10 @@ def test_graph_write_worker_lost_lock_does_not_write_links_or_lifecycle_side_eff
         assert lifecycle.requests == ()
         assert store.memory_graph_links == ()
         assert store.graph_write_jobs[0].locked_by == "graph_worker_002"
-        assert store.audit_events == ()
+        assert len(store.audit_events) == 1
+        assert store.audit_events[0].stage == "graph_write.lock_lost"
+        assert store.audit_events[0].reason_code == "lock_ownership_lost"
+        assert store.audit_events[0].reason_text == "OutboxLockOwnershipError"
 
     asyncio.run(scenario())
 

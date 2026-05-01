@@ -79,7 +79,9 @@ class GraphWriteWorker:
                     graph_result=graph_result,
                     now=completion_at,
                 )
-            except OutboxLockOwnershipError:
+            except OutboxLockOwnershipError as exc:
+                completion_at = now or datetime.now(UTC)
+                await self._record_lock_ownership_failure(job=job, exc=exc, now=completion_at)
                 raise
             except Exception as exc:
                 completion_at = now or datetime.now(UTC)
@@ -314,6 +316,27 @@ class GraphWriteWorker:
                 )
             )
             return updated
+
+    async def _record_lock_ownership_failure(
+        self,
+        *,
+        job: GraphWriteJob,
+        exc: OutboxLockOwnershipError,
+        now: datetime,
+    ) -> None:
+        failure = classify_failure(exc, audit_stage="graph_write.lock_lost")
+        async with self._unit_of_work.transaction() as tx:
+            await tx.audit_events.record(
+                _audit_event(
+                    job=job,
+                    stage="graph_write.lock_lost",
+                    decision="aborted",
+                    output_ref="lock_lost",
+                    reason_code=failure.reason_code,
+                    reason_text=_safe_error_summary(exc),
+                    now=now,
+                )
+            )
 
 
 class GraphWriteWorkerInputError(RuntimeError):
