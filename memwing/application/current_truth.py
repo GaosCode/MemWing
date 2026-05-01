@@ -69,12 +69,21 @@ class CurrentTruthModule:
         self._local_timeout = local_timeout
 
     async def recall_current(self, query: MemorySearchQuery) -> CurrentTruthResult:
-        graph_result, graph_warning = await self._graph_current(query)
-        evidence_result, evidence_warning = await self._evidence(query)
-        working_memory, working_warning = await self._working_memory(query)
-        memory_items, memory_items_warning = await self._memory_items(query)
-        page_memory, page_warning = await self._page_memory(query)
-        raw_events, raw_warning = await self._raw_events(query)
+        (
+            (graph_result, graph_warning),
+            (evidence_result, evidence_warning),
+            (working_memory, working_warning),
+            (memory_items, memory_items_warning),
+            (page_memory, page_warning),
+            (raw_events, raw_warning),
+        ) = await asyncio.gather(
+            self._graph_current(query),
+            self._evidence(query),
+            self._working_memory(query),
+            self._memory_items(query),
+            self._page_memory(query),
+            self._raw_events(query),
+        )
 
         warnings = tuple(
             warning

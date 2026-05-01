@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from memwing.application.current_truth import CurrentTruthModule
-from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import (
     MemoryDisplayType,
     MemoryItem,
@@ -149,17 +149,51 @@ def test_current_truth_branch_timeouts_return_warnings_without_empty_success_lie
     asyncio.run(scenario())
 
 
+def test_current_truth_fan_out_starts_remote_branches_concurrently() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        graph_started = asyncio.Event()
+        evidence_started = asyncio.Event()
+        result = await CurrentTruthModule(
+            store,
+            graph_backend=BarrierGraphBackend(
+                own_started=graph_started,
+                peer_started=evidence_started,
+            ),
+            evidence_index=BarrierEvidenceIndex(
+                own_started=evidence_started,
+                peer_started=graph_started,
+            ),
+            graph_timeout=timedelta(milliseconds=50),
+            evidence_timeout=timedelta(milliseconds=50),
+            now=lambda: NOW,
+        ).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert tuple(item.id for item in result.current_facts) == ("graph_current",)
+        assert tuple(item.id for item in result.supporting_evidence) == ("evidence_current",)
+        assert result.warnings == ()
+
+    asyncio.run(scenario())
+
+
 def test_current_truth_local_branch_timeout_returns_warning_without_blocking_others(
     monkeypatch,
 ) -> None:
-    from memwing.infrastructure.db.in_memory_memory_repositories import (
-        InMemoryMemoryItemRepository,
-    )
-
-    async def hang_list_for_scope(self, *, scope, limit):
+    async def hang_load_memory_items(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[MemoryItem, ...]:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(InMemoryMemoryItemRepository, "list_for_scope", hang_list_for_scope)
+    monkeypatch.setattr(CurrentTruthModule, "_load_memory_items", hang_load_memory_items)
     store = InMemoryDataStore()
 
     async def scenario() -> None:
@@ -208,6 +242,75 @@ class HangingEvidenceIndex:
 
     async def search(self, query: MemorySearchQuery) -> MemorySearchResult:
         await asyncio.Event().wait()
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class BarrierGraphBackend:
+    def __init__(self, *, own_started: asyncio.Event, peer_started: asyncio.Event) -> None:
+        self._own_started = own_started
+        self._peer_started = peer_started
+
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
+        self._own_started.set()
+        await self._peer_started.wait()
+        item = MemorySearchResultItem(
+            id="graph_current",
+            text="Skyline is current in graph.",
+            score=0.9,
+            source="graph",
+            source_event_ids=("source_graph",),
+            memory_item_ids=(),
+            valid_from=NOW,
+            valid_to=None,
+            metadata={},
+        )
+        return MemorySearchResult(
+            contexts=(item.text,),
+            results=(item,),
+            next_cursor=None,
+            trace_id="graph_current",
+        )
+
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: object) -> object:
+        raise NotImplementedError
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class BarrierEvidenceIndex:
+    def __init__(self, *, own_started: asyncio.Event, peer_started: asyncio.Event) -> None:
+        self._own_started = own_started
+        self._peer_started = peer_started
+
+    async def index_source_event(self, source_event: object, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+    async def search(self, query: MemorySearchQuery) -> MemorySearchResult:
+        self._own_started.set()
+        await self._peer_started.wait()
+        item = MemorySearchResultItem(
+            id="evidence_current",
+            text="Skyline is supported by evidence.",
+            score=0.6,
+            source="evidence",
+            source_event_ids=("source_evidence",),
+            memory_item_ids=(),
+            valid_from=NOW,
+            valid_to=None,
+            metadata={},
+        )
+        return MemorySearchResult(
+            contexts=(item.text,),
+            results=(item,),
+            next_cursor=None,
+            trace_id="evidence_current",
+        )
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError
