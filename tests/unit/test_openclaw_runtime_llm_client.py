@@ -230,6 +230,34 @@ def test_openclaw_runtime_config_from_model_selection() -> None:
     assert config.env == {"OPENCLAW_GATEWAY_PORT": "18789"}
 
 
+def test_openclaw_runtime_config_from_env_model_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = MemWingModelSelection(
+        role="page_memory",
+        runtime="openclaw",
+        model="ollama/qwen3.5:4b",
+        transport="local",
+        timeout_seconds=25,
+    )
+    monkeypatch.setenv("OPENCLAW_CLI", "pnpm")
+    monkeypatch.setenv("OPENCLAW_CLI_ARGS", "openclaw --profile dev")
+    monkeypatch.setenv("OPENCLAW_CLI_CWD", "/repo/openclaw")
+
+    config = OpenClawRuntimeConfig.from_env_model_selection(
+        selection,
+        env={"OLLAMA_API_KEY": "ollama-local"},
+    )
+
+    assert config.command == "pnpm"
+    assert config.command_args == ("openclaw", "--profile", "dev")
+    assert config.cwd == "/repo/openclaw"
+    assert config.role == "page_memory"
+    assert config.model == "ollama/qwen3.5:4b"
+    assert config.transport == "local"
+    assert config.env == {"OLLAMA_API_KEY": "ollama-local"}
+
+
 def test_openclaw_runtime_config_requires_openclaw_selection() -> None:
     selection = MemWingModelSelection(
         role="page_memory",

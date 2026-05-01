@@ -4,12 +4,19 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+import math
 import os
+import signal
 import shlex
 from typing import Literal, Protocol
 
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
-from memwing.infrastructure.llm.model_client import LLMModelClient, LLMModelRequest, LLMModelResponse
+from memwing.infrastructure.llm.embedding_client import EmbeddingModelClient
+from memwing.infrastructure.llm.model_client import (
+    LLMModelClient,
+    LLMModelRequest,
+    LLMModelResponse,
+)
 from memwing.ports.model_runtime import MemWingModelRole, MemWingModelSelection
 
 
@@ -64,6 +71,21 @@ class OpenClawRuntimeConfig:
             env=env,
         )
 
+    @classmethod
+    def from_env_model_selection(
+        cls,
+        selection: MemWingModelSelection,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> OpenClawRuntimeConfig:
+        return cls.from_model_selection(
+            selection,
+            command=os.environ.get("OPENCLAW_CLI", "openclaw"),
+            command_args=tuple(shlex.split(os.environ.get("OPENCLAW_CLI_ARGS", ""))),
+            cwd=_optional_env("OPENCLAW_CLI_CWD"),
+            env=env,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class OpenClawCommandResult:
@@ -91,12 +113,7 @@ class OpenClawRuntimeLLMClient(LLMModelClient):
         *,
         transport: OpenClawRuntimeTransport | None = None,
     ) -> None:
-        if not config.command.strip():
-            raise ValueError("OpenClaw command is required")
-        if config.model is not None and not config.model.strip():
-            raise ValueError("OpenClaw model must be non-empty when provided")
-        if config.timeout_seconds <= 0:
-            raise ValueError("OpenClaw timeout_seconds must be positive")
+        _validate_runtime_config(config)
         self._config = config
         self._transport = transport or SubprocessOpenClawRuntimeTransport()
 
@@ -166,6 +183,86 @@ class OpenClawRuntimeLLMClient(LLMModelClient):
         return tuple(command)
 
 
+class OpenClawRuntimeEmbeddingClient(EmbeddingModelClient):
+    def __init__(
+        self,
+        config: OpenClawRuntimeConfig,
+        *,
+        transport: OpenClawRuntimeTransport | None = None,
+    ) -> None:
+        _validate_runtime_config(config)
+        if config.transport != "local":
+            raise ValueError("OpenClaw embedding runtime currently supports local transport only")
+        self._config = config
+        self._transport = transport or SubprocessOpenClawRuntimeTransport()
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        prefix: str = "MEMWING_OPENCLAW_EMBEDDING",
+        transport: OpenClawRuntimeTransport | None = None,
+    ) -> OpenClawRuntimeEmbeddingClient:
+        return cls(OpenClawRuntimeConfig.from_env(prefix=prefix), transport=transport)
+
+    @classmethod
+    def from_model_selection(
+        cls,
+        selection: MemWingModelSelection,
+        *,
+        command: str = "openclaw",
+        command_args: tuple[str, ...] = (),
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        transport: OpenClawRuntimeTransport | None = None,
+    ) -> OpenClawRuntimeEmbeddingClient:
+        return cls(
+            OpenClawRuntimeConfig.from_model_selection(
+                selection,
+                command=command,
+                command_args=command_args,
+                cwd=cwd,
+                env=env,
+            ),
+            transport=transport,
+        )
+
+    async def embed(self, input: str) -> tuple[float, ...]:
+        return (await self.embed_batch((input,)))[0]
+
+    async def embed_batch(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        if not inputs:
+            return ()
+        result = await self._transport.run(
+            command=self._command(inputs),
+            cwd=self._config.cwd,
+            env=self._config.env,
+            timeout_seconds=self._config.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise LLMProviderError(
+                f"OpenClaw runtime embedding run failed with exit code {result.returncode}"
+            )
+
+        payload = _parse_cli_json(result.stdout)
+        return _embedding_outputs(payload, expected_texts=inputs)
+
+    def _command(self, inputs: tuple[str, ...]) -> tuple[str, ...]:
+        command = [
+            self._config.command,
+            *self._config.command_args,
+            "capability",
+            "embedding",
+            "create",
+            "--json",
+        ]
+        for input_text in inputs:
+            command.extend(("--text", input_text))
+        if self._config.model is not None:
+            command.extend(("--model", self._config.model))
+        return tuple(command)
+
+
 class SubprocessOpenClawRuntimeTransport:
     async def run(
         self,
@@ -183,6 +280,7 @@ class SubprocessOpenClawRuntimeTransport:
                 env=process_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except OSError as exc:
             raise LLMProviderError("OpenClaw runtime command failed to start") from exc
@@ -193,7 +291,12 @@ class SubprocessOpenClawRuntimeTransport:
                 timeout=timeout_seconds,
             )
         except TimeoutError as exc:
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                process.kill()
             await process.communicate()
             raise LLMProviderError("OpenClaw runtime model run timed out") from exc
 
@@ -202,6 +305,15 @@ class SubprocessOpenClawRuntimeTransport:
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
         )
+
+
+def _validate_runtime_config(config: OpenClawRuntimeConfig) -> None:
+    if not config.command.strip():
+        raise ValueError("OpenClaw command is required")
+    if config.model is not None and not config.model.strip():
+        raise ValueError("OpenClaw model must be non-empty when provided")
+    if config.timeout_seconds <= 0:
+        raise ValueError("OpenClaw timeout_seconds must be positive")
 
 
 def _prompt_text(request: LLMModelRequest) -> str:
@@ -259,6 +371,42 @@ def _output_text(payload: Mapping[str, object]) -> str:
     if not text:
         raise LLMOutputSchemaError("OpenClaw runtime output requires text output")
     return text
+
+
+def _embedding_outputs(
+    payload: Mapping[str, object],
+    *,
+    expected_texts: tuple[str, ...],
+) -> tuple[tuple[float, ...], ...]:
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, list):
+        raise LLMOutputSchemaError("OpenClaw runtime embedding output requires outputs")
+    if len(outputs) != len(expected_texts):
+        raise LLMOutputSchemaError("OpenClaw runtime embedding output count mismatch")
+
+    vectors: list[tuple[float, ...]] = []
+    for output, expected_text in zip(outputs, expected_texts, strict=True):
+        if not isinstance(output, dict):
+            raise LLMOutputSchemaError("OpenClaw runtime embedding output must be an object")
+        if output.get("text") != expected_text:
+            raise LLMOutputSchemaError("OpenClaw runtime embedding output text mismatch")
+        embedding = output.get("embedding")
+        if not isinstance(embedding, list) or not embedding:
+            raise LLMOutputSchemaError("OpenClaw runtime embedding output requires embedding")
+        vectors.append(_embedding_vector(embedding))
+    return tuple(vectors)
+
+
+def _embedding_vector(embedding: list[object]) -> tuple[float, ...]:
+    vector: list[float] = []
+    for value in embedding:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise LLMOutputSchemaError("OpenClaw runtime embedding values must be numeric")
+        number = float(value)
+        if not math.isfinite(number):
+            raise LLMOutputSchemaError("OpenClaw runtime embedding values must be finite")
+        vector.append(number)
+    return tuple(vector)
 
 
 def _optional_env(name: str) -> str | None:
