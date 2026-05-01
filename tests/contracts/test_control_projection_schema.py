@@ -138,6 +138,8 @@ def test_forgetting_review_and_maintenance_contracts_are_backend_derived() -> No
                     "created_at": "2026-04-30T00:00:00+00:00",
                 }
             ],
+            "jobs_next_cursor": None,
+            "push_candidates_next_cursor": "offset:2",
             "next_cursor": "offset:2",
             "trace_id": "trace_maintenance",
         }
@@ -146,6 +148,8 @@ def test_forgetting_review_and_maintenance_contracts_are_backend_derived() -> No
     assert review.memory.decay_score == 0.42
     assert maintenance.jobs[0].retryable is False
     assert maintenance.push_candidates[0].type == "forgetting_review"
+    assert maintenance.jobs_next_cursor is None
+    assert maintenance.push_candidates_next_cursor == "offset:2"
     assert maintenance.next_cursor == "offset:2"
 
 

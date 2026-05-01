@@ -338,6 +338,8 @@ class ControlMaintenanceResponse:
     warning_count: int
     jobs: tuple[ControlJobResponse, ...]
     push_candidates: tuple[ControlPushCandidateResponse, ...]
+    jobs_next_cursor: str | None
+    push_candidates_next_cursor: str | None
     next_cursor: str | None
     trace_id: str
 
@@ -352,6 +354,8 @@ class ControlMaintenanceResponse:
                 "warning_count",
                 "jobs",
                 "push_candidates",
+                "jobs_next_cursor",
+                "push_candidates_next_cursor",
                 "next_cursor",
                 "trace_id",
             },
@@ -372,6 +376,8 @@ class ControlMaintenanceResponse:
                 ControlPushCandidateResponse.from_json(_object_item(candidate, "push_candidates"))
                 for candidate in push_candidates
             ),
+            jobs_next_cursor=_optional_text(payload, "jobs_next_cursor"),
+            push_candidates_next_cursor=_optional_text(payload, "push_candidates_next_cursor"),
             next_cursor=_optional_text(payload, "next_cursor"),
             trace_id=_required_text(payload, "trace_id"),
         )

@@ -309,6 +309,13 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             sort=sort,
             key=lambda job: (_job_sort_value(job, sort), _job_kind_rank(job), job.id),
         )
+        paged_push_candidates = paginate_control_items(
+            push_candidates,
+            limit=limit,
+            cursor=cursor,
+            sort=sort,
+            key=lambda candidate: (_push_candidate_sort_value(candidate, sort), candidate.id),
+        )
         return ControlMaintenanceProjection(
             forgetting_review_count=len(scoped_forgetting_reviews),
             pending_push_count=pending_push_count,
@@ -321,17 +328,12 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             push_candidates=tuple(
                 project_push
                 for project_push in (
-                    project_push_candidate(candidate)
-                    for candidate in paginate_control_items(
-                        push_candidates,
-                        limit=limit,
-                        cursor=cursor,
-                        sort=sort,
-                        key=lambda candidate: (_push_candidate_sort_value(candidate, sort), candidate.id),
-                    ).items
+                    project_push_candidate(candidate) for candidate in paged_push_candidates.items
                 )
             ),
-            next_cursor=paged_jobs.next_cursor,
+            jobs_next_cursor=paged_jobs.next_cursor,
+            push_candidates_next_cursor=paged_push_candidates.next_cursor,
+            next_cursor=paged_jobs.next_cursor or paged_push_candidates.next_cursor,
             trace_id=trace_id,
         )
 

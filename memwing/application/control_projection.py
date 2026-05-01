@@ -239,6 +239,8 @@ class ControlMaintenanceProjection:
     warning_count: int
     jobs: tuple[ControlJobProjection, ...]
     push_candidates: tuple[ControlPushCandidateProjection, ...]
+    jobs_next_cursor: str | None
+    push_candidates_next_cursor: str | None
     next_cursor: str | None
     trace_id: str
 

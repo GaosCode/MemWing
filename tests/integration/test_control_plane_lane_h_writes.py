@@ -135,6 +135,8 @@ def test_control_plane_lists_support_cursor_sort_and_max_limit() -> None:
         assert len(reviews.items) == 2
         assert pages.next_cursor == "offset:1"
         assert maintenance.next_cursor == "offset:1"
+        assert maintenance.jobs_next_cursor == "offset:1"
+        assert maintenance.push_candidates_next_cursor is None
         assert maintenance.job_count == 1
 
     asyncio.run(scenario())
@@ -232,6 +234,49 @@ def test_control_plane_list_sort_applies_before_limit() -> None:
         assert tuple(item.id for item in memories.items) == ("memory_event_newest",)
         assert tuple(page.id for page in pages.items) == ("page_created_newest",)
         assert tuple(job.id for job in maintenance.jobs) == ("outbox_priority_newest",)
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_maintenance_exposes_push_candidate_pagination() -> None:
+    store = InMemoryDataStore()
+    service = ControlService(store, now=lambda: NOW)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.push_candidates.upsert(_push_candidate(id="push_new", created_at=NOW))
+            await tx.push_candidates.upsert(
+                _push_candidate(
+                    id="push_old",
+                    title="Older push",
+                    created_at=NOW - timedelta(days=1),
+                    updated_at=NOW - timedelta(days=1),
+                )
+            )
+
+        first_page = await service.get_maintenance(
+            scope=SCOPE,
+            limit=1,
+            cursor=None,
+            sort="created_at",
+            trace_id="trace_push_page_1",
+        )
+        second_page = await service.get_maintenance(
+            scope=SCOPE,
+            limit=1,
+            cursor=first_page.push_candidates_next_cursor,
+            sort="created_at",
+            trace_id="trace_push_page_2",
+        )
+
+        assert first_page.jobs == ()
+        assert tuple(candidate.id for candidate in first_page.push_candidates) == ("push_new",)
+        assert first_page.jobs_next_cursor is None
+        assert first_page.push_candidates_next_cursor == "offset:1"
+        assert first_page.next_cursor == "offset:1"
+        assert tuple(candidate.id for candidate in second_page.push_candidates) == ("push_old",)
+        assert second_page.push_candidates_next_cursor is None
+        assert second_page.next_cursor is None
 
     asyncio.run(scenario())
 
@@ -472,15 +517,21 @@ def _forgetting_review(
     )
 
 
-def _push_candidate() -> PushCandidate:
+def _push_candidate(
+    *,
+    id: str = "push_001",
+    title: str = "Review Demo scope",
+    created_at: datetime = NOW,
+    updated_at: datetime = NOW,
+) -> PushCandidate:
     return PushCandidate(
-        id="push_001",
+        id=id,
         project_memory_space_id="project_001",
         group_id="group_001",
         thread_id="thread_001",
         shared_group_id=None,
         type="forgetting_review",
-        title="Review Demo scope",
+        title=title,
         content="Demo scope needs review.",
         memory_item_ids=("memory_001",),
         source_event_ids=("source_001",),
@@ -489,9 +540,9 @@ def _push_candidate() -> PushCandidate:
         priority=100,
         expires_at=None,
         status="pending",
-        cooldown_key="forgetting_review:memory_001",
-        created_at=NOW,
-        updated_at=NOW,
+        cooldown_key=f"forgetting_review:{id}",
+        created_at=created_at,
+        updated_at=updated_at,
     )
 
 
