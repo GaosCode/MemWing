@@ -78,6 +78,8 @@ class ControlPushServiceMixin:
             raise ConfigurationFailure("platform_connector_missing", "Platform connector is not configured.")
 
         now = self._now()
+        failure: Exception | None = None
+        source_events = []
         async with self._unit_of_work.transaction() as tx:
             existing_audit = await tx.audit_events.get_by_idempotency_key(
                 entity_type="push_candidate",
@@ -99,21 +101,36 @@ class ControlPushServiceMixin:
                         now=now,
                     )
                 )
-                raise _not_found()
-            if existing_audit is not None:
+                failure = _not_found()
+            if failure is None and existing_audit is not None:
                 return project_push_candidate(candidate)
-            if candidate.status != "approved":
-                raise ValidationFailure(
+            if failure is None and candidate.status != "approved":
+                await tx.audit_events.record(
+                    _audit_event(
+                        entity_type="push_candidate",
+                        entity_id=candidate_id,
+                        stage="control.push_candidate.send_rejected",
+                        decision="rejected",
+                        reason_text="Push candidate must be approved before sending.",
+                        source_event_ids=candidate.source_event_ids,
+                        actor_id=actor_id,
+                        idempotency_key=idempotency_key,
+                        trace_id=trace_id,
+                        now=now,
+                    )
+                )
+                failure = ValidationFailure(
                     "push_candidate_not_approved",
                     "Push candidate must be approved before sending.",
                 )
-            if existing_audit is not None:
-                return project_push_candidate(candidate)
-            source_events = []
-            for source_event_id in candidate.source_event_ids:
-                source_event = await tx.source_events.get_source_event(source_event_id)
-                if source_event is not None:
-                    source_events.append(source_event)
+            if failure is None:
+                for source_event_id in candidate.source_event_ids:
+                    source_event = await tx.source_events.get_source_event(source_event_id)
+                    if source_event is not None:
+                        source_events.append(source_event)
+
+        if failure is not None:
+            raise failure
 
         platform_ref = _platform_ref_from_source_events(source_events, platform=platform)
         send_result = await connector.send_candidate(
