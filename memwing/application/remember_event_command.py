@@ -5,12 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from memwing.api.agent_common import AgentRuntimeRef
-from memwing.api.agent_context import AgentRuntimeEvent
-from memwing.api.platform import PlatformEvent, PlatformRef
-from memwing.api.types import JsonObject, JsonValue
-from memwing.api.validation import SchemaValidationError, require_text
+from memwing.core.platform import PlatformEvent, PlatformRef
+from memwing.core.runtime import AgentRuntimeEvent, AgentRuntimeRef
 from memwing.core.scope import MemoryScope
+from memwing.core.types import JsonObject, JsonValue
+from memwing.core.validation import SchemaValidationError, require_text
 
 
 SourceRefKind = Literal["platform", "agent_runtime"]

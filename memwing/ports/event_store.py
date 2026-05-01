@@ -4,7 +4,6 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
-from memwing.api.agent_runtime import RememberEventResult
 from memwing.core.models import (
     AuditEvent,
     EvidenceChunk,
@@ -22,6 +21,7 @@ from memwing.core.models import (
     SourceEvent,
     WorkingMemoryEntry,
 )
+from memwing.core.runtime import RememberEventResult
 from memwing.core.scope import (
     EffectiveScope,
     GroupMemorySettings,

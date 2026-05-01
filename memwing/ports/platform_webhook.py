@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from memwing.api.platform import PlatformRawEvent
-from memwing.api.types import JsonObject
-from memwing.api.validation import require_positive_int, require_text
+from memwing.core.platform import PlatformRawEvent
+from memwing.core.types import JsonObject
+from memwing.core.validation import require_positive_int, require_text
 
 
 PlatformWebhookKind = Literal["challenge", "accepted", "rejected"]

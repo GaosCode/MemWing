@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from typing import Protocol
 import uuid
 
-from memwing.api.agent_runtime import RememberEventResult
-from memwing.api.platform import PlatformEvent, PlatformRawEvent
 from memwing.application.remember_event_command import (
     RememberEventCommand,
     platform_event_to_remember_command,
 )
 from memwing.core.models import AuditEvent
+from memwing.core.platform import PlatformEvent, PlatformRawEvent
+from memwing.core.runtime import RememberEventResult
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 

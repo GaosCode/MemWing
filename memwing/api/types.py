@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from typing import TypeAlias
+from memwing.core.types import JsonObject, JsonValue
 
 
-JsonValue: TypeAlias = (
-    None | bool | int | float | str | tuple["JsonValue", ...] | dict[str, "JsonValue"]
-)
-JsonObject: TypeAlias = dict[str, JsonValue]
+__all__ = ["JsonObject", "JsonValue"]

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
-from memwing.api.agent_context import RememberEventResult
 from memwing.application.remember_event_command import RememberEventCommand
 from memwing.core.models import SourceEvent
+from memwing.core.runtime import RememberEventResult
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 from .remember_event_records import (

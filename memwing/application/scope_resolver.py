@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from memwing.api.agent_common import AgentRuntimeRef
-from memwing.api.platform import PlatformRef
 from memwing.core.models import PageMemory
+from memwing.core.platform import PlatformRef
+from memwing.core.runtime import AgentRuntimeRef
 from memwing.core.scope import EffectiveScope, MemoryScope, PlatformScopeBinding, RuntimeScopeBinding
 from memwing.core.scope_patterns import session_pattern_matches, session_pattern_specificity
 from memwing.ports.event_store import ScopeBindingStorePort

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from memwing.api.platform import (
+from memwing.core.platform import (
     PlatformEvent,
     PlatformRawEvent,
     PlatformRawRequest,
