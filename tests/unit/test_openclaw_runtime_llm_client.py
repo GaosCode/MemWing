@@ -9,6 +9,7 @@ from memwing.infrastructure.llm.openclaw_runtime import (
     OpenClawRuntimeConfig,
     OpenClawRuntimeLLMClient,
 )
+from memwing.ports.model_runtime import MemWingModelSelection
 
 
 class FakeOpenClawTransport:
@@ -200,3 +201,43 @@ def test_openclaw_runtime_config_from_env(monkeypatch: pytest.MonkeyPatch) -> No
     assert config.model == "anthropic/claude-sonnet-4-6"
     assert config.transport == "local"
     assert config.timeout_seconds == 45
+
+
+def test_openclaw_runtime_config_from_model_selection() -> None:
+    selection = MemWingModelSelection(
+        role="graphiti_extraction",
+        runtime="openclaw",
+        model="current",
+        transport="gateway",
+        timeout_seconds=25,
+    )
+
+    config = OpenClawRuntimeConfig.from_model_selection(
+        selection,
+        command="pnpm",
+        command_args=("openclaw",),
+        cwd="/repo/openclaw",
+        env={"OPENCLAW_GATEWAY_PORT": "18789"},
+    )
+
+    assert config.command == "pnpm"
+    assert config.command_args == ("openclaw",)
+    assert config.cwd == "/repo/openclaw"
+    assert config.role == "graphiti_extraction"
+    assert config.model == "current"
+    assert config.transport == "gateway"
+    assert config.timeout_seconds == 25
+    assert config.env == {"OPENCLAW_GATEWAY_PORT": "18789"}
+
+
+def test_openclaw_runtime_config_requires_openclaw_selection() -> None:
+    selection = MemWingModelSelection(
+        role="page_memory",
+        runtime="openai_compatible",
+        model="gpt-5",
+        transport=None,
+        timeout_seconds=60,
+    )
+
+    with pytest.raises(ValueError, match="requires openclaw runtime"):
+        OpenClawRuntimeConfig.from_model_selection(selection)

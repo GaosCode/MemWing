@@ -14,9 +14,22 @@ test("manifest config schema accepts documented MemWing base URL", () => {
 
   assert.equal(schema.type, "object");
   assert.equal(schema.additionalProperties, false);
-  assert.deepEqual(Object.keys(schema.properties), ["memwingBaseUrl"]);
+  assert.deepEqual(Object.keys(schema.properties), [
+    "memwingBaseUrl",
+    "modelRuntime",
+    "models",
+    "modelTimeoutSeconds"
+  ]);
   assert.equal(schema.properties.memwingBaseUrl.type, "string");
   assert.equal(schema.properties.memwingBaseUrl.minLength, 1);
+  assert.deepEqual(schema.properties.modelRuntime.enum, ["openclaw"]);
+  assert.deepEqual(Object.keys(schema.properties.models.properties), [
+    "pageMemory",
+    "longTermFilter",
+    "graphitiExtraction",
+    "graphitiEmbedding",
+    "graphitiRerank"
+  ]);
 });
 
 test("registers MemWing context engine, hooks, tools, and native shims", async () => {

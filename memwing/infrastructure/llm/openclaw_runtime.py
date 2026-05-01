@@ -10,6 +10,7 @@ from typing import Literal, Protocol
 
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
 from memwing.infrastructure.llm.model_client import LLMModelClient, LLMModelRequest, LLMModelResponse
+from memwing.ports.model_runtime import MemWingModelRole, MemWingModelSelection
 
 
 OpenClawRuntimeTransportMode = Literal["local", "gateway"]
@@ -20,6 +21,7 @@ class OpenClawRuntimeConfig:
     command: str = "openclaw"
     command_args: tuple[str, ...] = ()
     cwd: str | None = None
+    role: MemWingModelRole | None = None
     model: str | None = None
     transport: OpenClawRuntimeTransportMode = "local"
     timeout_seconds: float = 120.0
@@ -34,6 +36,32 @@ class OpenClawRuntimeConfig:
             model=_optional_env(f"{prefix}_MODEL"),
             transport=_env_transport(f"{prefix}_TRANSPORT"),
             timeout_seconds=float(os.environ.get(f"{prefix}_TIMEOUT_SECONDS", "120")),
+        )
+
+    @classmethod
+    def from_model_selection(
+        cls,
+        selection: MemWingModelSelection,
+        *,
+        command: str = "openclaw",
+        command_args: tuple[str, ...] = (),
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> OpenClawRuntimeConfig:
+        if selection.runtime != "openclaw":
+            raise ValueError("OpenClaw runtime config requires openclaw runtime")
+        transport = selection.transport or "local"
+        if transport not in {"local", "gateway"}:
+            raise ValueError("OpenClaw runtime transport must be local or gateway")
+        return cls(
+            command=command,
+            command_args=command_args,
+            cwd=cwd,
+            role=selection.role,
+            model=selection.model,
+            transport=transport,
+            timeout_seconds=selection.timeout_seconds,
+            env=env,
         )
 
 
@@ -80,6 +108,28 @@ class OpenClawRuntimeLLMClient(LLMModelClient):
         transport: OpenClawRuntimeTransport | None = None,
     ) -> OpenClawRuntimeLLMClient:
         return cls(OpenClawRuntimeConfig.from_env(prefix=prefix), transport=transport)
+
+    @classmethod
+    def from_model_selection(
+        cls,
+        selection: MemWingModelSelection,
+        *,
+        command: str = "openclaw",
+        command_args: tuple[str, ...] = (),
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        transport: OpenClawRuntimeTransport | None = None,
+    ) -> OpenClawRuntimeLLMClient:
+        return cls(
+            OpenClawRuntimeConfig.from_model_selection(
+                selection,
+                command=command,
+                command_args=command_args,
+                cwd=cwd,
+                env=env,
+            ),
+            transport=transport,
+        )
 
     async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
         result = await self._transport.run(

@@ -12,6 +12,57 @@
       "memwingBaseUrl": {
         "type": "string",
         "minLength": 1
+      },
+      "modelRuntime": {
+        "type": "string",
+        "enum": [
+          "openclaw"
+        ]
+      },
+      "models": {
+        "type": "object",
+        "properties": {
+          "pageMemory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "longTermFilter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "graphitiExtraction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "graphitiEmbedding": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "graphitiRerank": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "modelTimeoutSeconds": {
+        "type": "number",
+        "exclusiveMinimum": 0
       }
     },
     "additionalProperties": false
