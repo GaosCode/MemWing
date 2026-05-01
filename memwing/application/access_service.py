@@ -11,7 +11,9 @@ from memwing.application.memory_access_read_model import (
     memory_item_in_scope,
     memory_item_score,
     memory_item_to_result_item,
+    paginate_items,
     rank_memory_items,
+    result_fetch_limit,
     search_graph_history,
     sort_ranked_items,
     source_event_in_scope,
@@ -92,19 +94,24 @@ class MemoryAccessService:
         resolved = await self._scope_resolver.resolve_runtime(query.runtime_ref, query.scope)
         if query.mode == "current":
             current_trace_id = trace_id("search", query.runtime_ref.agent_id)
+            fetch_limit = result_fetch_limit(query)
             current = await self._current_truth.recall_current(
                 MemorySearchQuery(
                     query=query.query,
                     scope=resolved.effective_scope,
                     mode="current",
-                    limit=query.limit,
-                    cursor=query.cursor,
+                    limit=fetch_limit,
+                    cursor=None,
                     sort=query.sort,
                     min_score=query.min_score,
                     trace_id=current_trace_id,
                 )
             )
-            result = current_truth_to_access_result(current, limit=query.limit)
+            result = current_truth_to_access_result(
+                current,
+                limit=query.limit,
+                cursor=query.cursor,
+            )
             await record_recall_events(
                 self._unit_of_work,
                 result=result,
@@ -127,9 +134,10 @@ class MemoryAccessService:
                 return history_result
 
         async with self._unit_of_work.transaction() as tx:
+            fetch_limit = result_fetch_limit(query)
             items = await tx.memory_items.list_for_scope(
                 scope=resolved.effective_scope,
-                limit=max(query.limit * 4, query.limit),
+                limit=max(fetch_limit * 4, fetch_limit),
             )
         ranked = rank_memory_items(
             query=query.query,
@@ -139,14 +147,19 @@ class MemoryAccessService:
             now=self._now(),
         )
         ranked = sort_ranked_items(ranked, sort=query.sort)
-        results = tuple(
+        ranked_results = tuple(
             memory_item_to_result_item(item, score=score)
-            for item, score in ranked[: query.limit]
+            for item, score in ranked
+        )
+        results, next_cursor = paginate_items(
+            ranked_results,
+            limit=query.limit,
+            cursor=query.cursor,
         )
         return MemoryAccessSearchResult(
             contexts=tuple(item.text for item in results),
             results=results,
-            next_cursor=None,
+            next_cursor=next_cursor,
             trace_id=trace_id("search", query.runtime_ref.agent_id),
         )
 

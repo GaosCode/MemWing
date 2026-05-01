@@ -13,10 +13,12 @@ from memwing.core.memory_access import (
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResultItem
 from memwing.core.models import MemoryItem, MemoryStatus, SourceEvent
 from memwing.core.scope import EffectiveScope
+from memwing.core.validation import SchemaValidationError
 from memwing.ports.evidence_index import EvidenceIndexPort
 from memwing.ports.graph_backend import GraphBackendPort
 
 
+_CURSOR_PREFIX = "offset:"
 _CURRENT_RECALL_STATUSES = frozenset((MemoryStatus.ACTIVE,))
 _HISTORY_RECALL_STATUSES = frozenset(
     (
@@ -132,19 +134,24 @@ def current_truth_to_access_result(
     current: CurrentTruthResult,
     *,
     limit: int,
+    cursor: str | None = None,
 ) -> MemoryAccessSearchResult:
     items = (
         *current.current_facts,
         *current.background,
         *current.supporting_evidence,
-    )[:limit]
+    )
     if not items:
-        items = current.raw_events[:limit]
-    results = tuple(memory_search_item_to_access_item(item) for item in items)
+        items = current.raw_events
+    results, next_cursor = paginate_items(
+        tuple(memory_search_item_to_access_item(item) for item in items),
+        limit=limit,
+        cursor=cursor,
+    )
     return MemoryAccessSearchResult(
         contexts=tuple(item.text for item in results),
         results=results,
-        next_cursor=None,
+        next_cursor=next_cursor,
         trace_id=current.trace_id,
         warnings=tuple(
             {
@@ -165,12 +172,13 @@ async def search_graph_history(
     scope: EffectiveScope,
     trace_id: str,
 ) -> MemoryAccessSearchResult | None:
+    fetch_limit = result_fetch_limit(query)
     search_query = MemorySearchQuery(
         query=query.query,
         scope=scope,
         mode="history",
-        limit=query.limit,
-        cursor=query.cursor,
+        limit=fetch_limit,
+        cursor=None,
         sort=query.sort,
         min_score=query.min_score,
         trace_id=trace_id,
@@ -206,14 +214,35 @@ async def search_graph_history(
                 },
             )
 
-    items = (*graph_items, *evidence_items)[: query.limit]
+    items, next_cursor = paginate_items(
+        tuple(memory_search_item_to_access_item(item) for item in (*graph_items, *evidence_items)),
+        limit=query.limit,
+        cursor=query.cursor,
+    )
     return MemoryAccessSearchResult(
         contexts=tuple(item.text for item in items),
-        results=tuple(memory_search_item_to_access_item(item) for item in items),
-        next_cursor=None,
+        results=items,
+        next_cursor=next_cursor,
         trace_id=trace_id,
         warnings=warnings,
     )
+
+
+def result_fetch_limit(query: MemoryAccessQuery) -> int:
+    return _cursor_offset(query.cursor) + query.limit + 1
+
+
+def paginate_items(
+    items: tuple[MemoryAccessResultItem, ...],
+    *,
+    limit: int,
+    cursor: str | None,
+) -> tuple[tuple[MemoryAccessResultItem, ...], str | None]:
+    offset = _cursor_offset(cursor)
+    page = items[offset : offset + limit]
+    next_offset = offset + limit
+    next_cursor = _encode_cursor(next_offset) if len(items) > next_offset else None
+    return page, next_cursor
 
 
 def memory_search_item_to_access_item(item: MemorySearchResultItem) -> MemoryAccessResultItem:
@@ -266,3 +295,18 @@ def _matches_query(item: MemoryItem, query: str) -> bool:
         text for text in (item.title, item.content, item.summary) if text is not None
     ).casefold()
     return normalized_query in searchable
+
+
+def _cursor_offset(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    if not cursor.startswith(_CURSOR_PREFIX):
+        raise SchemaValidationError("memory access cursor is invalid")
+    raw_offset = cursor.removeprefix(_CURSOR_PREFIX)
+    if not raw_offset.isdecimal():
+        raise SchemaValidationError("memory access cursor is invalid")
+    return int(raw_offset)
+
+
+def _encode_cursor(offset: int) -> str:
+    return f"{_CURSOR_PREFIX}{offset}"

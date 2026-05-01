@@ -8,6 +8,7 @@ from memwing.api.schemas import (
     OpenClawNativeMemorySearchRequest,
     SchemaValidationError,
 )
+from memwing.core.memory_access import MAX_MEMORY_ACCESS_LIMIT
 from memwing.core.scope import MemoryScope
 
 
@@ -78,6 +79,27 @@ def test_openclaw_native_memory_request_translates_max_results_to_limit() -> Non
     assert agent_query.sort == "relevance"
     assert agent_query.min_score == 0
     assert agent_query.scope is scope
+
+
+def test_agent_memory_query_enforces_server_max_limit() -> None:
+    runtime_ref = AgentRuntimeRef(runtime="openclaw", agent_id="agent_001")
+    scope = MemoryScope(project_memory_space_id="project_001", group_id="group_001")
+
+    query = AgentMemoryQuery(
+        runtime_ref=runtime_ref,
+        query="demo scope",
+        limit=MAX_MEMORY_ACCESS_LIMIT + 1,
+        scope=scope,
+    )
+    native_request = OpenClawNativeMemorySearchRequest(
+        runtime_ref=runtime_ref,
+        query="demo scope",
+        max_results=MAX_MEMORY_ACCESS_LIMIT + 1,
+        scope=scope,
+    )
+
+    assert query.limit == MAX_MEMORY_ACCESS_LIMIT
+    assert native_request.to_agent_memory_query().limit == MAX_MEMORY_ACCESS_LIMIT
 
 
 def test_openclaw_native_memory_request_preserves_search_contract_fields() -> None:

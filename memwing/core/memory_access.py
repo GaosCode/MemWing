@@ -24,6 +24,7 @@ MemoryAccessResultSource = Literal[
     "evidence",
     "working_memory",
 ]
+MAX_MEMORY_ACCESS_LIMIT = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,8 @@ class MemoryAccessQuery:
         object.__setattr__(self, "query", require_text(self.query, "query"))
         if self.mode not in ("current", "history"):
             raise SchemaValidationError("mode must be current or history")
-        object.__setattr__(self, "limit", require_positive_int(self.limit, "limit"))
+        limit = require_positive_int(self.limit, "limit")
+        object.__setattr__(self, "limit", min(limit, MAX_MEMORY_ACCESS_LIMIT))
         if self.cursor is not None:
             object.__setattr__(self, "cursor", require_text(self.cursor, "cursor"))
         if self.sort not in ("relevance", "event_time", "updated_at"):

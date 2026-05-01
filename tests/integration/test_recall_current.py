@@ -150,6 +150,73 @@ def test_recall_current_falls_back_to_raw_events_when_no_derived_memory_exists()
     asyncio.run(scenario())
 
 
+def test_recall_current_paginates_assembled_results_with_server_cursor() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(_memory_item("memory_001", MemoryStatus.ACTIVE))
+            await tx.memory_items.upsert(_memory_item("memory_002", MemoryStatus.ACTIVE))
+            await tx.memory_items.upsert(_memory_item("memory_003", MemoryStatus.ACTIVE))
+
+        access = MemoryAccessService(
+            ScopeResolver(store),
+            store,
+            current_truth=CurrentTruthModule(store, now=lambda: NOW),
+            now=lambda: NOW,
+        )
+        first_page = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="Skyline",
+                scope=MemoryScope(
+                    project_memory_space_id="project_001",
+                    group_id="group_001",
+                    thread_id="thread_001",
+                ),
+                mode="current",
+                limit=2,
+            )
+        )
+        second_page = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="Skyline",
+                scope=MemoryScope(
+                    project_memory_space_id="project_001",
+                    group_id="group_001",
+                    thread_id="thread_001",
+                ),
+                mode="current",
+                limit=2,
+                cursor=first_page.next_cursor,
+            )
+        )
+
+        assert tuple(item.id for item in first_page.results) == ("memory_003", "memory_002")
+        assert first_page.next_cursor == "offset:2"
+        assert tuple(item.id for item in second_page.results) == ("memory_001",)
+        assert second_page.next_cursor is None
+
+    asyncio.run(scenario())
+
+
 def test_recall_history_uses_graph_history_and_preserves_historical_validity() -> None:
     store = InMemoryDataStore()
     store.add_project_memory_space(
