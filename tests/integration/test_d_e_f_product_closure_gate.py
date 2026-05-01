@@ -8,7 +8,7 @@ from memwing.api.agent_knowledge import AgentKnowledgeExplainRequest, AgentKnowl
 from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.decay_service import DecayProcessCommand, DecayService
-from memwing.application.decision_card_service import DecisionCardCommand, DecisionCardService
+from memwing.application.decision_card_service import DecisionCardCommand
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.lifecycle import LifecycleAction
@@ -188,7 +188,7 @@ def test_direction_b_decision_change_current_history_explain_and_decision_card()
                 scope=MemoryScope(project_memory_space_id="project_001"),
             )
         )
-        decision_card = await DecisionCardService(store).create_for_memory(
+        decision_card = await access.create_decision_card(
             DecisionCardCommand(
                 memory_id="memory_decision_new",
                 now=NOW,

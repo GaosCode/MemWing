@@ -14,10 +14,11 @@ from memwing.api.agent_knowledge import (
 )
 from memwing.api.agent_memory import AgentMemoryQuery, AgentMemoryResultItem, AgentMemorySearchResult
 from memwing.application.current_truth import CurrentTruthModule, CurrentTruthResult
+from memwing.application.decision_card_service import DecisionCardCommand, DecisionCardService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResultItem
-from memwing.core.models import MemoryItem, MemoryRecallEvent, MemoryStatus, SourceEvent
+from memwing.core.models import MemoryItem, MemoryRecallEvent, MemoryStatus, PushCandidate, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
@@ -47,6 +48,7 @@ class MemoryAccessService:
         self._scope_resolver = scope_resolver
         self._unit_of_work = unit_of_work
         self._current_truth = current_truth or CurrentTruthModule(unit_of_work, now=now)
+        self._decision_cards = DecisionCardService(unit_of_work)
         self._now = now or (lambda: datetime.now(UTC))
 
     async def build_context(self, request: AgentContextRequest) -> AgentContextResult:
@@ -185,6 +187,9 @@ class MemoryAccessService:
             rationale=rationale,
             trace_id=_trace_id("explain", request.runtime_ref.agent_id),
         )
+
+    async def create_decision_card(self, command: DecisionCardCommand) -> PushCandidate:
+        return await self._decision_cards.create_for_memory(command)
 
     async def _record_recall_events(
         self,
