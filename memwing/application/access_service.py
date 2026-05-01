@@ -341,6 +341,8 @@ def _current_truth_to_agent_result(
         *current.background,
         *current.supporting_evidence,
     )[:limit]
+    if not items:
+        items = current.raw_events[:limit]
     results = tuple(_memory_search_item_to_agent_item(item) for item in items)
     return AgentMemorySearchResult(
         contexts=tuple(item.text for item in results),

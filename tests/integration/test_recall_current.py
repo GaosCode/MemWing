@@ -11,6 +11,7 @@ from memwing.core.models import MemoryStatus
 from memwing.core.scope import MemoryScope, ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from tests.unit.test_current_truth_module import _memory_item, _page_memory
+from tests.unit.test_current_truth_module import _source_event as raw_source_event
 
 
 NOW = datetime(2026, 5, 1, tzinfo=UTC)
@@ -93,5 +94,55 @@ def test_recall_current_uses_current_truth_without_sync_recall_counter_updates()
         assert store.memory_recall_events[0].memory_id == "memory_active"
         assert store.memory_recall_events[0].source == "memory_item"
         assert store.memory_recall_events[0].trace_id == "memory_access:search:agent_001"
+
+    asyncio.run(scenario())
+
+
+def test_recall_current_falls_back_to_raw_events_when_no_derived_memory_exists() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(raw_source_event())
+
+        access = MemoryAccessService(
+            ScopeResolver(store),
+            store,
+            current_truth=CurrentTruthModule(store, now=lambda: NOW),
+            now=lambda: NOW,
+        )
+        result = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="Skyline",
+                scope=MemoryScope(
+                    project_memory_space_id="project_001",
+                    group_id="group_001",
+                    thread_id="thread_001",
+                ),
+                mode="current",
+                limit=10,
+            )
+        )
+
+        assert tuple(item.id for item in result.results) == ("source_001",)
+        assert result.results[0].source == "evidence"
+        assert result.results[0].metadata["source"] == "raw_event"
 
     asyncio.run(scenario())

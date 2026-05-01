@@ -9,6 +9,7 @@ from memwing.core.models import (
     MemoryRoute,
     MemoryStatus,
     PageMemory,
+    SourceEvent,
 )
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -42,6 +43,32 @@ def test_current_truth_returns_active_memory_and_downgrades_page_memory_to_backg
         assert result.supporting_evidence == ()
         assert result.warnings == ()
         assert result.trace_id == "trace_current"
+
+    asyncio.run(scenario())
+
+
+def test_current_truth_includes_raw_event_branch_as_last_resort_evidence() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event())
+
+        result = await CurrentTruthModule(store, now=lambda: NOW).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert result.current_facts == ()
+        assert result.background == ()
+        assert tuple(item.id for item in result.raw_events) == ("source_001",)
+        assert result.raw_events[0].source == "raw_event"
+        assert result.raw_events[0].text == "Skyline was mentioned in the raw source."
+        assert result.warnings == ()
 
     asyncio.run(scenario())
 
@@ -214,4 +241,29 @@ def _page_memory() -> PageMemory:
         needs_rebuild=False,
         created_at=NOW,
         updated_at=NOW,
+    )
+
+
+def _source_event() -> SourceEvent:
+    return SourceEvent(
+        id="source_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        author_id="user_001",
+        author_name="Ada",
+        source_type="feishu.message",
+        content="Skyline was mentioned in the raw source.",
+        content_preview="Skyline was mentioned in the raw source.",
+        source_url=None,
+        event_time=NOW,
+        raw_payload_hash="raw_hash_001",
+        metadata={},
+        purged_at=None,
+        purged_by=None,
+        purge_reason=None,
+        purge_level="none",
+        graph_backend_raw_retained=True,
+        created_at=NOW,
     )

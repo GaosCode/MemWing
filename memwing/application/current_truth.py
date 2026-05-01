@@ -17,8 +17,10 @@ from memwing.core.models import (
     MemoryItem,
     MemoryStatus,
     PageMemory,
+    SourceEvent,
     WorkingMemoryEntry,
 )
+from memwing.core.scope import EffectiveScope
 from memwing.ports.evidence_index import EvidenceIndexPort
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import GraphBackendPort
@@ -41,6 +43,7 @@ class CurrentTruthResult:
     current_facts: tuple[MemorySearchResultItem, ...]
     background: tuple[MemorySearchResultItem, ...]
     supporting_evidence: tuple[MemorySearchResultItem, ...]
+    raw_events: tuple[MemorySearchResultItem, ...]
     warnings: tuple[CurrentTruthWarning, ...]
     trace_id: str
 
@@ -71,6 +74,7 @@ class CurrentTruthModule:
         working_memory, working_warning = await self._working_memory(query)
         memory_items, memory_items_warning = await self._memory_items(query)
         page_memory, page_warning = await self._page_memory(query)
+        raw_events, raw_warning = await self._raw_events(query)
 
         warnings = tuple(
             warning
@@ -80,6 +84,7 @@ class CurrentTruthModule:
                 working_warning,
                 memory_items_warning,
                 page_warning,
+                raw_warning,
             )
             if warning is not None
         )
@@ -92,6 +97,7 @@ class CurrentTruthModule:
             current_facts=tuple(current_facts[: query.limit]),
             background=page_memory,
             supporting_evidence=evidence_result.results if evidence_result is not None else (),
+            raw_events=raw_events,
             warnings=warnings,
             trace_id=query.trace_id or "current_truth:recall_current",
         )
@@ -183,6 +189,16 @@ class CurrentTruthModule:
             return (), _branch_warning("page_memory", exc)
         return (() if page is None else (_page_memory_to_result_item(page),)), None
 
+    async def _raw_events(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[tuple[MemorySearchResultItem, ...], CurrentTruthWarning | None]:
+        try:
+            events = await self._run_local_branch(self._load_raw_events(query))
+        except Exception as exc:
+            return (), _branch_warning("raw_events", exc)
+        return tuple(_source_event_to_result_item(event) for event in events), None
+
     async def _run_local_branch(
         self,
         operation: Awaitable[LocalBranchResultT],
@@ -210,6 +226,20 @@ class CurrentTruthModule:
     async def _load_page_memory(self, query: MemorySearchQuery) -> PageMemory | None:
         async with self._unit_of_work.transaction() as tx:
             return await _load_page_memory(tx.memory_pages, query)
+
+    async def _load_raw_events(self, query: MemorySearchQuery) -> tuple[SourceEvent, ...]:
+        async with self._unit_of_work.transaction() as tx:
+            events = await tx.source_events.list_recent_for_scope(
+                scope=query.scope,
+                limit=query.limit,
+            )
+            uncovered_events: list[SourceEvent] = []
+            for event in events:
+                linked_items = await tx.memory_items.list_by_source_event(event.id)
+                if any(_memory_item_covers_source_event(item, query) for item in linked_items):
+                    continue
+                uncovered_events.append(event)
+            return tuple(uncovered_events)
 
 
 async def _load_page_memory(repository: object, query: MemorySearchQuery) -> PageMemory | None:
@@ -274,6 +304,19 @@ def _is_current_recallable(item: MemoryItem) -> bool:
         and item.hidden_at is None
         and item.invalidated_at is None
         and item.valid_to is None
+    )
+
+
+def _memory_item_covers_source_event(item: MemoryItem, query: MemorySearchQuery) -> bool:
+    return item.removed_at is None and _memory_item_in_scope(item, query.scope)
+
+
+def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:
+    return (
+        item.project_memory_space_id == scope.project_memory_space_id
+        and (scope.thread_id is None or item.thread_id == scope.thread_id)
+        and (scope.group_ids is None or item.group_id in scope.group_ids)
+        and (scope.shared_group_id is None or item.shared_group_id == scope.shared_group_id)
     )
 
 
@@ -345,5 +388,25 @@ def _page_memory_to_result_item(page: PageMemory) -> MemorySearchResultItem:
             "scope_type": page.scope_type,
             "scope_id": page.scope_id,
             "needs_rebuild": page.needs_rebuild,
+        },
+    )
+
+
+def _source_event_to_result_item(event: SourceEvent) -> MemorySearchResultItem:
+    return MemorySearchResultItem(
+        id=event.id,
+        text=event.content_preview or event.content,
+        score=None,
+        source="raw_event",
+        source_event_ids=(event.id,),
+        memory_item_ids=(),
+        valid_from=event.event_time,
+        valid_to=None,
+        metadata={
+            "source": "raw_event",
+            "source_type": event.source_type,
+            "author_id": event.author_id,
+            "raw_payload_hash": event.raw_payload_hash,
+            "graph_backend_raw_retained": event.graph_backend_raw_retained,
         },
     )
