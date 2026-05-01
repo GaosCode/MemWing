@@ -118,8 +118,8 @@ function MemoryOverview({ memory }: { memory: MemoryItem }) {
         <div className="definition-columns">
           <Definition label="Decay score">{memory.forgetting.decayScore.toFixed(2)}</Definition>
           <Definition label="Last reinforced">{memory.forgetting.lastReinforcedAt.slice(0, 16)}</Definition>
-          <Definition label="Next review">{memory.forgetting.nextReviewAt}</Definition>
-          <Definition label="Curve state"><StatusPill label={memory.forgetting.curveState.replace(/_/g, " ")} tone={memory.forgetting.curveState === "ready_to_forget" ? "orange" : "green"} /></Definition>
+          <Definition label="Next review">{memory.forgetting.nextReviewAt ?? "none"}</Definition>
+          <Definition label="Curve state"><StatusPill label={memory.forgetting.curveState.replace(/_/g, " ")} tone={memory.forgetting.curveState === "below_threshold" ? "orange" : "green"} /></Definition>
         </div>
       </DocSection>
       <DocSection icon={FileText} index="5" title="Evidence Summary">

@@ -103,11 +103,14 @@ export const zhCN = {
       Open: "开放",
     },
     curveState: {
-      stable: "稳定",
+      retained: "保留",
       fading: "衰减中",
-      review_due: "需复习",
-      ready_to_forget: "可遗忘",
+      below_threshold: "低于阈值",
       pinned: "已固定",
+      archived: "已归档",
+      hidden: "已隐藏",
+      invalid: "已失效",
+      removed: "已移除",
     },
     queue: {
       Running: "运行中",

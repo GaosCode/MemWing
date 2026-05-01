@@ -17,7 +17,15 @@ export type MemoryItem = {
   forgetting: ForgettingCurve;
 };
 
-export type CurveState = "stable" | "fading" | "review_due" | "ready_to_forget" | "pinned";
+export type CurveState =
+  | "retained"
+  | "fading"
+  | "below_threshold"
+  | "pinned"
+  | "archived"
+  | "hidden"
+  | "invalid"
+  | "removed";
 
 export type ForgettingCurve = {
   decayScore: number;
@@ -25,7 +33,7 @@ export type ForgettingCurve = {
   halfLifeDays: number;
   recallThreshold: number;
   lastReinforcedAt: string;
-  nextReviewAt: string;
+  nextReviewAt: string | null;
   retentionReason: string;
   curveState: CurveState;
   curvePoints: Array<{ day: number; score: number }>;

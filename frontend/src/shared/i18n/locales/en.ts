@@ -105,11 +105,14 @@ export const en = {
       Open: "Open",
     },
     curveState: {
-      stable: "Stable",
+      retained: "Retained",
       fading: "Fading",
-      review_due: "Review due",
-      ready_to_forget: "Ready to forget",
+      below_threshold: "Below threshold",
       pinned: "Pinned",
+      archived: "Archived",
+      hidden: "Hidden",
+      invalid: "Invalid",
+      removed: "Removed",
     },
     queue: {
       Running: "Running",

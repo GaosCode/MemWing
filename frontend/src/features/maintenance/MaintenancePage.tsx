@@ -363,7 +363,7 @@ function ForgettingReview({
 }) {
   const { dictionary } = useI18n();
   const forgettingItems = maintenanceItems.filter((item) => item.type === "Forgetting" || item.state === "Ready to forget");
-  const fadingMemories = memories.filter((memory) => memory.forgetting.curveState !== "stable").slice(0, 4);
+  const fadingMemories = memories.filter((memory) => memory.forgetting.curveState !== "retained").slice(0, 4);
   const decayPoints = [
     { day: "D0", score: 0.92 },
     { day: "D7", score: 0.78 },
@@ -447,8 +447,8 @@ function ForgettingMemoryRow({
       <FileText size={17} />
       <span>{memory.title}</span>
       <StrengthMeter value={memory.forgetting.decayScore} compact />
-      <StatusPill label={decision ?? curveStateLabel(dictionary, memory.forgetting.curveState)} tone={memory.forgetting.curveState === "ready_to_forget" ? "red" : "orange"} />
-      <small>next review {memory.forgetting.nextReviewAt}</small>
+      <StatusPill label={decision ?? curveStateLabel(dictionary, memory.forgetting.curveState)} tone={memory.forgetting.curveState === "below_threshold" ? "red" : "orange"} />
+      <small>next review {memory.forgetting.nextReviewAt ?? "none"}</small>
       <div className="inline-action-row">
         <button type="button" onClick={() => onDecision(memory.id, "Reinforced")}>reinforce</button>
         <button type="button" onClick={() => onDecision(memory.id, "Keep")}>keep</button>
