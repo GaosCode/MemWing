@@ -238,45 +238,62 @@ def test_control_plane_list_sort_applies_before_limit() -> None:
     asyncio.run(scenario())
 
 
-def test_control_plane_maintenance_exposes_push_candidate_pagination() -> None:
+def test_control_plane_maintenance_pages_jobs_and_push_candidates_independently() -> None:
     store = InMemoryDataStore()
     service = ControlService(store, now=lambda: NOW)
 
     async def scenario() -> None:
         async with store.transaction() as tx:
-            await tx.push_candidates.upsert(_push_candidate(id="push_new", created_at=NOW))
+            await tx.push_candidates.upsert(_push_candidate(id="push_new", updated_at=NOW))
             await tx.push_candidates.upsert(
                 _push_candidate(
                     id="push_old",
                     title="Older push",
-                    created_at=NOW - timedelta(days=1),
                     updated_at=NOW - timedelta(days=1),
                 )
+            )
+            await tx.outbox_jobs.enqueue(_outbox_job(id="outbox_new", updated_at=NOW))
+            await tx.outbox_jobs.enqueue(
+                _outbox_job(id="outbox_old", updated_at=NOW - timedelta(days=1))
             )
 
         first_page = await service.get_maintenance(
             scope=SCOPE,
             limit=1,
             cursor=None,
-            sort="created_at",
+            sort="updated_at",
             trace_id="trace_push_page_1",
         )
-        second_page = await service.get_maintenance(
+        push_second_page = await service.get_maintenance(
             scope=SCOPE,
             limit=1,
-            cursor=first_page.push_candidates_next_cursor,
-            sort="created_at",
+            push_candidates_cursor=first_page.push_candidates_next_cursor,
+            sort="updated_at",
             trace_id="trace_push_page_2",
         )
+        jobs_second_page = await service.get_maintenance(
+            scope=SCOPE,
+            limit=1,
+            jobs_cursor=first_page.jobs_next_cursor,
+            sort="updated_at",
+            trace_id="trace_jobs_page_2",
+        )
 
-        assert first_page.jobs == ()
+        assert tuple(job.id for job in first_page.jobs) == ("outbox_new",)
         assert tuple(candidate.id for candidate in first_page.push_candidates) == ("push_new",)
-        assert first_page.jobs_next_cursor is None
+        assert first_page.jobs_next_cursor == "offset:1"
         assert first_page.push_candidates_next_cursor == "offset:1"
         assert first_page.next_cursor == "offset:1"
-        assert tuple(candidate.id for candidate in second_page.push_candidates) == ("push_old",)
-        assert second_page.push_candidates_next_cursor is None
-        assert second_page.next_cursor is None
+        assert tuple(job.id for job in push_second_page.jobs) == ("outbox_new",)
+        assert tuple(candidate.id for candidate in push_second_page.push_candidates) == ("push_old",)
+        assert push_second_page.jobs_next_cursor == "offset:1"
+        assert push_second_page.push_candidates_next_cursor is None
+        assert push_second_page.next_cursor == "offset:1"
+        assert tuple(job.id for job in jobs_second_page.jobs) == ("outbox_old",)
+        assert tuple(candidate.id for candidate in jobs_second_page.push_candidates) == ("push_new",)
+        assert jobs_second_page.jobs_next_cursor is None
+        assert jobs_second_page.push_candidates_next_cursor == "offset:1"
+        assert jobs_second_page.next_cursor == "offset:1"
 
     asyncio.run(scenario())
 

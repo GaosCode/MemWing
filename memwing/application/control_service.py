@@ -261,13 +261,23 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
         limit: int,
         trace_id: str,
         cursor: str | None = None,
+        jobs_cursor: str | None = None,
+        push_candidates_cursor: str | None = None,
         sort: str = "updated_at",
     ) -> ControlMaintenanceProjection:
-        fetch_limit = control_fetch_limit(limit=limit, cursor=cursor)
+        effective_jobs_cursor = jobs_cursor if jobs_cursor is not None else cursor
+        effective_push_candidates_cursor = (
+            push_candidates_cursor if push_candidates_cursor is not None else cursor
+        )
+        jobs_fetch_limit = control_fetch_limit(limit=limit, cursor=effective_jobs_cursor)
+        push_candidates_fetch_limit = control_fetch_limit(
+            limit=limit,
+            cursor=effective_push_candidates_cursor,
+        )
         async with self._unit_of_work.transaction() as tx:
             forgetting_reviews = await tx.forgetting_review_candidates.list_pending(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=fetch_limit,
+                limit=max(jobs_fetch_limit, push_candidates_fetch_limit),
                 sort=sort,
             )
             scoped_forgetting_reviews = []
@@ -279,7 +289,7 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
                 candidate
                 for candidate in await tx.push_candidates.list_for_project(
                     project_memory_space_id=scope.project_memory_space_id,
-                    limit=fetch_limit,
+                    limit=push_candidates_fetch_limit,
                     sort=sort,
                 )
                 if _scope_values_match(
@@ -291,12 +301,12 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
             )
             graph_jobs = await tx.graph_write_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=fetch_limit,
+                limit=jobs_fetch_limit,
                 sort=sort,
             )
             outbox_jobs = await tx.outbox_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,
-                limit=fetch_limit,
+                limit=jobs_fetch_limit,
                 sort=sort,
             )
 
@@ -305,14 +315,14 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
         paged_jobs = paginate_control_items(
             jobs,
             limit=limit,
-            cursor=cursor,
+            cursor=effective_jobs_cursor,
             sort=sort,
             key=lambda job: (_job_sort_value(job, sort), _job_kind_rank(job), job.id),
         )
         paged_push_candidates = paginate_control_items(
             push_candidates,
             limit=limit,
-            cursor=cursor,
+            cursor=effective_push_candidates_cursor,
             sort=sort,
             key=lambda candidate: (_push_candidate_sort_value(candidate, sort), candidate.id),
         )
