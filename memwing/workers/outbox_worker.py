@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import uuid
 
+from memwing.application.failure_semantics import classify_failure
 from memwing.core.models import AuditEvent, OutboxJob
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
@@ -61,7 +62,13 @@ class OutboxWorker:
                     raise RuntimeError(f"no handler registered for outbox job type {job.job_type}")
                 await handler(job)
             except Exception as exc:
-                updated = await self._record_failure(job=job, error=str(exc), now=run_at)
+                failure = classify_failure(exc, audit_stage="outbox.handler")
+                updated = await self._record_failure(
+                    job=job,
+                    error=_safe_error_summary(exc),
+                    reason_code=failure.reason_code,
+                    now=run_at,
+                )
                 if updated.status == "dead_letter":
                     dead_lettered += 1
                 else:
@@ -94,7 +101,14 @@ class OutboxWorker:
                 )
             )
 
-    async def _record_failure(self, *, job: OutboxJob, error: str, now: datetime) -> OutboxJob:
+    async def _record_failure(
+        self,
+        *,
+        job: OutboxJob,
+        error: str,
+        reason_code: str,
+        now: datetime,
+    ) -> OutboxJob:
         async with self._unit_of_work.transaction() as tx:
             updated = await tx.outbox_jobs.mark_failed(
                 job_id=job.id,
@@ -110,6 +124,7 @@ class OutboxWorker:
                     job=updated,
                     stage=stage,
                     decision=decision,
+                    reason_code=reason_code,
                     reason_text=error,
                     now=now,
                 )
@@ -124,6 +139,7 @@ def _audit_event(
     decision: str,
     reason_text: str | None,
     now: datetime,
+    reason_code: str | None = None,
 ) -> AuditEvent:
     return AuditEvent(
         id=str(uuid.uuid4()),
@@ -134,9 +150,13 @@ def _audit_event(
         input_ref=job.id,
         output_ref=job.status,
         decision=decision,
-        reason_code=None,
+        reason_code=reason_code,
         reason_text=reason_text,
         source_event_ids=(job.source_event_id,),
         latency_ms=None,
         created_at=now,
     )
+
+
+def _safe_error_summary(exc: Exception) -> str:
+    return exc.__class__.__name__

@@ -7,6 +7,7 @@ from memwing.core.models import (
     ForgettingReviewCandidate,
     MemoryItem,
     MemoryPageVersion,
+    MemoryRecallEvent,
     MemoryStatus,
     MemoryVersion,
     PageMemory,
@@ -85,6 +86,15 @@ class InMemoryMemoryItemRepository:
             )
         )
         return tuple(items[:limit])
+
+
+class InMemoryMemoryRecallEventRepository:
+    def __init__(self, tx: InMemoryTransactionView) -> None:
+        self._tx = tx
+
+    async def record(self, event: MemoryRecallEvent) -> MemoryRecallEvent:
+        self._tx.state.memory_recall_events[event.id] = event
+        return event
 
 
 class InMemoryForgettingReviewCandidateRepository:

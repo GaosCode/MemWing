@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from memwing.api.platform import PlatformRawEvent, PlatformRawRequest, PlatformRef
 from memwing.api.platform_webhooks import handle_feishu_webhook
+from memwing.application.scope_resolver import ScopeResolutionError
 from memwing.ports.platform_webhook import PlatformWebhookError, PlatformWebhookResult
 
 
@@ -82,6 +83,34 @@ def test_feishu_webhook_api_requires_ingress_service_for_accepted_events() -> No
     assert "remembered" not in response.body
 
 
+def test_feishu_webhook_api_renders_scope_errors_through_safe_error_mapping() -> None:
+    connector = FakeWebhookConnector(
+        PlatformWebhookResult(
+            kind="accepted",
+            status_code=202,
+            body={"ok": True},
+            raw_payload_hash="hash_001",
+            raw_event=_raw_event(),
+        )
+    )
+
+    response = asyncio.run(
+        handle_feishu_webhook(
+            headers={},
+            body=b'{"event":{"message":{"chat_id":"chat_001","content":"hello"}}}',
+            connector=connector,
+            ingress_service=FailingIngressService(),
+            received_at=RECEIVED_AT,
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.body["ok"] is False
+    assert response.body["code"] == "scope_resolution_failed"
+    assert response.body["message"] == "Memory scope is not available."
+    assert response.body["raw_payload_hash"] == "hash_001"
+
+
 class FakeWebhookConnector:
     def __init__(self, result: PlatformWebhookResult) -> None:
         self._result = result
@@ -110,6 +139,11 @@ class FailingWebhookConnector:
         received_at: datetime | None = None,
     ) -> PlatformWebhookResult:
         raise self._error
+
+
+class FailingIngressService:
+    async def ingest(self, raw_event: PlatformRawEvent):
+        raise ScopeResolutionError("raw object existence must not leak")
 
 
 def _raw_event() -> PlatformRawEvent:

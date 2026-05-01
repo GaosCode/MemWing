@@ -10,6 +10,7 @@ from memwing.core.models import (
     MemoryGraphLink,
     MemoryItem,
     MemoryPageVersion,
+    MemoryRecallEvent,
     MemoryVersion,
     OutboxJob,
     PageMemory,
@@ -37,6 +38,7 @@ class InMemoryState:
     evidence_by_source_chunk: dict[tuple[str, int], str] = field(default_factory=dict)
     working_memory_entries: dict[str, WorkingMemoryEntry] = field(default_factory=dict)
     working_memory_by_scope_sequence: dict[tuple[str, str | None, int], str] = field(default_factory=dict)
+    memory_recall_events: dict[str, MemoryRecallEvent] = field(default_factory=dict)
     memory_items: dict[str, MemoryItem] = field(default_factory=dict)
     memory_versions: dict[str, MemoryVersion] = field(default_factory=dict)
     memory_version_by_memory_version: dict[tuple[str, int], str] = field(default_factory=dict)

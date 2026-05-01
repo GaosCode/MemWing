@@ -79,6 +79,18 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
 RETURNING id
 """
 
+_INSERT_MEMORY_RECALL_EVENT_SQL = """
+INSERT INTO memory_recall_events (
+    id, project_memory_space_id, memory_id, source, query_hash, trace_id,
+    recalled_at, rank, score, created_at
+) VALUES (
+    %(id)s, %(project_memory_space_id)s, %(memory_id)s, %(source)s,
+    %(query_hash)s, %(trace_id)s, %(recalled_at)s, %(rank)s, %(score)s,
+    %(created_at)s
+)
+RETURNING *
+"""
+
 _UPSERT_MEMORY_ITEM_SQL = """
 INSERT INTO memory_items (
     id, project_memory_space_id, group_id, thread_id, shared_group_id, route,

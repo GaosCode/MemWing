@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import Enum
 from urllib.parse import unquote
 
+from memwing.api.error_mapping import render_error_body
 from memwing.api.memwing_tools import (
     memwing_explain_memory,
     memwing_get_memory,
@@ -28,7 +29,9 @@ from memwing.api.openclaw_runtime import (
 )
 from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError
+from memwing.application.failure_semantics import classify_failure
 from memwing.application.scope_resolver import ScopeResolutionError
+from memwing.core.errors import ConfigurationFailure, ScopeResolutionFailure, ValidationFailure
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -46,27 +49,43 @@ async def handle_openclaw_http_request(
     runtime: AgentRuntimePort,
 ) -> OpenClawHttpResponse:
     if method.upper() != "POST":
+        failure = classify_failure(
+            ValidationFailure("method_not_allowed", "method not allowed"),
+            audit_stage="api.openclaw_http",
+        )
         return OpenClawHttpResponse(
             status_code=405,
-            body={"ok": False, "code": "method_not_allowed", "message": "method not allowed"},
+            body=render_error_body(failure),
         )
 
     try:
         return await _dispatch_post(path=path, payload=payload, runtime=runtime)
     except SchemaValidationError as exc:
+        failure = classify_failure(
+            ValidationFailure("schema_invalid", str(exc)),
+            audit_stage="api.openclaw_http",
+        )
         return OpenClawHttpResponse(
-            status_code=400,
-            body={"ok": False, "code": "schema_invalid", "message": str(exc)},
+            status_code=failure.http_status,
+            body=render_error_body(failure),
         )
     except OpenClawRuntimeUnavailableError as exc:
+        failure = classify_failure(
+            ConfigurationFailure("openclaw_runtime_unavailable", str(exc)),
+            audit_stage="api.openclaw_http",
+        )
         return OpenClawHttpResponse(
             status_code=503,
-            body={"ok": False, "code": "openclaw_runtime_unavailable", "message": str(exc)},
+            body=render_error_body(failure),
         )
-    except ScopeResolutionError as exc:
+    except ScopeResolutionError:
+        failure = classify_failure(
+            ScopeResolutionFailure("scope_resolution_failed", "Memory scope is not available."),
+            audit_stage="api.openclaw_http",
+        )
         return OpenClawHttpResponse(
             status_code=403,
-            body={"ok": False, "code": "scope_resolution_failed", "message": str(exc)},
+            body=render_error_body(failure),
         )
 
 
@@ -119,10 +138,11 @@ async def _dispatch_post(
         result = await native_memory_status(payload, runtime)
         return OpenClawHttpResponse(status_code=200, body=_json_object(result))
 
-    return OpenClawHttpResponse(
-        status_code=404,
-        body={"ok": False, "code": "route_not_found", "message": "route not found"},
+    failure = classify_failure(
+        ValidationFailure("route_not_found", "route not found"),
+        audit_stage="api.openclaw_http",
     )
+    return OpenClawHttpResponse(status_code=404, body=render_error_body(failure))
 
 
 def _json_object(value: object) -> JsonObject:

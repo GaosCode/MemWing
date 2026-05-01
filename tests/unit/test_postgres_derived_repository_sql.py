@@ -15,6 +15,8 @@ from tests.unit.postgres_store_fixtures import (
     memory_graph_link_row,
     memory_item,
     memory_item_row,
+    memory_recall_event,
+    memory_recall_event_row,
     memory_page_version,
     memory_page_version_row,
     memory_version,
@@ -32,6 +34,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_insert_paths() -> None
     chunk = evidence_chunk()
     working = working_memory_entry()
     memory = memory_item()
+    recall = memory_recall_event()
     version = memory_version()
     page = page_memory()
     page_version = memory_page_version()
@@ -42,6 +45,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_insert_paths() -> None
             evidence_chunk_row(chunk),
             working_memory_entry_row(working),
             memory_item_row(memory),
+            memory_recall_event_row(recall),
             memory_version_row(version),
             page_memory_row(page),
             memory_page_version_row(page_version),
@@ -55,6 +59,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_insert_paths() -> None
             assert await tx.evidence_chunks.upsert_chunk(chunk) == chunk
             assert await tx.working_memory_entries.append(working) == working
             assert await tx.memory_items.upsert(memory) == memory
+            assert await tx.memory_recall_events.record(recall) == recall
             assert await tx.memory_versions.record(version) == version
             assert await tx.memory_pages.upsert(page) == page
             assert await tx.memory_page_versions.record(page_version) == page_version
@@ -68,6 +73,7 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_insert_paths() -> None
     assert "ON CONFLICT (source_event_id, chunk_index)" in queries
     assert "INSERT INTO working_memory_entries" in queries
     assert "INSERT INTO memory_items" in queries
+    assert "INSERT INTO memory_recall_events" in queries
     assert "INSERT INTO memory_versions" in queries
     assert "INSERT INTO memory_pages" in queries
     assert "topics_json" in queries

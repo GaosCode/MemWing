@@ -178,7 +178,7 @@ def test_feishu_webhook_ingress_scope_failure_returns_error_envelope() -> None:
     assert response.status_code == 403
     assert response.body["ok"] is False
     assert response.body["code"] == "scope_resolution_failed"
-    assert "platform scope binding" in response.body["message"]
+    assert response.body["message"] == "Memory scope is not available."
     assert store.source_events == ()
     assert len(store.audit_events) == 1
     assert store.audit_events[0].stage == "remember_event.rejected"

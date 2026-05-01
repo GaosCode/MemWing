@@ -5,6 +5,7 @@ from datetime import datetime
 from memwing.core.models import (
     MemoryItem,
     MemoryPageVersion,
+    MemoryRecallEvent,
     MemoryVersion,
     PageMemory,
     PageMemoryScopeType,
@@ -15,6 +16,7 @@ from memwing.core.scope import EffectiveScope
 from .postgres_derived_rows import (
     memory_item_from_row,
     memory_page_version_from_row,
+    memory_recall_event_from_row,
     memory_version_from_row,
     page_memory_from_row,
 )
@@ -22,6 +24,7 @@ from .postgres_derived_sql import (
     _GET_MEMORY_ITEM_SQL,
     _GET_LATEST_MEMORY_VERSION_SQL,
     _GET_MEMORY_ITEM_FOR_UPDATE_SQL,
+    _INSERT_MEMORY_RECALL_EVENT_SQL,
     _LIST_MEMORY_ITEMS_DECAY_CANDIDATES_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_SQL,
     _GET_MEMORY_PAGE_BY_SCOPE_FOR_UPDATE_SQL,
@@ -98,6 +101,20 @@ class PostgresMemoryItemRepository:
             },
         )
         return tuple(memory_item_from_row(row) for row in rows)
+
+
+class PostgresMemoryRecallEventRepository:
+    def __init__(self, executor: PostgresExecutor) -> None:
+        self._executor = executor
+
+    async def record(self, event: MemoryRecallEvent) -> MemoryRecallEvent:
+        row = await self._executor.fetchrow(
+            _INSERT_MEMORY_RECALL_EVENT_SQL,
+            _memory_recall_event_params(event),
+        )
+        if row is None:
+            raise RuntimeError("memory recall event insert did not return a row")
+        return memory_recall_event_from_row(row)
 
 
 class PostgresMemoryVersionRepository:
@@ -289,6 +306,21 @@ def _memory_item_params(item: MemoryItem) -> dict[str, object]:
         "invalidated_at": item.invalidated_at,
         "removed_at": item.removed_at,
         "lifecycle_revision": item.lifecycle_revision,
+    }
+
+
+def _memory_recall_event_params(event: MemoryRecallEvent) -> dict[str, object]:
+    return {
+        "id": event.id,
+        "project_memory_space_id": event.project_memory_space_id,
+        "memory_id": event.memory_id,
+        "source": event.source,
+        "query_hash": event.query_hash,
+        "trace_id": event.trace_id,
+        "recalled_at": event.recalled_at,
+        "rank": event.rank,
+        "score": event.score,
+        "created_at": event.created_at,
     }
 
 

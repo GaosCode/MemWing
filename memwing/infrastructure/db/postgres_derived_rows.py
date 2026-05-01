@@ -8,6 +8,7 @@ from memwing.core.models import (
     MemoryGraphLink,
     MemoryItem,
     MemoryPageVersion,
+    MemoryRecallEvent,
     MemoryRoute,
     MemoryStatus,
     MemoryVersion,
@@ -23,6 +24,7 @@ from .postgres_rows import (
     _datetime,
     _float,
     _int,
+    _optional_int,
     _optional_datetime,
     _optional_float,
     _optional_text,
@@ -62,6 +64,21 @@ def working_memory_entry_from_row(row: Row) -> WorkingMemoryEntry:
         token_count=_int(row, "token_count"),
         sequence=_int(row, "sequence"),
         flushed_at=_optional_datetime(row, "flushed_at"),
+        created_at=_datetime(row, "created_at"),
+    )
+
+
+def memory_recall_event_from_row(row: Row) -> MemoryRecallEvent:
+    return MemoryRecallEvent(
+        id=_text(row, "id"),
+        project_memory_space_id=_text(row, "project_memory_space_id"),
+        memory_id=_text(row, "memory_id"),
+        source=_text(row, "source"),
+        query_hash=_text(row, "query_hash"),
+        trace_id=_text(row, "trace_id"),
+        recalled_at=_datetime(row, "recalled_at"),
+        rank=_optional_int(row, "rank"),
+        score=_optional_float(row, "score"),
         created_at=_datetime(row, "created_at"),
     )
 

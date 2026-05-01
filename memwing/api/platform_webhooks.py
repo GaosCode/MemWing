@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from memwing.api.agent_runtime import RememberEventResult
+from memwing.api.error_mapping import render_error_body
 from memwing.api.platform import PlatformRawEvent
 from memwing.api.types import JsonObject
+from memwing.application.failure_semantics import classify_failure
 from memwing.application.platform_ingress_service import PlatformIngressService
 from memwing.application.scope_resolver import ScopeResolutionError
+from memwing.core.errors import ConfigurationFailure, ScopeResolutionFailure, ValidationFailure
 from memwing.ports.platform_webhook import (
     PlatformWebhookError,
     PlatformWebhookHandlerPort,
@@ -49,7 +52,12 @@ async def handle_feishu_webhook(
             )
         return PlatformWebhookResponse(
             status_code=exc.status_code,
-            body={"ok": False, "code": exc.reason_code, "message": str(exc)},
+            body=render_error_body(
+                classify_failure(
+                    ValidationFailure(exc.reason_code, str(exc)),
+                    audit_stage="api.platform_webhook",
+                )
+            ),
         )
 
     if connector_result.kind == "challenge":
@@ -65,33 +73,42 @@ async def handle_feishu_webhook(
         )
 
     if connector_result.raw_event is None:
+        failure = classify_failure(
+            ConfigurationFailure("platform_raw_event_missing", "platform raw event missing"),
+            audit_stage="api.platform_webhook",
+        )
         return PlatformWebhookResponse(
             status_code=500,
-            body={"ok": False, "code": "platform_raw_event_missing", "message": "platform raw event missing"},
+            body=render_error_body(failure),
         )
 
     if ingress_service is None:
+        failure = classify_failure(
+            ConfigurationFailure(
+                "platform_ingress_service_missing",
+                "platform ingress service is not configured",
+            ),
+            audit_stage="api.platform_webhook",
+        )
         return PlatformWebhookResponse(
             status_code=500,
-            body={
-                "ok": False,
-                "code": "platform_ingress_service_missing",
-                "message": "platform ingress service is not configured",
-            },
+            body=render_error_body(failure),
             raw_event=connector_result.raw_event,
         )
 
     try:
         remember_result = await ingress_service.ingest(connector_result.raw_event)
-    except ScopeResolutionError as exc:
+    except ScopeResolutionError:
+        failure = classify_failure(
+            ScopeResolutionFailure("scope_resolution_failed", "Memory scope is not available."),
+            audit_stage="api.platform_webhook",
+        )
         return PlatformWebhookResponse(
             status_code=403,
-            body={
-                "ok": False,
-                "code": "scope_resolution_failed",
-                "message": str(exc),
-                "raw_payload_hash": connector_result.raw_payload_hash,
-            },
+            body=render_error_body(
+                failure,
+                extra={"raw_payload_hash": connector_result.raw_payload_hash},
+            ),
             raw_event=connector_result.raw_event,
         )
 

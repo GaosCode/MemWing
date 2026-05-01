@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TypeVar
 
 from memwing.application.failure_semantics import classify_failure
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
@@ -24,6 +25,7 @@ from memwing.ports.graph_backend import GraphBackendPort
 
 
 _CURRENT_RECALL_STATUSES = frozenset((MemoryStatus.ACTIVE,))
+LocalBranchResultT = TypeVar("LocalBranchResultT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +55,7 @@ class CurrentTruthModule:
         now: Callable[[], datetime] | None = None,
         graph_timeout: timedelta = timedelta(seconds=2),
         evidence_timeout: timedelta = timedelta(seconds=2),
+        local_timeout: timedelta = timedelta(seconds=2),
     ) -> None:
         self._unit_of_work = unit_of_work
         self._graph_backend = graph_backend
@@ -60,14 +63,25 @@ class CurrentTruthModule:
         self._now = now or (lambda: datetime.now(UTC))
         self._graph_timeout = graph_timeout
         self._evidence_timeout = evidence_timeout
+        self._local_timeout = local_timeout
 
     async def recall_current(self, query: MemorySearchQuery) -> CurrentTruthResult:
         graph_result, graph_warning = await self._graph_current(query)
         evidence_result, evidence_warning = await self._evidence(query)
-        working_memory, memory_items, page_memory = await self._local_current(query)
+        working_memory, working_warning = await self._working_memory(query)
+        memory_items, memory_items_warning = await self._memory_items(query)
+        page_memory, page_warning = await self._page_memory(query)
 
         warnings = tuple(
-            warning for warning in (graph_warning, evidence_warning) if warning is not None
+            warning
+            for warning in (
+                graph_warning,
+                evidence_warning,
+                working_warning,
+                memory_items_warning,
+                page_warning,
+            )
+            if warning is not None
         )
         current_facts = (
             *_current_graph_items(graph_result),
@@ -122,25 +136,28 @@ class CurrentTruthModule:
             )
         return result, None
 
-    async def _local_current(
+    async def _working_memory(
         self,
         query: MemorySearchQuery,
-    ) -> tuple[
-        tuple[MemorySearchResultItem, ...],
-        tuple[MemorySearchResultItem, ...],
-        tuple[MemorySearchResultItem, ...],
-    ]:
-        async with self._unit_of_work.transaction() as tx:
-            working_entries = await tx.working_memory_entries.list_recent(
-                project_memory_space_id=query.scope.project_memory_space_id,
-                thread_id=query.scope.thread_id,
-                limit=query.limit,
+    ) -> tuple[tuple[MemorySearchResultItem, ...], CurrentTruthWarning | None]:
+        try:
+            entries = await self._run_local_branch(
+                self._load_working_memory(query),
             )
-            memory_items = await tx.memory_items.list_for_scope(
-                scope=query.scope,
-                limit=max(query.limit * 4, query.limit),
+        except Exception as exc:
+            return (), _branch_warning("working_memory", exc)
+        return tuple(_working_memory_to_result_item(entry) for entry in entries), None
+
+    async def _memory_items(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[tuple[MemorySearchResultItem, ...], CurrentTruthWarning | None]:
+        try:
+            memory_items = await self._run_local_branch(
+                self._load_memory_items(query),
             )
-            page = await _load_page_memory(tx.memory_pages, query)
+        except Exception as exc:
+            return (), _branch_warning("memory_items", exc)
 
         ranked_items = _rank_memory_items(
             query=query.query,
@@ -149,13 +166,50 @@ class CurrentTruthModule:
             now=self._now(),
         )
         return (
-            tuple(_working_memory_to_result_item(entry) for entry in working_entries),
             tuple(
                 _memory_item_to_result_item(item, score=score)
                 for item, score in ranked_items[: query.limit]
             ),
-            (() if page is None else (_page_memory_to_result_item(page),)),
+            None,
         )
+
+    async def _page_memory(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[tuple[MemorySearchResultItem, ...], CurrentTruthWarning | None]:
+        try:
+            page = await self._run_local_branch(self._load_page_memory(query))
+        except Exception as exc:
+            return (), _branch_warning("page_memory", exc)
+        return (() if page is None else (_page_memory_to_result_item(page),)), None
+
+    async def _run_local_branch(
+        self,
+        operation: Awaitable[LocalBranchResultT],
+    ) -> LocalBranchResultT:
+        return await asyncio.wait_for(operation, timeout=self._local_timeout.total_seconds())
+
+    async def _load_working_memory(
+        self,
+        query: MemorySearchQuery,
+    ) -> tuple[WorkingMemoryEntry, ...]:
+        async with self._unit_of_work.transaction() as tx:
+            return await tx.working_memory_entries.list_recent(
+                project_memory_space_id=query.scope.project_memory_space_id,
+                thread_id=query.scope.thread_id,
+                limit=query.limit,
+            )
+
+    async def _load_memory_items(self, query: MemorySearchQuery) -> tuple[MemoryItem, ...]:
+        async with self._unit_of_work.transaction() as tx:
+            return await tx.memory_items.list_for_scope(
+                scope=query.scope,
+                limit=max(query.limit * 4, query.limit),
+            )
+
+    async def _load_page_memory(self, query: MemorySearchQuery) -> PageMemory | None:
+        async with self._unit_of_work.transaction() as tx:
+            return await _load_page_memory(tx.memory_pages, query)
 
 
 async def _load_page_memory(repository: object, query: MemorySearchQuery) -> PageMemory | None:
@@ -182,6 +236,15 @@ def _current_graph_items(result: MemorySearchResult | None) -> tuple[MemorySearc
     if result is None:
         return ()
     return tuple(item for item in result.results if item.valid_to is None)
+
+
+def _branch_warning(branch: str, exc: BaseException) -> CurrentTruthWarning:
+    failure = classify_failure(exc, audit_stage=f"current_truth.{branch}")
+    return CurrentTruthWarning(
+        branch=branch,
+        reason_code=failure.reason_code,
+        message=failure.safe_message,
+    )
 
 
 def _rank_memory_items(

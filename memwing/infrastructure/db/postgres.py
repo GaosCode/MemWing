@@ -25,6 +25,7 @@ from .postgres_memory_repositories import (
     PostgresMemoryItemRepository,
     PostgresMemoryPageRepository,
     PostgresMemoryPageVersionRepository,
+    PostgresMemoryRecallEventRepository,
     PostgresMemoryVersionRepository,
 )
 from .postgres_repositories import (
@@ -154,6 +155,7 @@ class PostgresTransaction(PostgresExecutor):
         self.outbox_jobs = PostgresOutboxJobRepository(self)
         self.evidence_chunks = PostgresEvidenceChunkRepository(self)
         self.working_memory_entries = PostgresWorkingMemoryRepository(self)
+        self.memory_recall_events = PostgresMemoryRecallEventRepository(self)
         self.memory_items = PostgresMemoryItemRepository(self)
         self.memory_versions = PostgresMemoryVersionRepository(self)
         self.memory_pages = PostgresMemoryPageRepository(self)

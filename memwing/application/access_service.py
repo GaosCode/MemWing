@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Callable
+import uuid
 
 from memwing.api.agent_context import AgentContextRequest, AgentContextResult
 from memwing.api.agent_knowledge import (
@@ -15,7 +17,7 @@ from memwing.application.current_truth import CurrentTruthModule, CurrentTruthRe
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResultItem
-from memwing.core.models import MemoryItem, MemoryStatus, SourceEvent
+from memwing.core.models import MemoryItem, MemoryRecallEvent, MemoryStatus, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
@@ -80,6 +82,7 @@ class MemoryAccessService:
     async def search(self, query: AgentMemoryQuery) -> AgentMemorySearchResult:
         resolved = await self._scope_resolver.resolve_runtime(query.runtime_ref, query.scope)
         if query.mode == "current":
+            trace_id = _trace_id("search", query.runtime_ref.agent_id)
             current = await self._current_truth.recall_current(
                 MemorySearchQuery(
                     query=query.query,
@@ -89,10 +92,18 @@ class MemoryAccessService:
                     cursor=query.cursor,
                     sort=query.sort,
                     min_score=query.min_score,
-                    trace_id=_trace_id("search", query.runtime_ref.agent_id),
+                    trace_id=trace_id,
                 )
             )
-            return _current_truth_to_agent_result(current, limit=query.limit)
+            result = _current_truth_to_agent_result(current, limit=query.limit)
+            await self._record_recall_events(
+                result=result,
+                query_text=query.query,
+                project_memory_space_id=resolved.effective_scope.project_memory_space_id,
+                trace_id=trace_id,
+                now=self._now(),
+            )
+            return result
 
         async with self._unit_of_work.transaction() as tx:
             items = await tx.memory_items.list_for_scope(
@@ -175,9 +186,42 @@ class MemoryAccessService:
             trace_id=_trace_id("explain", request.runtime_ref.agent_id),
         )
 
+    async def _record_recall_events(
+        self,
+        *,
+        result: AgentMemorySearchResult,
+        query_text: str,
+        project_memory_space_id: str,
+        trace_id: str,
+        now: datetime,
+    ) -> None:
+        query_hash = _query_hash(query_text)
+        async with self._unit_of_work.transaction() as tx:
+            for rank, item in enumerate(result.results, start=1):
+                memory_ids = item.memory_item_ids or ((item.id,) if item.source == "memory_item" else ())
+                for memory_id in memory_ids:
+                    await tx.memory_recall_events.record(
+                        MemoryRecallEvent(
+                            id=str(uuid.uuid4()),
+                            project_memory_space_id=project_memory_space_id,
+                            memory_id=memory_id,
+                            source=item.source,
+                            query_hash=query_hash,
+                            trace_id=trace_id,
+                            recalled_at=now,
+                            rank=rank,
+                            score=item.score,
+                            created_at=now,
+                        )
+                    )
+
 
 def _trace_id(operation: str, agent_id: str) -> str:
     return f"memory_access:{operation}:{agent_id}"
+
+
+def _query_hash(query: str) -> str:
+    return hashlib.sha256(query.strip().casefold().encode("utf-8")).hexdigest()
 
 
 def _rank_memory_items(

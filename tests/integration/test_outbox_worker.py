@@ -88,8 +88,10 @@ def test_outbox_worker_dead_letters_after_max_attempts() -> None:
 
     assert result.dead_lettered == 1
     assert store.outbox_jobs[0].status == "dead_letter"
-    assert store.outbox_jobs[0].dead_letter_reason == "handler failed"
+    assert store.outbox_jobs[0].dead_letter_reason == "RuntimeError"
     assert store.audit_events[-1].stage == "outbox.dead_letter"
+    assert store.audit_events[-1].reason_code == "unexpected_failure"
+    assert store.audit_events[-1].reason_text == "RuntimeError"
 
 
 async def _record(handled: list[str], job_id: str) -> None:

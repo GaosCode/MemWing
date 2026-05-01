@@ -12,6 +12,7 @@ from memwing.core.models import (
     GraphWriteJob,
     MemoryGraphLink,
     MemoryItem,
+    MemoryRecallEvent,
     MemoryPageVersion,
     MemoryVersion,
     OutboxJob,
@@ -162,6 +163,11 @@ class WorkingMemoryRepositoryPort(Protocol):
         through_sequence: int,
         flushed_at: datetime,
     ) -> int:
+        ...
+
+
+class MemoryRecallEventRepositoryPort(Protocol):
+    async def record(self, event: MemoryRecallEvent) -> MemoryRecallEvent:
         ...
 
 
@@ -344,6 +350,7 @@ class EventStoreTransactionPort(Protocol):
     outbox_jobs: OutboxJobRepositoryPort
     evidence_chunks: EvidenceChunkRepositoryPort
     working_memory_entries: WorkingMemoryRepositoryPort
+    memory_recall_events: MemoryRecallEventRepositoryPort
     memory_items: MemoryItemRepositoryPort
     memory_versions: MemoryVersionRepositoryPort
     memory_pages: MemoryPageRepositoryPort

@@ -89,5 +89,9 @@ def test_recall_current_uses_current_truth_without_sync_recall_counter_updates()
         assert active is not None
         assert active.recall_count == 0
         assert active.last_recalled_at is None
+        assert len(store.memory_recall_events) == 1
+        assert store.memory_recall_events[0].memory_id == "memory_active"
+        assert store.memory_recall_events[0].source == "memory_item"
+        assert store.memory_recall_events[0].trace_id == "memory_access:search:agent_001"
 
     asyncio.run(scenario())

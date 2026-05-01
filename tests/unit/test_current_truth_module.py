@@ -81,6 +81,45 @@ def test_current_truth_branch_timeouts_return_warnings_without_empty_success_lie
     asyncio.run(scenario())
 
 
+def test_current_truth_local_branch_timeout_returns_warning_without_blocking_others(
+    monkeypatch,
+) -> None:
+    from memwing.infrastructure.db.in_memory_memory_repositories import (
+        InMemoryMemoryItemRepository,
+    )
+
+    async def hang_list_for_scope(self, *, scope, limit):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(InMemoryMemoryItemRepository, "list_for_scope", hang_list_for_scope)
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_pages.upsert(_page_memory())
+
+        result = await CurrentTruthModule(
+            store,
+            local_timeout=timedelta(milliseconds=1),
+            now=lambda: NOW,
+        ).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert result.current_facts == ()
+        assert tuple(item.id for item in result.background) == ("page_001",)
+        assert [(warning.branch, warning.reason_code) for warning in result.warnings] == [
+            ("memory_items", "provider_timeout"),
+        ]
+
+    asyncio.run(scenario())
+
+
 class HangingGraphBackend:
     async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         await asyncio.Event().wait()

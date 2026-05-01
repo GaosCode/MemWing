@@ -8,6 +8,7 @@ from memwing.core.models import (
     ForgettingReviewCandidate,
     GraphWriteJob,
     MemoryGraphLink,
+    MemoryRecallEvent,
     OutboxJob,
     PushCandidate,
     SourceEvent,
@@ -33,6 +34,7 @@ from .in_memory_memory_repositories import (
     InMemoryMemoryItemRepository,
     InMemoryMemoryPageRepository,
     InMemoryMemoryPageVersionRepository,
+    InMemoryMemoryRecallEventRepository,
     InMemoryMemoryVersionRepository,
 )
 from .in_memory_repositories import (
@@ -69,6 +71,10 @@ class InMemoryDataStore:
     @property
     def memory_graph_links(self) -> tuple[MemoryGraphLink, ...]:
         return tuple(self._state.memory_graph_links.values())
+
+    @property
+    def memory_recall_events(self) -> tuple[MemoryRecallEvent, ...]:
+        return tuple(self._state.memory_recall_events.values())
 
     @property
     def forgetting_review_candidates(self) -> tuple[ForgettingReviewCandidate, ...]:
@@ -160,6 +166,7 @@ class _Transaction:
         self.outbox_jobs = InMemoryOutboxJobRepository(self)
         self.evidence_chunks = InMemoryEvidenceChunkRepository(self)
         self.working_memory_entries = InMemoryWorkingMemoryRepository(self)
+        self.memory_recall_events = InMemoryMemoryRecallEventRepository(self)
         self.memory_items = InMemoryMemoryItemRepository(self)
         self.memory_versions = InMemoryMemoryVersionRepository(self)
         self.memory_pages = InMemoryMemoryPageRepository(self)

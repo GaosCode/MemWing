@@ -154,6 +154,20 @@ class WorkingMemoryEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryRecallEvent:
+    id: str
+    project_memory_space_id: str
+    memory_id: str
+    source: str
+    query_hash: str
+    trace_id: str
+    recalled_at: datetime
+    rank: int | None
+    score: float | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryItem:
     id: str
     project_memory_space_id: str

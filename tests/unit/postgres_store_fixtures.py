@@ -14,6 +14,7 @@ from memwing.core.models import (
     MemoryGraphLink,
     MemoryItem,
     MemoryPageVersion,
+    MemoryRecallEvent,
     MemoryRoute,
     MemoryStatus,
     MemoryVersion,
@@ -160,6 +161,10 @@ def working_memory_entry_row(entry: WorkingMemoryEntry) -> dict[str, object]:
     return asdict(entry)
 
 
+def memory_recall_event_row(event: MemoryRecallEvent) -> dict[str, object]:
+    return asdict(event)
+
+
 def memory_item_row(item: MemoryItem) -> dict[str, object]:
     return asdict(item)
 
@@ -221,6 +226,22 @@ def working_memory_entry() -> WorkingMemoryEntry:
         sequence=12,
         flushed_at=None,
         created_at=source.created_at,
+    )
+
+
+def memory_recall_event() -> MemoryRecallEvent:
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    return MemoryRecallEvent(
+        id="recall_001",
+        project_memory_space_id="project_001",
+        memory_id="memory_001",
+        source="memory_item",
+        query_hash="query_hash_001",
+        trace_id="trace_recall",
+        recalled_at=now,
+        rank=1,
+        score=0.9,
+        created_at=now,
     )
 
 

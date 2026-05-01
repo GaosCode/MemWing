@@ -137,7 +137,7 @@ def test_openclaw_http_boundary_returns_scope_error_envelope() -> None:
         assert response.status_code == 403
         assert response.body["ok"] is False
         assert response.body["code"] == "scope_resolution_failed"
-        assert "runtime scope binding" in response.body["message"]
+        assert response.body["message"] == "Memory scope is not available."
         assert store.source_events == ()
         assert len(store.audit_events) == 1
         assert store.audit_events[0].stage == "remember_event.rejected"
@@ -174,7 +174,7 @@ def test_openclaw_tool_boundary_returns_scope_error_envelope() -> None:
         assert response.status_code == 403
         assert response.body["ok"] is False
         assert response.body["code"] == "scope_resolution_failed"
-        assert "runtime scope binding" in response.body["message"]
+        assert response.body["message"] == "Memory scope is not available."
 
     asyncio.run(run())
 
