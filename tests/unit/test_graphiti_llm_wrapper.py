@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 import pytest
+from graphiti_core.llm_client import LLMClient
 from pydantic import BaseModel
 
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
@@ -83,6 +84,30 @@ def test_graphiti_llm_wrapper_combines_non_system_messages_in_order() -> None:
 
     assert fake.requests[0].system_prompt == "System one.\n\nSystem two."
     assert fake.requests[0].user_prompt == "user:\nFirst.\n\nassistant:\nSecond."
+
+
+def test_graphiti_llm_wrapper_accepts_graphiti_tracer() -> None:
+    wrapper = GraphitiMemWingLLMClient(FakeLLMClient('{"ok": true}'))
+    tracer = object()
+
+    wrapper.set_tracer(tracer)
+
+    assert wrapper.tracer is tracer
+    assert wrapper.token_tracker is not None
+    assert isinstance(wrapper, LLMClient)
+
+
+def test_graphiti_llm_wrapper_exposes_graphiti_abstract_method() -> None:
+    fake = FakeLLMClient('{"ok": true, "count": 2}')
+    wrapper = GraphitiMemWingLLMClient(fake)
+
+    async def scenario() -> dict[str, object]:
+        return await wrapper._generate_response(
+            [Message(role="user", content="Ping")],
+            response_model=ExtractedPayload,
+        )
+
+    assert asyncio.run(scenario()) == {"ok": True, "count": 2}
 
 
 def test_graphiti_llm_wrapper_rejects_bad_json() -> None:

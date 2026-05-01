@@ -91,7 +91,6 @@ class GraphitiAdapter:
             source_description="MemWing graph write job",
             reference_time=reference_time,
             group_id=request.job.project_memory_space_id,
-            uuid=request.job.id,
         )
         episode_refs = _episode_refs(result)
         edges = _edges(result)

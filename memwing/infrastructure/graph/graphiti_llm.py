@@ -4,6 +4,8 @@ from collections.abc import Sequence
 import json
 from typing import Protocol
 
+from graphiti_core.llm_client import LLMClient
+from graphiti_core.llm_client.config import LLMConfig
 from pydantic import BaseModel, ValidationError
 
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError
@@ -16,8 +18,9 @@ class GraphitiMessage(Protocol):
     content: str
 
 
-class GraphitiMemWingLLMClient:
+class GraphitiMemWingLLMClient(LLMClient):
     def __init__(self, client: LLMModelClient) -> None:
+        super().__init__(config=LLMConfig(model="memwing", small_model="memwing"))
         self._client = client
 
     async def generate_response(
@@ -41,6 +44,20 @@ class GraphitiMemWingLLMClient:
                 f"Graphiti MemWing LLM output did not match {response_model.__name__}"
             ) from exc
         return validated.model_dump(mode="json")
+
+    async def _generate_response(
+        self,
+        messages: Sequence[GraphitiMessage],
+        response_model: type[BaseModel] | None = None,
+        max_tokens: int | None = None,
+        model_size: object | None = None,
+    ) -> dict[str, object]:
+        return await self.generate_response(
+            messages,
+            response_model=response_model,
+            max_tokens=max_tokens,
+            model_size=model_size,
+        )
 
 
 def _request_from_messages(

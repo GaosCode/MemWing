@@ -166,6 +166,7 @@ def test_graphiti_adapter_ingests_graph_job_through_add_episode() -> None:
     assert graphiti.add_episode_calls[0]["episode_body"] == "Ada owns the roadmap."
     assert graphiti.add_episode_calls[0]["source_description"] == "MemWing graph write job"
     assert graphiti.add_episode_calls[0]["group_id"] == "project_001"
+    assert "uuid" not in graphiti.add_episode_calls[0]
     assert result.backend == "graphiti"
     assert result.backend_episode_refs == ("episode_001",)
     assert result.backend_fact_refs == ("edge_001",)

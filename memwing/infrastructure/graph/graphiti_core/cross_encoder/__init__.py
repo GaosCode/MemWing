@@ -14,7 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from typing import Any
+
 from .client import CrossEncoderClient
-from .openai_reranker_client import OpenAIRerankerClient
 
 __all__ = ['CrossEncoderClient', 'OpenAIRerankerClient']
+
+
+def __getattr__(name: str) -> Any:
+    if name == 'OpenAIRerankerClient':
+        from .openai_reranker_client import OpenAIRerankerClient
+
+        return OpenAIRerankerClient
+    raise AttributeError(name)

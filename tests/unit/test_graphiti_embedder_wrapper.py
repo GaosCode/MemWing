@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from graphiti_core.embedder import EmbedderClient
 
 from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedder
 from memwing.infrastructure.llm.errors import LLMProviderError
@@ -28,6 +29,18 @@ def test_graphiti_embedder_create_uses_memwing_embedding_client() -> None:
 
     async def scenario() -> list[float]:
         return await embedder.create("graph fact")
+
+    assert asyncio.run(scenario()) == [1.0, 2.0, 3.0]
+    assert fake.single_inputs == ["graph fact"]
+    assert isinstance(embedder, EmbedderClient)
+
+
+def test_graphiti_embedder_create_accepts_graphiti_single_text_list() -> None:
+    fake = FakeEmbeddingClient()
+    embedder = GraphitiMemWingEmbedder(fake)
+
+    async def scenario() -> list[float]:
+        return await embedder.create(["graph fact"])
 
     assert asyncio.run(scenario()) == [1.0, 2.0, 3.0]
     assert fake.single_inputs == ["graph fact"]

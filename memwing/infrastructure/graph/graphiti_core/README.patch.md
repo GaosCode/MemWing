@@ -25,6 +25,20 @@ vendored source can retain its internal imports without mechanical rewriting.
   `Graphiti.__init__` now raises when `llm_client`, `embedder`, or
   `cross_encoder` is missing. MemWing must inject clients created from
   `memwing/infrastructure/llm` through `GraphitiAdapter`.
+- Made `graphiti_core.__init__` lazily export `Graphiti` so MemWing wrapper
+  unit tests can import Graphiti base interfaces without requiring database
+  driver extras.
+- Made `graphiti_core.cross_encoder.__init__` lazily export
+  `OpenAIRerankerClient` so MemWing can import the cross-encoder base interface
+  without loading provider/database extras.
+- Added Kuzu `_database` tracking and clone support so Graphiti's shared
+  `group_id` routing path works with the Kuzu driver.
+- Wired `KuzuDriver.build_indices_and_constraints()` to the Kuzu graph
+  maintenance operation so required FTS indices are created before write/search
+  paths run.
+- Created Kuzu FTS indices during `KuzuDriver.setup_schema()` because
+  `Graphiti.add_episode()` performs edge search during first write and can
+  reach FTS before callers have a separate migration hook.
 
 ## Upgrade Procedure
 
