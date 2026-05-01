@@ -3,11 +3,13 @@ from datetime import UTC, datetime
 
 from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.agent_context import AgentContextRequest
+from memwing.api.agent_knowledge import AgentKnowledgeExplainRequest
 from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.current_truth import CurrentTruthModule
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.application.scope_resolver import ScopeResolver
-from memwing.core.models import MemoryStatus
+from memwing.core.models import MemoryGraphLink, MemoryStatus
 from memwing.core.scope import MemoryScope, ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from tests.unit.test_current_truth_module import _memory_item, _page_memory
@@ -146,3 +148,139 @@ def test_recall_current_falls_back_to_raw_events_when_no_derived_memory_exists()
         assert result.results[0].metadata["source"] == "raw_event"
 
     asyncio.run(scenario())
+
+
+def test_recall_history_uses_graph_history_and_preserves_historical_validity() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+    graph_backend = HistoryGraphBackend()
+
+    async def scenario() -> None:
+        access = MemoryAccessService(
+            ScopeResolver(store),
+            store,
+            graph_backend=graph_backend,
+            now=lambda: NOW,
+        )
+        result = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="Apollo",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+                mode="history",
+                limit=10,
+            )
+        )
+
+        assert len(graph_backend.history_queries) == 1
+        assert graph_backend.history_queries[0].mode == "history"
+        assert tuple(item.id for item in result.results) == ("graph_fact_old",)
+        assert result.results[0].source == "graph"
+        assert result.results[0].valid_to == NOW
+        assert result.results[0].metadata["historical_state"] == "invalidated"
+
+    asyncio.run(scenario())
+
+
+def test_explain_uses_scoped_sources_and_graph_links_for_traceability() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(raw_source_event())
+            await tx.memory_items.upsert(_memory_item("memory_active", MemoryStatus.ACTIVE))
+            await tx.memory_graph_links.upsert(
+                MemoryGraphLink(
+                    id="link_001",
+                    backend="graphiti",
+                    memory_id="memory_active",
+                    source_event_id="source_001",
+                    project_memory_space_id="project_001",
+                    backend_space_id="project_001",
+                    backend_object_type="entity_edge",
+                    backend_object_id="edge_001",
+                    link_type="fact",
+                    created_at=NOW,
+                )
+            )
+
+        access = MemoryAccessService(ScopeResolver(store), store, now=lambda: NOW)
+        result = await access.explain(
+            AgentKnowledgeExplainRequest(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                memory_id="memory_active",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+            )
+        )
+
+        assert result.source_event_ids == ("source_001",)
+        assert "source_events=1" in result.rationale
+        assert "graph_links=1" in result.rationale
+        assert "graph_backend_raw_retained=true" in result.rationale
+
+    asyncio.run(scenario())
+
+
+class HistoryGraphBackend:
+    def __init__(self) -> None:
+        self.history_queries: list[MemorySearchQuery] = []
+
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
+        raise AssertionError("history recall must not call search_current")
+
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
+        self.history_queries.append(query)
+        item = MemorySearchResultItem(
+            id="graph_fact_old",
+            text="The project codename was Apollo.",
+            score=0.8,
+            source="graph",
+            source_event_ids=("source_old",),
+            memory_item_ids=("memory_old",),
+            valid_from=NOW,
+            valid_to=NOW,
+            metadata={"historical_state": "invalidated"},
+        )
+        return MemorySearchResult(
+            contexts=(item.text,),
+            results=(item,),
+            next_cursor=None,
+            trace_id="graph_history",
+        )
+
+    async def ingest_graph_job(self, request: object) -> object:
+        raise NotImplementedError
+
+    async def mark_source_redacted(self, source_event_id: str, scope: object) -> None:
+        raise NotImplementedError

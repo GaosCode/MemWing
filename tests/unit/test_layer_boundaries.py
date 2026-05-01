@@ -48,3 +48,30 @@ def test_api_does_not_import_infrastructure_implementations() -> None:
                     violations.append(f"{path}: {name}")
 
     assert violations == []
+
+
+def test_domain_application_ports_and_workers_do_not_import_api_transport() -> None:
+    package_root = Path(__file__).resolve().parents[2] / "memwing"
+    checked_files = [
+        *sorted((package_root / "core").rglob("*.py")),
+        *sorted((package_root / "application").rglob("*.py")),
+        *sorted((package_root / "ports").rglob("*.py")),
+        *sorted((package_root / "workers").rglob("*.py")),
+    ]
+
+    violations: list[str] = []
+    for path in checked_files:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+
+            for name in names:
+                if name == "memwing.api" or name.startswith("memwing.api."):
+                    violations.append(f"{path}: {name}")
+
+    assert violations == []
