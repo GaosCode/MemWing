@@ -24,7 +24,6 @@ from pydantic import BaseModel
 from typing_extensions import LiteralString
 
 from graphiti_core.cross_encoder.client import CrossEncoderClient
-from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.decorators import handle_multiple_group_ids
 from graphiti_core.driver.driver import GraphDriver
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
@@ -37,7 +36,7 @@ from graphiti_core.edges import (
     NextEpisodeEdge,
     create_entity_edge_embeddings,
 )
-from graphiti_core.embedder import EmbedderClient, OpenAIEmbedder
+from graphiti_core.embedder import EmbedderClient
 from graphiti_core.errors import EdgeNotFoundError, NodeNotFoundError
 from graphiti_core.graphiti_types import GraphitiClients
 from graphiti_core.helpers import (
@@ -46,7 +45,7 @@ from graphiti_core.helpers import (
     validate_excluded_entity_types,
     validate_group_id,
 )
-from graphiti_core.llm_client import LLMClient, OpenAIClient
+from graphiti_core.llm_client import LLMClient
 from graphiti_core.namespaces import EdgeNamespace, NodeNamespace
 from graphiti_core.nodes import (
     CommunityNode,
@@ -165,13 +164,13 @@ class Graphiti:
             The password for authenticating with the Neo4j database.
         llm_client : LLMClient | None, optional
             An instance of LLMClient for natural language processing tasks.
-            If not provided, a default OpenAIClient will be initialized.
+            MemWing requires this client to be provided by the adapter.
         embedder : EmbedderClient | None, optional
             An instance of EmbedderClient for embedding tasks.
-            If not provided, a default OpenAIEmbedder will be initialized.
+            MemWing requires this client to be provided by the adapter.
         cross_encoder : CrossEncoderClient | None, optional
             An instance of CrossEncoderClient for reranking tasks.
-            If not provided, a default OpenAIRerankerClient will be initialized.
+            MemWing requires this client to be provided by the adapter.
         store_raw_episode_content : bool, optional
             Whether to store the raw content of episodes. Defaults to True.
         graph_driver : GraphDriver | None, optional
@@ -199,9 +198,9 @@ class Graphiti:
         is required, it should be specified in the URI or set separately after
         initialization.
 
-        The OpenAI API key is expected to be set in the environment variables.
-        Make sure to set the OPENAI_API_KEY environment variable before initializing
-        Graphiti if you're using the default OpenAIClient.
+        MemWing does not allow vendored Graphiti to create default provider
+        clients. Provider auth and model selection must be handled by MemWing's
+        model runtime adapter before Graphiti is constructed.
         """
 
         if graph_driver:
@@ -213,18 +212,24 @@ class Graphiti:
 
         self.store_raw_episode_content = store_raw_episode_content
         self.max_coroutines = max_coroutines
-        if llm_client:
-            self.llm_client = llm_client
-        else:
-            self.llm_client = OpenAIClient()
-        if embedder:
-            self.embedder = embedder
-        else:
-            self.embedder = OpenAIEmbedder()
-        if cross_encoder:
-            self.cross_encoder = cross_encoder
-        else:
-            self.cross_encoder = OpenAIRerankerClient()
+        missing_clients = [
+            name
+            for name, client in (
+                ('llm_client', llm_client),
+                ('embedder', embedder),
+                ('cross_encoder', cross_encoder),
+            )
+            if client is None
+        ]
+        if missing_clients:
+            raise ValueError(
+                'MemWing Graphiti requires injected '
+                + ', '.join(missing_clients)
+                + '; default provider clients are disabled'
+            )
+        self.llm_client = llm_client
+        self.embedder = embedder
+        self.cross_encoder = cross_encoder
 
         # Initialize tracer
         self.tracer = create_tracer(tracer, trace_span_prefix)

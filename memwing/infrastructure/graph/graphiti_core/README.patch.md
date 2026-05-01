@@ -21,6 +21,10 @@ vendored source can retain its internal imports without mechanical rewriting.
   `memwing/infrastructure/graph/graphiti_adapter.py`.
 - Core, application, api, and worker layers must not import `graphiti_core`
   directly.
+- Disabled upstream default provider client construction in `graphiti.py`.
+  `Graphiti.__init__` now raises when `llm_client`, `embedder`, or
+  `cross_encoder` is missing. MemWing must inject clients created from
+  `memwing/infrastructure/llm` through `GraphitiAdapter`.
 
 ## Upgrade Procedure
 
@@ -34,6 +38,8 @@ vendored source can retain its internal imports without mechanical rewriting.
 ## Verification
 
 - `pytest tests/unit/test_layer_boundaries.py`
+- `pytest tests/contracts/test_graphiti_model_boundary.py`
+- `pytest tests/unit/test_graphiti_adapter.py`
 - `pytest tests/integration/test_graphiti_adapter_contract.py`
 - `pytest tests/integration/test_graph_write_worker.py`
 - `pytest tests/integration/test_source_redaction.py`
