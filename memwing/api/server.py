@@ -8,22 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from memwing.api.openclaw_http import handle_openclaw_http_request
-from memwing.infrastructure.agents.openclaw_adapter_factory import (
-    create_openclaw_adapter_from_env,
-)
+from memwing.bootstrap import postgres_runtime_context
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
 RuntimeContextFactory = Callable[[], AsyncContextManager[AgentRuntimePort]]
-
-
-@asynccontextmanager
-async def postgres_runtime_context() -> AsyncIterator[AgentRuntimePort]:
-    handle = await create_openclaw_adapter_from_env()
-    try:
-        yield handle.runtime
-    finally:
-        await handle.close()
 
 
 def create_app(

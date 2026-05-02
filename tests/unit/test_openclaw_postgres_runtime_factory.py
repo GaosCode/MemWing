@@ -39,10 +39,14 @@ def test_runtime_config_builds_postgres_openclaw_runtime_from_env(monkeypatch) -
         *,
         min_size: int = 1,
         max_size: int = 10,
+        graph_backend=None,
+        evidence_index=None,
     ):
         captured["database_url"] = database_url
         captured["min_size"] = min_size
         captured["max_size"] = max_size
+        captured["graph_backend"] = graph_backend
+        captured["evidence_index"] = evidence_index
         return "runtime-handle"
 
     monkeypatch.setattr(
@@ -62,4 +66,6 @@ def test_runtime_config_builds_postgres_openclaw_runtime_from_env(monkeypatch) -
         "database_url": "postgresql://memwing@db.invalid/memwing",
         "min_size": 1,
         "max_size": 10,
+        "graph_backend": None,
+        "evidence_index": None,
     }
