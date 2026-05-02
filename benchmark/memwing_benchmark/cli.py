@@ -41,8 +41,23 @@ from memwing_benchmark.schema import (
 
 app = typer.Typer(add_completion=False, invoke_without_command=True)
 
+OPENCLAW_NATIVE_BACKEND = "openclaw-native"
+MEMWING_LEGACY_BACKEND = "memwing"
+MEMWING_HTTP_BACKEND = "memwing-http"
+MEMWING_OPENCLAW_PLUGIN_BACKEND = "memwing-openclaw-plugin"
+SUPPORTED_BACKENDS = {
+    OPENCLAW_NATIVE_BACKEND,
+    MEMWING_LEGACY_BACKEND,
+    MEMWING_HTTP_BACKEND,
+    MEMWING_OPENCLAW_PLUGIN_BACKEND,
+}
 MEMWING_CHANGED_FILE_METRICS_MISSING_REASON = (
     "MemWing backend is evaluated through HTTP search APIs, not local memory files."
+)
+MEMWING_PLUGIN_BASE_URL_CONFIG_PATH = "plugins.entries.memwing.config.memwingBaseUrl"
+MEMWING_PLUGIN_ENABLED_CONFIG_PATH = "plugins.entries.memwing.enabled"
+MEMWING_PLUGIN_CONVERSATION_ACCESS_CONFIG_PATH = (
+    "plugins.entries.memwing.hooks.allowConversationAccess"
 )
 
 
@@ -123,8 +138,11 @@ def run(
     memory_poll_interval_seconds: float,
     memory_timeout_seconds: float,
 ) -> Path:
-    if backend not in {"openclaw-native", "memwing"}:
-        raise BenchmarkError("--backend must be one of: openclaw-native, memwing")
+    if backend not in SUPPORTED_BACKENDS:
+        raise BenchmarkError(
+            "--backend must be one of: openclaw-native, memwing-http, memwing-openclaw-plugin"
+        )
+    backend = _canonical_backend(backend)
     if mode not in {"retrieval", "write"}:
         raise BenchmarkError("--mode must be one of: retrieval, write")
     if phase not in {"full", "ingest", "evaluate"}:
@@ -133,9 +151,9 @@ def run(
         raise BenchmarkError("--phase is only supported with --mode write")
     if mode == "retrieval" and live and batch:
         raise BenchmarkError("--mode retrieval --live currently supports a single case only")
-    if backend == "openclaw-native" and mode == "write" and phase in {"full", "ingest"} and not live:
+    if backend == OPENCLAW_NATIVE_BACKEND and mode == "write" and phase in {"full", "ingest"} and not live:
         raise BenchmarkError("--mode write --phase full/ingest requires --live")
-    if backend == "openclaw-native" and mode == "write" and phase == "evaluate" and live:
+    if backend == OPENCLAW_NATIVE_BACKEND and mode == "write" and phase == "evaluate" and live:
         raise BenchmarkError("--mode write --phase evaluate reads local memory files; omit --live")
     if memory_poll_interval_seconds <= 0:
         raise BenchmarkError("--memory-poll-interval-seconds must be greater than 0")
@@ -179,9 +197,9 @@ def run(
         seed_chat_id=config.feishu.seed_chat_id or config.feishu.chat_id,
         probe_chat_id=config.feishu.probe_chat_id or config.feishu.chat_id,
     )
-    if backend == "memwing":
+    if backend == MEMWING_HTTP_BACKEND:
         if live:
-            raise BenchmarkError("--backend memwing does not support --live yet")
+            raise BenchmarkError("--backend memwing-http does not support --live yet")
         adapter = MemWingAdapter(config.memwing)
         if mode == "retrieval":
             results = _run_memwing_retrieval_batch(
@@ -214,7 +232,7 @@ def run(
                 raw_records=raw_records,
             )
         else:
-            raise BenchmarkError("--backend memwing write currently supports --phase ingest or evaluate")
+            raise BenchmarkError("--backend memwing-http write currently supports --phase ingest or evaluate")
         raw_records["memwing"] = list(adapter.records)
         finished_at = utc_now_iso()
         run_config = {
@@ -251,6 +269,67 @@ def run(
         agent_id=config.openclaw.agent_id,
         workspace_dir="" if batch or mode == "write" else config.openclaw.workspace_dir,
     )
+    if backend == MEMWING_OPENCLAW_PLUGIN_BACKEND:
+        _preflight_memwing_openclaw_plugin(
+            config=config,
+            adapter=adapter,
+            raw_records=raw_records,
+        )
+        if mode != "write":
+            raise BenchmarkError("--backend memwing-openclaw-plugin currently supports --mode write only")
+        if phase == "full":
+            raise BenchmarkError(
+                "--backend memwing-openclaw-plugin currently supports --phase ingest or evaluate"
+            )
+        if phase == "ingest" and not live:
+            raise BenchmarkError("--backend memwing-openclaw-plugin --phase ingest requires --live")
+        if phase == "evaluate":
+            if live:
+                raise BenchmarkError(
+                    "--backend memwing-openclaw-plugin --phase evaluate uses MemWing APIs; omit --live"
+                )
+            memwing_adapter = MemWingAdapter(config.memwing)
+            results = _run_memwing_write_evaluate_batch(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                adapter=memwing_adapter,
+                judge=judge,
+                raw_records=raw_records,
+            )
+            raw_records["memwing"] = list(memwing_adapter.records)
+            raw_records["openclaw"] = [
+                command.model_dump(mode="json") for command in adapter.commands
+            ]
+            finished_at = utc_now_iso()
+            run_config = {
+                "benchmark_version": "v1",
+                "backend": backend,
+                "mode": mode,
+                "phase": phase,
+                "run_id": run_id,
+                "run_mode": run_mode,
+                "run_day": run_day,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "case_file": str(cases_path),
+                "case_ids": [case.case_id for case in cases],
+                "batch": batch,
+                "chat_id": None,
+                "seed_chat_id": None,
+                "probe_chat_id": None,
+                "live": live,
+                "config": sanitize_config_for_run(config),
+                "side_effects": raw_records["side_effects"],
+            }
+            write_run_outputs(
+                run_dir=run_dir,
+                run_config=run_config,
+                results=results,
+                raw_records=raw_records,
+            )
+            typer.echo(str(run_dir))
+            return run_dir
     workspace_restore: LiveWorkspaceRestore | None = None
     try:
         if live and mode == "retrieval":
@@ -288,16 +367,30 @@ def run(
 
         if mode == "write":
             if phase == "ingest":
-                results = _run_write_ingest_batch(
-                    run_id=run_id,
-                    backend=backend,
-                    cases=cases,
-                    config=config,
-                    adapter=adapter,
-                    chats=live_chats,
-                    raw_records=raw_records,
-                    message_interval_seconds=message_interval_seconds,
-                )
+                if backend == MEMWING_OPENCLAW_PLUGIN_BACKEND:
+                    memwing_adapter = MemWingAdapter(config.memwing)
+                    results = _run_memwing_openclaw_plugin_write_ingest_batch(
+                        run_id=run_id,
+                        backend=backend,
+                        cases=cases,
+                        config=config,
+                        openclaw_adapter=adapter,
+                        memwing_adapter=memwing_adapter,
+                        chats=live_chats,
+                        raw_records=raw_records,
+                        message_interval_seconds=message_interval_seconds,
+                    )
+                else:
+                    results = _run_write_ingest_batch(
+                        run_id=run_id,
+                        backend=backend,
+                        cases=cases,
+                        config=config,
+                        adapter=adapter,
+                        chats=live_chats,
+                        raw_records=raw_records,
+                        message_interval_seconds=message_interval_seconds,
+                    )
             elif phase == "evaluate":
                 results = _run_write_evaluate_batch(
                     run_id=run_id,
@@ -408,6 +501,12 @@ def _run_mode_name(*, mode: str, phase: str, batch: bool) -> str:
     if mode == "write" and phase != "full":
         return f"write-{phase}{suffix}"
     return f"{mode}{suffix}"
+
+
+def _canonical_backend(backend: str) -> str:
+    if backend == MEMWING_LEGACY_BACKEND:
+        return MEMWING_HTTP_BACKEND
+    return backend
 
 
 @dataclass(frozen=True)
@@ -549,6 +648,49 @@ def _restore_live_workspace(
                 "restored_present": restore.memory_flush_present,
             }
         )
+
+
+def _preflight_memwing_openclaw_plugin(
+    *,
+    config,
+    adapter: OpenClawNativeAdapter,
+    raw_records: dict[str, Any],
+) -> None:
+    _debug(raw_records, "检查 OpenClaw MemWing plugin 配置")
+    enabled = adapter.get_config_value(MEMWING_PLUGIN_ENABLED_CONFIG_PATH)
+    conversation_access = adapter.get_config_value(MEMWING_PLUGIN_CONVERSATION_ACCESS_CONFIG_PATH)
+    base_url = adapter.get_config_value(MEMWING_PLUGIN_BASE_URL_CONFIG_PATH)
+    raw_records.setdefault("openclaw_plugin_preflight", []).append(
+        {
+            "plugin_id": "memwing",
+            "enabled_present": enabled.present,
+            "enabled": enabled.value if isinstance(enabled.value, bool) else None,
+            "conversation_access_present": conversation_access.present,
+            "conversation_access": conversation_access.value
+            if isinstance(conversation_access.value, bool)
+            else None,
+            "base_url_present": base_url.present,
+            "base_url_matches_memwing": (
+                _normalized_url(str(base_url.value)) == config.memwing.normalized_base_url
+                if isinstance(base_url.value, str)
+                else False
+            ),
+        }
+    )
+    if enabled.value is not True:
+        raise BenchmarkError("OpenClaw MemWing plugin must be enabled")
+    if conversation_access.value is not True:
+        raise BenchmarkError(
+            "OpenClaw MemWing plugin must enable hooks.allowConversationAccess"
+        )
+    if not isinstance(base_url.value, str) or not base_url.value.strip():
+        raise BenchmarkError("OpenClaw MemWing plugin config memwingBaseUrl is required")
+    if _normalized_url(base_url.value) != config.memwing.normalized_base_url:
+        raise BenchmarkError("OpenClaw MemWing plugin config does not match memwing.base_url")
+
+
+def _normalized_url(value: str) -> str:
+    return value.strip().rstrip("/")
 
 
 def _prepare_live_chat(
@@ -1076,7 +1218,7 @@ def _run_memwing_write_ingest_batch(
         raw_records.setdefault("memory_writes", []).append(
             {
                 "phase": "ingest",
-                "backend": "memwing",
+                "backend": backend,
                 "case_id": case.case_id,
                 "seed_message_count": len(case.seed_messages),
                 "accepted_count": sum(1 for record in ingest_records if record.get("accepted") is True),
@@ -1097,7 +1239,7 @@ def _run_memwing_write_ingest_batch(
                 seed_message_ids=[message.id for message in case.seed_messages],
                 seed_completed_at=seed_completed_at,
                 raw_extra={
-                    "backend": "memwing",
+                    "backend": backend,
                     "ingest_records": ingest_records,
                 },
                 observability_note=(
@@ -1180,7 +1322,7 @@ def _run_memwing_write_evaluate_batch(
         raw_records.setdefault("memory_writes", []).append(
             {
                 "phase": "evaluate",
-                "backend": "memwing",
+                "backend": backend,
                 "case_id": case.case_id,
                 "searches": searches,
                 "written_context_count": len(written_contexts),
@@ -1486,6 +1628,119 @@ def _run_write_ingest_batch(
         )
         for case in cases
     ]
+
+
+def _run_memwing_openclaw_plugin_write_ingest_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    config,
+    openclaw_adapter: OpenClawNativeAdapter,
+    memwing_adapter: MemWingAdapter,
+    chats: LiveChatIds,
+    raw_records: dict[str, Any],
+    message_interval_seconds: float,
+) -> list[NormalizedResult]:
+    results = _run_write_ingest_batch(
+        run_id=run_id,
+        backend=backend,
+        cases=cases,
+        config=config,
+        adapter=openclaw_adapter,
+        chats=chats,
+        raw_records=raw_records,
+        message_interval_seconds=message_interval_seconds,
+    )
+    for case in cases:
+        poll = _poll_memwing_write_readiness(
+            adapter=memwing_adapter,
+            case=case,
+            raw_records=raw_records,
+            poll_interval_seconds=config.memwing.poll_interval_seconds,
+            timeout_seconds=config.memwing.poll_timeout_seconds,
+        )
+        raw_records.setdefault("memwing_polls", []).append(
+            {
+                "mode": "memwing_openclaw_plugin_write_ingest",
+                "case_id": case.case_id,
+                **poll,
+            }
+        )
+    raw_records["memwing"] = list(memwing_adapter.records)
+    return results
+
+
+def _poll_memwing_write_readiness(
+    *,
+    adapter: MemWingAdapter,
+    case: BenchmarkCase,
+    raw_records: dict[str, Any],
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if poll_interval_seconds <= 0:
+        raise BenchmarkError("memwing.poll_interval_seconds must be greater than 0")
+    if timeout_seconds < 0:
+        raise BenchmarkError("memwing.poll_timeout_seconds must be greater than or equal to 0")
+    deadline = time.monotonic() + timeout_seconds
+    attempts: list[dict[str, Any]] = []
+    expected_items = list(case.expected_memory_items)
+    if not expected_items:
+        return {
+            "attempts": attempts,
+            "durable_memory_available": None,
+            "extraction_timeout": False,
+            "first_memory_available_at": None,
+        }
+
+    while True:
+        attempted_at = utc_now_iso()
+        searches: list[dict[str, Any]] = []
+        matched_ids: list[str] = []
+        for item in expected_items:
+            search = _safe_memory_search(adapter, item.fact)
+            search_raw = _memory_search_raw(search)
+            hit = bool(search.details.contexts)
+            if hit:
+                matched_ids.append(item.id)
+            row = {
+                "mode": "memwing_openclaw_plugin_write_ingest",
+                "case_id": case.case_id,
+                "expected_memory_id": item.id,
+                "query": item.fact,
+                "durable_memory_available": hit,
+                **search_raw,
+            }
+            searches.append(row)
+            raw_records.setdefault("memory_searches", []).append(row)
+
+        available = len(matched_ids) == len(expected_items)
+        attempts.append(
+            {
+                "attempted_at": attempted_at,
+                "matched_expected_memory_ids": matched_ids,
+                "expected_memory_ids": [item.id for item in expected_items],
+                "searches": searches,
+                "durable_memory_available": available,
+            }
+        )
+        if available:
+            return {
+                "attempts": attempts,
+                "durable_memory_available": True,
+                "extraction_timeout": False,
+                "first_memory_available_at": attempted_at,
+            }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {
+                "attempts": attempts,
+                "durable_memory_available": False,
+                "extraction_timeout": True,
+                "first_memory_available_at": None,
+            }
+        time.sleep(min(poll_interval_seconds, remaining))
 
 
 def _run_write_evaluate_batch(
@@ -2379,7 +2634,7 @@ def _result_from_memwing_write(
         raw={
             "mode": "memory_write",
             "phase": "evaluate",
-            "backend": "memwing",
+            "backend": backend,
             "durable_memory_available": bool(written_contexts),
             "extraction_timeout": False,
             "changed_memory_files": None,

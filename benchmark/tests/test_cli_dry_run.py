@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails
+from memwing_benchmark.adapters.openclaw_native import ConfigValue, MemorySearchDetails
 from memwing_benchmark.cli import (
     _prepare_live_chat,
     _prepare_live_workspace,
@@ -122,7 +122,7 @@ def test_cli_validates_memwing_config_before_dispatch(tmp_path: Path) -> None:
             "--config",
             str(config_path),
             "--backend",
-            "memwing",
+            "memwing-http",
             "--mode",
             "retrieval",
             "--case-id",
@@ -207,7 +207,7 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
             "--config",
             str(config_path),
             "--backend",
-            "memwing",
+            "memwing-http",
             "--cases",
             "datasets",
             "--case-id",
@@ -223,8 +223,8 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
     run_config = loads_json((run_dir / "config.json").read_bytes())
     normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
     raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
-    assert run_config["backend"] == "memwing"
-    assert normalized["backend"] == "memwing"
+    assert run_config["backend"] == "memwing-http"
+    assert normalized["backend"] == "memwing-http"
     assert normalized["durable_memory_available"] is True
     assert normalized["retrieved_evidence_ids"] == ["source_event_001"]
     assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
@@ -291,13 +291,13 @@ def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp
     run_config = loads_json((run_dir / "config.json").read_bytes())
     normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
     raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
-    assert run_config["backend"] == "memwing"
+    assert run_config["backend"] == "memwing-http"
     assert run_config["mode"] == "write"
     assert run_config["phase"] == "ingest"
     assert run_config["live"] is False
-    assert normalized["backend"] == "memwing"
+    assert normalized["backend"] == "memwing-http"
     assert normalized["raw"]["mode"] == "memory_write_ingest"
-    assert normalized["raw"]["backend"] == "memwing"
+    assert normalized["raw"]["backend"] == "memwing-http"
     assert len(normalized["seed_message_ids"]) == 13
     assert raw_records["memwing_ingest"][0]["source_event_id"] == "source_event_001"
     assert raw_records["memory_writes"][0]["phase"] == "ingest"
@@ -390,13 +390,320 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
     run_dir = Path(result.output.strip().splitlines()[-1])
     normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
     raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
-    assert normalized["backend"] == "memwing"
+    assert normalized["backend"] == "memwing-http"
     assert normalized["write_recall"] == 1.0
     assert normalized["write_precision"] == 1.0
     assert normalized["write_changed_file_count"] is None
     assert normalized["raw"]["changed_file_metrics_available"] is False
     assert "HTTP search APIs" in normalized["raw"]["changed_file_metrics_missing_reason"]
     assert raw_records["memory_writes"][0]["changed_file_metrics_available"] is False
+    assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
+
+
+def test_cli_memwing_openclaw_plugin_preflight_fails_before_feishu(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeOpenClawAdapter:
+        commands = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_config_value(self, path):
+            if path == "plugins.entries.memwing.enabled":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.hooks.allowConversationAccess":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.config.memwingBaseUrl":
+                return ConfigValue(present=True, value="http://wrong-memwing.test")
+            return ConfigValue(present=False)
+
+    class UnexpectedFeishu:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("Feishu must not be touched before plugin preflight passes")
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {
+                    "openclaw_repo_dir": "/tmp/openclaw",
+                    "runs_dir": str(tmp_path / "runs"),
+                },
+                "feishu": {"chat_id": "oc_seed"},
+                "memwing": {
+                    "base_url": "http://memwing.test/",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", UnexpectedFeishu)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-openclaw-plugin",
+            "--mode",
+            "write",
+            "--phase",
+            "ingest",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--live",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "OpenClaw MemWing plugin config does not match memwing.base_url" in result.output
+
+
+def test_cli_memwing_openclaw_plugin_live_ingest_uses_feishu_not_http_ingest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sent_messages = []
+    searched_questions = []
+
+    class FakeOpenClawAdapter:
+        commands = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_config_value(self, path):
+            if path == "plugins.entries.memwing.enabled":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.hooks.allowConversationAccess":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.config.memwingBaseUrl":
+                return ConfigValue(present=True, value="http://memwing.test")
+            return ConfigValue(present=False)
+
+        def get_default_workspace(self):
+            return tmp_path / "openclaw-workspace"
+
+    class FakeFeishu:
+        commands = []
+
+        def __init__(self, _bin):
+            pass
+
+        def ensure_ready(self, *, required_scopes):
+            assert required_scopes == ["im:message.send_as_user"]
+
+        def send_text(self, *, chat_id, text, idempotency_key):
+            sent_messages.append((chat_id, text, idempotency_key))
+            return {"message_id": f"msg_{len(sent_messages)}", "chat_id": chat_id}
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = []
+
+        def ingest_seed_messages(self, *, case, run_id):
+            raise AssertionError("plugin live ingest must not call MemWing HTTP ingest directly")
+
+        def memory_search_details(self, question, *, max_results):
+            searched_questions.append((question, max_results))
+            return MemorySearchDetails(
+                contexts=[f"MemWing plugin memory: {question}"],
+                results=[
+                    {
+                        "rank": 1,
+                        "score": 0.91,
+                        "source": "memory_item",
+                        "snippet": question,
+                        "source_event_ids": ["source_event_001"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {
+                    "openclaw_repo_dir": "/tmp/openclaw",
+                    "runs_dir": str(tmp_path / "runs"),
+                },
+                "feishu": {"chat_id": "oc_seed"},
+                "memwing": {
+                    "base_url": "http://memwing.test/",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                    "poll_interval_seconds": 0.01,
+                    "poll_timeout_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-openclaw-plugin",
+            "--mode",
+            "write",
+            "--phase",
+            "ingest",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--message-interval-seconds",
+            "0",
+            "--live",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    run_config = loads_json((run_dir / "config.json").read_bytes())
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert run_config["backend"] == "memwing-openclaw-plugin"
+    assert normalized["backend"] == "memwing-openclaw-plugin"
+    assert sent_messages
+    assert searched_questions
+    assert raw_records["memwing_ingest"] == []
+    assert raw_records["memwing_polls"][0]["mode"] == "memwing_openclaw_plugin_write_ingest"
+    assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
+    assert raw_records["feishu"][0]["kind"] == "write_ingest_seed"
+
+
+def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeOpenClawAdapter:
+        commands = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_config_value(self, path):
+            if path == "plugins.entries.memwing.enabled":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.hooks.allowConversationAccess":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.config.memwingBaseUrl":
+                return ConfigValue(present=True, value="http://memwing.test")
+            return ConfigValue(present=False)
+
+        def get_default_workspace(self):
+            raise AssertionError("plugin evaluate must not read OpenClaw native memory files")
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = []
+
+        def memory_search_details(self, question, *, max_results):
+            assert max_results == 5
+            return MemorySearchDetails(
+                contexts=[f"MemWing plugin memory: {question}"],
+                results=[
+                    {
+                        "rank": 1,
+                        "score": 0.91,
+                        "source": "memory_item",
+                        "snippet": question,
+                        "source_event_ids": ["source_event_001"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    class FakeJudge:
+        def evaluate_write(self, **kwargs):
+            assert kwargs["written_context"]
+            assert kwargs["case_id"] == "bs001"
+            return JudgeResult(
+                judge_type="memory_write",
+                case_id=kwargs["case_id"],
+                probe_id="bs001_write",
+                write=WriteJudgeBlock(
+                    write_recall=1.0,
+                    write_precision=1.0,
+                    written_claim_count=1,
+                    matched_expected_memory_ids=["bs001_m1"],
+                    missing_expected_memory_ids=[],
+                ),
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {
+                    "openclaw_repo_dir": "/tmp/openclaw",
+                    "runs_dir": str(tmp_path / "runs"),
+                },
+                "memwing": {
+                    "base_url": "http://memwing.test/",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-openclaw-plugin",
+            "--mode",
+            "write",
+            "--phase",
+            "evaluate",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert normalized["backend"] == "memwing-openclaw-plugin"
+    assert normalized["write_recall"] == 1.0
+    assert normalized["write_changed_file_count"] is None
     assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
 
 

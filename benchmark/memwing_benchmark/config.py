@@ -130,9 +130,9 @@ def sanitize_config_for_run(config: BenchmarkConfig) -> dict[str, Any]:
 
 
 def validate_config_for_backend(config: BenchmarkConfig, *, backend: str) -> None:
-    if backend == "memwing":
+    if backend in {"memwing", "memwing-http", "memwing-openclaw-plugin"}:
         if not config.memwing.normalized_base_url:
-            raise BenchmarkError("memwing.base_url is required for --backend memwing")
+            raise BenchmarkError(f"memwing.base_url is required for --backend {backend}")
         if not config.memwing.project_memory_space_id.strip():
             raise BenchmarkError("memwing.project_memory_space_id is required")
         if not config.memwing.group_id.strip():
