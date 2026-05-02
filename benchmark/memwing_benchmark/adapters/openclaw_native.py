@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from memwing_benchmark.errors import BenchmarkError
-from memwing_benchmark.json_utils import dumps_json, loads_json, walk_values
+from memwing_benchmark.json_utils import dumps_json, walk_values
 from memwing_benchmark.metrics.retrieval import unique_preserve_order
 from memwing_benchmark.schema import BenchmarkCase, CommandRecord, SeedMessage
 
@@ -352,6 +352,14 @@ def _parse_stdout_json_value(stdout: str) -> Any:
         try:
             parsed, _ = decoder.raw_decode(stdout[index:])
             return parsed
+        except ValueError:
+            continue
+    for line in reversed(stdout.splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped[0] not in "tfn-0123456789":
+            continue
+        try:
+            return json.loads(stripped)
         except ValueError:
             continue
     raise ValueError("stdout does not contain JSON")

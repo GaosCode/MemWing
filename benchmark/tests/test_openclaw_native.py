@@ -254,6 +254,21 @@ def test_get_config_value_handles_missing_path(monkeypatch) -> None:
     assert value.value is None
 
 
+def test_get_config_value_parses_boolean_with_pnpm_prefix(monkeypatch) -> None:
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+    stdout = (
+        "> openclaw@2026.4.30 openclaw /tmp/openclaw\n"
+        "> node scripts/run-node.mjs config get plugins.entries.memwing.enabled --json\n\n"
+        "true\n"
+    )
+    monkeypatch.setattr(adapter, "_run_full", lambda args, **kwargs: _command_result(args, stdout))
+
+    value = adapter.get_config_value("plugins.entries.memwing.enabled")
+
+    assert value.present is True
+    assert value.value is True
+
+
 def test_set_and_unset_config_value_use_strict_json(monkeypatch) -> None:
     adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
     commands = []
