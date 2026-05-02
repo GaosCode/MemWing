@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from hashlib import sha1
 import time
 from typing import Any
 
@@ -9,8 +11,10 @@ from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails
 from memwing_benchmark.config import MemWingConfig
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.metrics.retrieval import unique_preserve_order
+from memwing_benchmark.schema import BenchmarkCase, SeedMessage
 
 
+INGEST_EVENT_ENDPOINT = "/v1/openclaw/events/ingest"
 SEARCH_MEMORY_ENDPOINT = "/v1/memwing/tools/search-memory"
 
 
@@ -49,38 +53,20 @@ class MemWingAdapter:
             raise BenchmarkError("MemWing search limit must be greater than 0")
 
         endpoint = SEARCH_MEMORY_ENDPOINT
-        payload = self._search_payload(query=query, limit=requested_limit)
-        started = time.perf_counter()
-        try:
-            response = self._client.post(endpoint, json=payload)
-        except httpx.TimeoutException as exc:
-            latency_ms = _latency_ms(started)
-            self._record_request(endpoint=endpoint, status_code=None, latency_ms=latency_ms)
-            raise BenchmarkError(
-                f"MemWing request timed out: endpoint={endpoint} timeout_seconds="
-                f"{self.config.search_timeout_seconds}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            latency_ms = _latency_ms(started)
-            self._record_request(endpoint=endpoint, status_code=None, latency_ms=latency_ms)
-            raise BenchmarkError(f"MemWing request failed: endpoint={endpoint}") from exc
-
-        latency_ms = _latency_ms(started)
-        self._record_request(
+        body, latency_ms = self._post_json(
             endpoint=endpoint,
-            status_code=response.status_code,
-            latency_ms=latency_ms,
+            payload=self._search_payload(query=query, limit=requested_limit),
+            timeout_seconds=self.config.search_timeout_seconds,
+            request_fields=[
+                "agent_id",
+                "workspace_id",
+                "session_id",
+                "query",
+                "mode",
+                "limit",
+                "scope",
+            ],
         )
-        body = self._parse_response_body(response=response, endpoint=endpoint)
-        trace_id = _optional_text(body.get("trace_id"))
-        if trace_id:
-            self.records[-1]["trace_id"] = trace_id
-        if response.status_code < 200 or response.status_code >= 300:
-            safe_message = _optional_text(body.get("message")) or "MemWing request failed."
-            trace = f" trace_id={trace_id}" if trace_id else ""
-            raise BenchmarkError(
-                f"{safe_message} endpoint={endpoint} status_code={response.status_code}{trace}"
-            )
 
         contexts = body.get("contexts")
         results = body.get("results")
@@ -99,6 +85,52 @@ class MemWingAdapter:
             raw=body,
         )
 
+    def ingest_seed_messages(
+        self,
+        *,
+        case: BenchmarkCase,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        ingest_records: list[dict[str, Any]] = []
+        for sequence, message in enumerate(case.seed_messages):
+            if not message.content.strip():
+                continue
+            body, latency_ms = self._post_json(
+                endpoint=INGEST_EVENT_ENDPOINT,
+                payload=self._ingest_payload(
+                    case=case,
+                    message=message,
+                    run_id=run_id,
+                    sequence=sequence,
+                ),
+                timeout_seconds=self.config.ingest_timeout_seconds,
+                request_fields=[
+                    "agent_id",
+                    "workspace_id",
+                    "session_id",
+                    "run_id",
+                    "message_id",
+                    "hook_name",
+                    "sequence",
+                    "idempotency_key",
+                    "scope",
+                    "content",
+                    "payload",
+                    "event_time",
+                ],
+            )
+            ingest_records.append(
+                {
+                    "case_id": case.case_id,
+                    "seed_message_id": message.id,
+                    "accepted": body.get("accepted") if isinstance(body.get("accepted"), bool) else None,
+                    "source_event_id": _optional_text(body.get("source_event_id")),
+                    "trace_id": _optional_text(body.get("trace_id")),
+                    "latency_ms": latency_ms,
+                }
+            )
+        return ingest_records
+
     def _search_payload(self, *, query: str, limit: int) -> dict[str, Any]:
         scope = {
             "project_memory_space_id": self.config.project_memory_space_id,
@@ -116,6 +148,101 @@ class MemWingAdapter:
             "limit": limit,
             "scope": scope,
         }
+
+    def _ingest_payload(
+        self,
+        *,
+        case: BenchmarkCase,
+        message: SeedMessage,
+        run_id: str,
+        sequence: int,
+    ) -> dict[str, Any]:
+        idempotency_key = _idempotency_key(
+            run_id=run_id,
+            case_id=case.case_id,
+            seed_message_id=message.id,
+        )
+        return {
+            "agent_id": self.config.agent_id,
+            "workspace_id": self.config.workspace_id,
+            "session_id": self.config.session_id,
+            "run_id": run_id,
+            "message_id": message.id,
+            "hook_name": "ingest",
+            "sequence": sequence,
+            "idempotency_key": idempotency_key,
+            "scope": self._scope_payload(),
+            "content": message.content,
+            "payload": {
+                "benchmark_case_id": case.case_id,
+                "seed_message_id": message.id,
+                "sender": message.sender,
+                "message_type": message.message_type,
+                "source": message.source,
+            },
+            "event_time": message.time or case.case_time or datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _scope_payload(self) -> dict[str, str]:
+        scope = {
+            "project_memory_space_id": self.config.project_memory_space_id,
+            "group_id": self.config.group_id,
+            "thread_id": self.config.thread_id,
+        }
+        if self.config.shared_group_id:
+            scope["shared_group_id"] = self.config.shared_group_id
+        return scope
+
+    def _post_json(
+        self,
+        *,
+        endpoint: str,
+        payload: dict[str, Any],
+        timeout_seconds: float,
+        request_fields: list[str],
+    ) -> tuple[dict[str, Any], int]:
+        started = time.perf_counter()
+        try:
+            response = self._client.post(endpoint, json=payload, timeout=timeout_seconds)
+        except httpx.TimeoutException as exc:
+            latency_ms = _latency_ms(started)
+            self._record_request(
+                endpoint=endpoint,
+                status_code=None,
+                latency_ms=latency_ms,
+                request_fields=request_fields,
+            )
+            raise BenchmarkError(
+                f"MemWing request timed out: endpoint={endpoint} timeout_seconds={timeout_seconds}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            latency_ms = _latency_ms(started)
+            self._record_request(
+                endpoint=endpoint,
+                status_code=None,
+                latency_ms=latency_ms,
+                request_fields=request_fields,
+            )
+            raise BenchmarkError(f"MemWing request failed: endpoint={endpoint}") from exc
+
+        latency_ms = _latency_ms(started)
+        self._record_request(
+            endpoint=endpoint,
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            request_fields=request_fields,
+        )
+        body = self._parse_response_body(response=response, endpoint=endpoint)
+        trace_id = _optional_text(body.get("trace_id"))
+        if trace_id:
+            self.records[-1]["trace_id"] = trace_id
+        if response.status_code < 200 or response.status_code >= 300:
+            safe_message = _optional_text(body.get("message")) or "MemWing request failed."
+            trace = f" trace_id={trace_id}" if trace_id else ""
+            raise BenchmarkError(
+                f"{safe_message} endpoint={endpoint} status_code={response.status_code}{trace}"
+            )
+        return body, latency_ms
 
     def _parse_response_body(
         self,
@@ -143,6 +270,7 @@ class MemWingAdapter:
         endpoint: str,
         status_code: int | None,
         latency_ms: int,
+        request_fields: list[str],
         trace_id: str | None = None,
     ) -> None:
         record: dict[str, Any] = {
@@ -150,15 +278,7 @@ class MemWingAdapter:
             "endpoint": endpoint,
             "status_code": status_code,
             "latency_ms": latency_ms,
-            "request_fields": [
-                "agent_id",
-                "workspace_id",
-                "session_id",
-                "query",
-                "mode",
-                "limit",
-                "scope",
-            ],
+            "request_fields": request_fields,
         }
         if trace_id:
             record["trace_id"] = trace_id
@@ -196,6 +316,11 @@ def _normalize_results(results: list[Any]) -> list[dict[str, Any]]:
 
 def _latency_ms(started: float) -> int:
     return max(0, int((time.perf_counter() - started) * 1000))
+
+
+def _idempotency_key(*, run_id: str, case_id: str, seed_message_id: str) -> str:
+    digest = sha1(f"{run_id}:{case_id}:{seed_message_id}".encode("utf-8")).hexdigest()[:12]
+    return f"mwb:{case_id}:{seed_message_id}:{digest}"
 
 
 def _required_text(value: object, field_name: str) -> str:

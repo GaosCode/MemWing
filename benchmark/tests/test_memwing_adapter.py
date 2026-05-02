@@ -3,9 +3,14 @@ import json
 import httpx
 import pytest
 
-from memwing_benchmark.adapters.memwing import SEARCH_MEMORY_ENDPOINT, MemWingAdapter
+from memwing_benchmark.adapters.memwing import (
+    INGEST_EVENT_ENDPOINT,
+    SEARCH_MEMORY_ENDPOINT,
+    MemWingAdapter,
+)
 from memwing_benchmark.config import MemWingConfig
 from memwing_benchmark.errors import BenchmarkError
+from memwing_benchmark.schema import BenchmarkCase, SeedMessage
 
 
 def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> None:
@@ -80,6 +85,65 @@ def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> N
             "trace_id": "trace_search",
         }
     ]
+
+
+def test_ingest_seed_messages_posts_source_events_to_openclaw_ingest_url() -> None:
+    seen_payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(json.loads(request.content))
+        assert request.url.path == INGEST_EVENT_ENDPOINT
+        return httpx.Response(
+            202,
+            json={
+                "accepted": True,
+                "source_event_id": "source_event_001",
+                "trace_id": "trace_ingest",
+            },
+        )
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="basic",
+        seed_messages=[
+            SeedMessage(
+                id="bs001_s1",
+                time="2026-05-02T09:00:00+08:00",
+                sender="周明",
+                content="负责人是沈南。",
+            )
+        ],
+    )
+
+    records = adapter.ingest_seed_messages(case=case, run_id="run1")
+
+    assert records == [
+        {
+            "case_id": "bs001",
+            "seed_message_id": "bs001_s1",
+            "accepted": True,
+            "source_event_id": "source_event_001",
+            "trace_id": "trace_ingest",
+            "latency_ms": records[0]["latency_ms"],
+        }
+    ]
+    assert seen_payloads[0]["agent_id"] == "main"
+    assert seen_payloads[0]["workspace_id"] == "workspace_001"
+    assert seen_payloads[0]["session_id"] == "memwing-benchmark"
+    assert seen_payloads[0]["run_id"] == "run1"
+    assert seen_payloads[0]["message_id"] == "bs001_s1"
+    assert seen_payloads[0]["idempotency_key"].startswith("mwb:bs001:bs001_s1:")
+    assert seen_payloads[0]["scope"] == {
+        "project_memory_space_id": "project_001",
+        "group_id": "benchmark_group",
+        "thread_id": "benchmark_thread",
+    }
+    assert seen_payloads[0]["content"] == "负责人是沈南。"
+    assert seen_payloads[0]["payload"]["seed_message_id"] == "bs001_s1"
+    assert adapter.records[0]["endpoint"] == INGEST_EVENT_ENDPOINT
+    assert adapter.records[0]["status_code"] == 202
+    assert adapter.records[0]["trace_id"] == "trace_ingest"
 
 
 @pytest.mark.parametrize("status_code", [403, 404, 500])
