@@ -30,6 +30,27 @@ services:
       retries: 10
       start_period: 10s
 
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: "${MEMWING_GRAPHITI_NEO4J_USER:-neo4j}/${MEMWING_GRAPHITI_NEO4J_PASSWORD:-memwing_dev_password}"
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL_SIZE:-512m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX_SIZE:-1g}
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - memwing_neo4j_data:/data
+      - memwing_neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u \"$${NEO4J_AUTH%%/*}\" -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1'"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
 volumes:
   memwing_postgres_data:
   memwing_qdrant_data:
+  memwing_neo4j_data:
+  memwing_neo4j_logs:
