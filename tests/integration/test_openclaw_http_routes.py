@@ -5,6 +5,7 @@ from memwing.api.openclaw_http import handle_openclaw_http_request
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.gateway_service import MemoryGateway
 from memwing.application.scope_resolver import ScopeResolver
+from memwing.core.errors import ProviderTransientFailure
 from memwing.core.scope import ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -177,6 +178,41 @@ def test_openclaw_tool_boundary_returns_scope_error_envelope() -> None:
         assert response.body["message"] == "Memory scope is not available."
 
     asyncio.run(run())
+
+
+def test_openclaw_http_boundary_returns_transient_failure_envelope() -> None:
+    async def run() -> None:
+        runtime = _TransientFailureRuntime()
+
+        response = await handle_openclaw_http_request(
+            method="POST",
+            path="/v1/memwing/tools/search-memory",
+            payload={
+                "agent_id": "main",
+                "workspace_id": "workspace_001",
+                "session_id": "session_001",
+                "query": "demo scope",
+                "scope": {"project_memory_space_id": "project_001"},
+            },
+            runtime=runtime,
+        )
+
+        assert response.status_code == 503
+        assert response.body == {
+            "ok": False,
+            "code": "postgres_unavailable",
+            "message": "Postgres is temporarily unavailable.",
+        }
+
+    asyncio.run(run())
+
+
+class _TransientFailureRuntime:
+    async def knowledge_search(self, query):
+        raise ProviderTransientFailure(
+            "postgres_unavailable",
+            "Postgres is temporarily unavailable.",
+        )
 
 
 def _runtime(store: InMemoryDataStore) -> OpenClawAdapter:

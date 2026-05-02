@@ -4,8 +4,9 @@ from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar, Token
 import re
 from types import TracebackType
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
+from memwing.core.errors import ProviderTransientFailure
 from memwing.infrastructure.db.postgres_rows import Row
 
 
@@ -44,16 +45,14 @@ class PooledPostgresConnection:
     async def fetchrow(self, sql: str, params: dict[str, object]) -> Row | None:
         connection = self._current_connection.get()
         if connection is not None:
-            return await _fetchrow(connection, sql, params)
-        async with self._pool.connection() as connection:
-            return await _fetchrow(connection, sql, params)
+            return await _run_transaction_operation(_fetchrow, connection, sql, params)
+        return await _run_pool_operation_with_retry(self._pool, _fetchrow, sql, params)
 
     async def fetch(self, sql: str, params: dict[str, object]) -> tuple[Row, ...]:
         connection = self._current_connection.get()
         if connection is not None:
-            return await _fetch(connection, sql, params)
-        async with self._pool.connection() as connection:
-            return await _fetch(connection, sql, params)
+            return await _run_transaction_operation(_fetch, connection, sql, params)
+        return await _run_pool_operation_with_retry(self._pool, _fetch, sql, params)
 
     async def close(self) -> None:
         await self._pool.close()
@@ -102,6 +101,70 @@ async def _fetchrow(connection: Any, sql: str, params: dict[str, object]) -> Row
 async def _fetch(connection: Any, sql: str, params: dict[str, object]) -> tuple[Row, ...]:
     cursor = await connection.execute(_prepare_sql(sql), _prepare_params(params))
     return tuple(await cursor.fetchall())
+
+
+T = TypeVar("T")
+DatabaseOperation = Callable[[Any, str, dict[str, object]], Awaitable[T]]
+
+
+async def _run_pool_operation_with_retry(
+    pool: Any,
+    operation: DatabaseOperation[T],
+    sql: str,
+    params: dict[str, object],
+) -> T:
+    try:
+        async with pool.connection() as connection:
+            return await operation(connection, sql, params)
+    except Exception as exc:
+        if not _is_transient_postgres_disconnect(exc):
+            raise
+
+    try:
+        async with pool.connection() as connection:
+            return await operation(connection, sql, params)
+    except Exception as exc:
+        if _is_transient_postgres_disconnect(exc):
+            raise _postgres_transient_failure() from exc
+        raise
+
+
+async def _run_transaction_operation(
+    operation: DatabaseOperation[T],
+    connection: Any,
+    sql: str,
+    params: dict[str, object],
+) -> T:
+    try:
+        return await operation(connection, sql, params)
+    except Exception as exc:
+        if _is_transient_postgres_disconnect(exc):
+            raise _postgres_transient_failure() from exc
+        raise
+
+
+def _is_transient_postgres_disconnect(exc: BaseException) -> bool:
+    try:
+        from psycopg import OperationalError
+        from psycopg.errors import AdminShutdown, CannotConnectNow, ConnectionException
+    except ImportError:
+        return False
+    return isinstance(
+        exc,
+        (
+            AdminShutdown,
+            CannotConnectNow,
+            ConnectionException,
+            OperationalError,
+        ),
+    )
+
+
+def _postgres_transient_failure() -> ProviderTransientFailure:
+    return ProviderTransientFailure(
+        "postgres_unavailable",
+        "Postgres is temporarily unavailable.",
+    )
 
 
 _PSYCOPG_LITERAL_PERCENT = re.compile(r"%(?!\(|s|b|t|%)")

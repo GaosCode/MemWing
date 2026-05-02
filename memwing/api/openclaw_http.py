@@ -31,7 +31,12 @@ from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError
 from memwing.application.failure_semantics import classify_failure
 from memwing.application.scope_resolver import ScopeResolutionError
-from memwing.core.errors import ConfigurationFailure, ScopeResolutionFailure, ValidationFailure
+from memwing.core.errors import (
+    ConfigurationFailure,
+    MemWingFailure,
+    ScopeResolutionFailure,
+    ValidationFailure,
+)
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -85,6 +90,12 @@ async def handle_openclaw_http_request(
         )
         return OpenClawHttpResponse(
             status_code=403,
+            body=render_error_body(failure),
+        )
+    except MemWingFailure as exc:
+        failure = classify_failure(exc, audit_stage="api.openclaw_http")
+        return OpenClawHttpResponse(
+            status_code=failure.http_status,
             body=render_error_body(failure),
         )
 
