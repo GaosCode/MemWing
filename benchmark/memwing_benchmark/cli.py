@@ -10,6 +10,7 @@ from typing import Any
 
 import typer
 
+from memwing_benchmark.adapters.memwing import MemWingAdapter
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
 from memwing_benchmark.channels.feishu_cli import FeishuCli
 from memwing_benchmark.collectors.openclaw_trajectory import parse_trajectory_dir
@@ -143,8 +144,6 @@ def run(
         trajectory_dir=trajectory_dir,
     )
     validate_config_for_backend(config, backend=backend)
-    if backend == "memwing":
-        raise BenchmarkError("--backend memwing CLI dispatch is not implemented yet")
     cases = load_cases(cases_path, case_id=case_id)
     if not batch and len(cases) != 1:
         raise BenchmarkError("non-batch runs require exactly one case; pass --case-id or --batch")
@@ -154,14 +153,12 @@ def run(
     run_dir = Path(config.paths.runs_dir).expanduser() / run_mode / run_day / run_id
     started_at = utc_now_iso()
 
-    adapter = OpenClawNativeAdapter(
-        Path(config.paths.openclaw_repo_dir),
-        agent_id=config.openclaw.agent_id,
-        workspace_dir="" if batch or mode == "write" else config.openclaw.workspace_dir,
-    )
     raw_records: dict[str, Any] = {
         "feishu": [],
         "feishu_commands": [],
+        "memwing": [],
+        "memwing_ingest": [],
+        "memwing_polls": [],
         "openclaw": [],
         "memory_polls": [],
         "memory_searches": [],
@@ -177,6 +174,59 @@ def run(
     live_chats = LiveChatIds(
         seed_chat_id=config.feishu.seed_chat_id or config.feishu.chat_id,
         probe_chat_id=config.feishu.probe_chat_id or config.feishu.chat_id,
+    )
+    if backend == "memwing":
+        if live:
+            raise BenchmarkError("--backend memwing retrieval does not support --live yet")
+        if mode != "retrieval":
+            raise BenchmarkError("--backend memwing currently supports --mode retrieval only")
+        adapter = MemWingAdapter(config.memwing)
+        results = _run_memwing_retrieval_batch(
+            run_id=run_id,
+            backend=backend,
+            cases=cases,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            poll_interval_seconds=config.memwing.poll_interval_seconds,
+            timeout_seconds=config.memwing.poll_timeout_seconds,
+            yes=yes,
+        )
+        raw_records["memwing"] = list(adapter.records)
+        finished_at = utc_now_iso()
+        run_config = {
+            "benchmark_version": "v1",
+            "backend": backend,
+            "mode": mode,
+            "phase": phase,
+            "run_id": run_id,
+            "run_mode": run_mode,
+            "run_day": run_day,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "case_file": str(cases_path),
+            "case_ids": [case.case_id for case in cases],
+            "batch": batch,
+            "chat_id": None,
+            "seed_chat_id": None,
+            "probe_chat_id": None,
+            "live": live,
+            "config": sanitize_config_for_run(config),
+            "side_effects": raw_records["side_effects"],
+        }
+        write_run_outputs(
+            run_dir=run_dir,
+            run_config=run_config,
+            results=results,
+            raw_records=raw_records,
+        )
+        typer.echo(str(run_dir))
+        return run_dir
+
+    adapter = OpenClawNativeAdapter(
+        Path(config.paths.openclaw_repo_dir),
+        agent_id=config.openclaw.agent_id,
+        workspace_dir="" if batch or mode == "write" else config.openclaw.workspace_dir,
     )
     workspace_restore: LiveWorkspaceRestore | None = None
     try:
@@ -854,6 +904,212 @@ def _run_offline_batch(
             }
         )
     return results
+
+
+def _run_memwing_retrieval_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+    yes: bool,
+) -> list[NormalizedResult]:
+    if poll_interval_seconds <= 0:
+        raise BenchmarkError("memwing.poll_interval_seconds must be greater than 0")
+    if timeout_seconds < 0:
+        raise BenchmarkError("memwing.poll_timeout_seconds must be greater than or equal to 0")
+    if any(case.seed_messages for case in cases):
+        _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
+
+    results: list[NormalizedResult] = []
+    for case in cases:
+        _debug(
+            raw_records,
+            "MemWing retrieval case 开始",
+            case_id=case.case_id,
+            seed_message_count=len(case.seed_messages),
+            probe_count=len(case.probes),
+        )
+        ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id)
+        seed_completed_at = utc_now_iso()
+        raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
+        source_event_ids_by_seed = {
+            record["seed_message_id"]: record["source_event_id"]
+            for record in ingest_records
+            if isinstance(record.get("seed_message_id"), str)
+            and isinstance(record.get("source_event_id"), str)
+        }
+
+        for probe in case.probes:
+            expected_source_event_ids = [
+                source_event_ids_by_seed[evidence_id]
+                for evidence_id in probe.gold_evidence_ids
+                if evidence_id in source_event_ids_by_seed
+            ] or [
+                source_event_id
+                for source_event_id in source_event_ids_by_seed.values()
+                if source_event_id
+            ]
+            poll = _poll_memwing_readiness(
+                adapter=adapter,
+                query=probe.question,
+                expected_source_event_ids=expected_source_event_ids,
+                poll_interval_seconds=poll_interval_seconds,
+                timeout_seconds=timeout_seconds,
+            )
+            raw_records.setdefault("memwing_polls", []).append(
+                {
+                    "case_id": case.case_id,
+                    "probe_id": probe.id,
+                    "query": probe.question,
+                    "expected_source_event_ids": expected_source_event_ids,
+                    "attempts": poll.attempts,
+                    "durable_memory_available": poll.durable_memory_available,
+                    "extraction_timeout": poll.extraction_timeout,
+                    "first_memory_available_at": poll.first_memory_available_at,
+                }
+            )
+            poll_details = _details_from_poll(poll)
+            search_raw = _memory_search_raw(
+                MemorySearchOutcome(details=poll_details, error=poll.search_error)
+            )
+            raw_records.setdefault("memory_searches", []).append(
+                {
+                    "mode": "memwing_retrieval",
+                    "case_id": case.case_id,
+                    "probe_id": probe.id,
+                    "query": probe.question,
+                    **search_raw,
+                }
+            )
+            retrieval_result = _evaluate_retrieval(
+                judge=judge,
+                case=case,
+                probe=probe,
+                retrieved_contexts=poll.retrieved_contexts,
+            )
+            results.append(
+                _result_from_eval(
+                    run_id=run_id,
+                    backend=backend,
+                    case=case,
+                    probe=probe,
+                    chat_id=None,
+                    seed_message_ids=[message.id for message in case.seed_messages],
+                    answer="",
+                    retrieved_contexts=poll.retrieved_contexts,
+                    retrieved_evidence_ids=_source_event_ids_from_results(poll_details.results),
+                    actual_tool_evidence_ids=[],
+                    latency_ms=None,
+                    tokens=TokenUsage(
+                        available=False,
+                        missing_reason="non-live MemWing retrieval run",
+                    ),
+                    memory_recall_latency_ms=None,
+                    retrieval_result=retrieval_result,
+                    answer_result=None,
+                    raw={
+                        "mode": "memwing_retrieval",
+                        "seed_completed_at": seed_completed_at,
+                        "first_memory_available_at": poll.first_memory_available_at,
+                        "durable_memory_available": poll.durable_memory_available,
+                        "extraction_timeout": poll.extraction_timeout,
+                        "memory_poll_attempts": poll.attempts,
+                        "expected_source_event_ids": expected_source_event_ids,
+                        **search_raw,
+                    },
+                )
+            )
+    return results
+
+
+def _poll_memwing_readiness(
+    *,
+    adapter: MemWingAdapter,
+    query: str,
+    expected_source_event_ids: list[str],
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+) -> DurablePollResult:
+    deadline = time.monotonic() + timeout_seconds
+    attempts: list[dict[str, Any]] = []
+    last_details = MemorySearchDetails(contexts=[], results=[], latency_ms=0, raw=None)
+    last_error: str | None = None
+
+    while True:
+        attempted_at = utc_now_iso()
+        search = _safe_memory_search(adapter, query)
+        details = search.details
+        retrieved_source_event_ids = _source_event_ids_from_results(details.results)
+        matched_source_event_ids = [
+            source_event_id
+            for source_event_id in expected_source_event_ids
+            if source_event_id in retrieved_source_event_ids
+        ]
+        hit = bool(expected_source_event_ids and matched_source_event_ids)
+        attempts.append(
+            {
+                "attempted_at": attempted_at,
+                "expected_source_event_ids": expected_source_event_ids,
+                "retrieved_source_event_ids": retrieved_source_event_ids,
+                "matched_source_event_ids": matched_source_event_ids,
+                **_memory_search_raw(search),
+                "durable_memory_available": hit,
+            }
+        )
+        last_details = details
+        last_error = search.error
+        if hit:
+            return DurablePollResult(
+                retrieved_contexts=details.contexts,
+                search_error=search.error,
+                retrieval_result=None,
+                first_memory_available_at=attempted_at,
+                durable_memory_available=True,
+                extraction_timeout=False,
+                attempts=attempts,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return DurablePollResult(
+                retrieved_contexts=last_details.contexts,
+                search_error=last_error,
+                retrieval_result=None,
+                first_memory_available_at=None,
+                durable_memory_available=False,
+                extraction_timeout=True,
+                attempts=attempts,
+            )
+        time.sleep(min(poll_interval_seconds, remaining))
+
+
+def _details_from_poll(poll: DurablePollResult) -> MemorySearchDetails:
+    if not poll.attempts:
+        return MemorySearchDetails(contexts=[], results=[], latency_ms=0, raw=None)
+    last_raw = poll.attempts[-1]
+    results = last_raw.get("memory_search_results")
+    raw = last_raw.get("memory_search_raw")
+    return MemorySearchDetails(
+        contexts=poll.retrieved_contexts,
+        results=results if isinstance(results, list) else [],
+        latency_ms=_optional_int(last_raw.get("memory_search_latency_ms")) or 0,
+        raw=raw if isinstance(raw, dict) else None,
+    )
+
+
+def _source_event_ids_from_results(results: list[dict[str, Any]]) -> list[str]:
+    source_event_ids: list[str] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        raw_ids = result.get("source_event_ids")
+        if isinstance(raw_ids, list):
+            source_event_ids.extend(item for item in raw_ids if isinstance(item, str))
+    return unique_preserve_order(source_event_ids)
 
 
 def _run_write_live_batch(

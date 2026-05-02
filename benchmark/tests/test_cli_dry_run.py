@@ -7,7 +7,9 @@ from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails
 from memwing_benchmark.cli import (
     _prepare_live_chat,
     _prepare_live_workspace,
+    _poll_memwing_readiness,
     _restore_live_workspace,
+    _run_memwing_retrieval_batch,
     _run_offline_batch,
     _run_live,
     _run_write_evaluate_batch,
@@ -23,7 +25,7 @@ from memwing_benchmark.evaluators.llm_judge import (
     RetrievalJudgeBlock,
     WriteJudgeBlock,
 )
-from memwing_benchmark.json_utils import dumps_json
+from memwing_benchmark.json_utils import dumps_json, loads_json
 from memwing_benchmark.schema import BenchmarkCase, Probe, SeedMessage
 
 
@@ -132,6 +134,102 @@ def test_cli_validates_memwing_config_before_dispatch(tmp_path: Path) -> None:
     assert "memwing.base_url is required" in result.output
 
 
+def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) -> None:
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = []
+
+        def ingest_seed_messages(self, *, case, run_id):
+            return [
+                {
+                    "case_id": case.case_id,
+                    "seed_message_id": "bs001_s1",
+                    "accepted": True,
+                    "source_event_id": "source_event_001",
+                    "trace_id": "trace_ingest",
+                    "latency_ms": 3,
+                }
+            ]
+
+        def memory_search_details(self, question, *, max_results):
+            return MemorySearchDetails(
+                contexts=["云帆看板改造项目负责人确定为沈南。"],
+                results=[
+                    {
+                        "rank": 1,
+                        "score": 0.91,
+                        "source": "memory_item",
+                        "snippet": "云帆看板改造项目负责人确定为沈南。",
+                        "source_event_ids": ["source_event_001"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    class FakeJudge:
+        def evaluate_retrieval(self, **kwargs):
+            return JudgeResult(
+                judge_type="offline_retrieval",
+                case_id=kwargs["case_id"],
+                probe_id=kwargs["probe"].id,
+                retrieval=RetrievalJudgeBlock(
+                    recall_at_1=True,
+                    recall_at_3=True,
+                    recall_at_5=True,
+                    matched_gold_memory_ids=kwargs["probe"].gold_evidence_ids,
+                ),
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                    "poll_interval_seconds": 0.01,
+                    "poll_timeout_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    run_config = loads_json((run_dir / "config.json").read_bytes())
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert run_config["backend"] == "memwing"
+    assert normalized["backend"] == "memwing"
+    assert normalized["durable_memory_available"] is True
+    assert normalized["retrieved_evidence_ids"] == ["source_event_001"]
+    assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
+
+
 def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:
     original_workspace = str(tmp_path / "openclaw-workspace")
     preseed_cases = []
@@ -238,6 +336,83 @@ def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:
         "case_id": "lt001",
         "workspace": original_workspace,
     }
+
+
+def test_memwing_retrieval_batch_records_readiness_timeout() -> None:
+    class FakeAdapter:
+        def ingest_seed_messages(self, *, case, run_id):
+            return [
+                {
+                    "case_id": case.case_id,
+                    "seed_message_id": "bs001_s1",
+                    "source_event_id": "source_event_001",
+                }
+            ]
+
+        def memory_search_details(self, question, *, max_results):
+            return MemorySearchDetails(
+                contexts=[],
+                results=[],
+                latency_ms=4,
+                raw={"trace_id": "trace_empty", "results": []},
+            )
+
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="basic",
+        seed_messages=[SeedMessage(id="bs001_s1", content="负责人是沈南。")],
+        probes=[
+            Probe(
+                id="bs001_p1",
+                question="负责人是谁？",
+                gold_answer="沈南",
+                gold_evidence_ids=["bs001_s1"],
+            )
+        ],
+    )
+    raw_records = {
+        "memwing_ingest": [],
+        "memwing_polls": [],
+        "memory_searches": [],
+        "side_effects": [],
+        "debug": [],
+    }
+
+    results = _run_memwing_retrieval_batch(
+        run_id="run1",
+        backend="memwing",
+        cases=[case],
+        adapter=FakeAdapter(),
+        judge=None,
+        raw_records=raw_records,
+        poll_interval_seconds=0.01,
+        timeout_seconds=0,
+        yes=True,
+    )
+
+    assert results[0].durable_memory_available is False
+    assert results[0].extraction_timeout is True
+    assert raw_records["memwing_polls"][0]["extraction_timeout"] is True
+    assert raw_records["memwing_polls"][0]["attempts"][0]["durable_memory_available"] is False
+
+
+def test_memwing_readiness_records_server_error() -> None:
+    class FakeAdapter:
+        def memory_search_details(self, question, *, max_results):
+            raise BenchmarkError("MemWing request failed: endpoint=/v1/memwing/tools/search-memory")
+
+    poll = _poll_memwing_readiness(
+        adapter=FakeAdapter(),
+        query="负责人是谁？",
+        expected_source_event_ids=["source_event_001"],
+        poll_interval_seconds=0.01,
+        timeout_seconds=0,
+    )
+
+    assert poll.durable_memory_available is False
+    assert poll.extraction_timeout is True
+    assert "MemWing request failed" in poll.search_error
+    assert "MemWing request failed" in poll.attempts[0]["memory_search_error"]
 
 
 def test_write_live_sends_seed_without_flush_and_scores_memory_diff(
