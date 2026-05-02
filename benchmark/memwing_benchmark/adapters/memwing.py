@@ -16,6 +16,7 @@ from memwing_benchmark.schema import BenchmarkCase, SeedMessage
 
 INGEST_EVENT_ENDPOINT = "/v1/openclaw/events/ingest"
 SEARCH_MEMORY_ENDPOINT = "/v1/memwing/tools/search-memory"
+HEALTH_ENDPOINT = "/healthz"
 
 
 class MemWingAdapter:
@@ -38,6 +39,53 @@ class MemWingAdapter:
 
     def memory_search(self, query: str, *, max_results: int = 5) -> list[str]:
         return self.memory_search_details(query, max_results=max_results).contexts
+
+    def health(self) -> None:
+        endpoint = HEALTH_ENDPOINT
+        started = time.perf_counter()
+        try:
+            response = self._client.get(endpoint, timeout=self.config.search_timeout_seconds)
+        except httpx.TimeoutException as exc:
+            latency_ms = _latency_ms(started)
+            self._record_request(
+                kind="health",
+                method="GET",
+                endpoint=endpoint,
+                status_code=None,
+                latency_ms=latency_ms,
+                request_fields=[],
+            )
+            raise BenchmarkError(
+                f"MemWing health check timed out: endpoint={endpoint} "
+                f"timeout_seconds={self.config.search_timeout_seconds}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            latency_ms = _latency_ms(started)
+            self._record_request(
+                kind="health",
+                method="GET",
+                endpoint=endpoint,
+                status_code=None,
+                latency_ms=latency_ms,
+                request_fields=[],
+            )
+            raise BenchmarkError(f"MemWing health check failed: endpoint={endpoint}") from exc
+
+        latency_ms = _latency_ms(started)
+        self._record_request(
+            kind="health",
+            method="GET",
+            endpoint=endpoint,
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            request_fields=[],
+        )
+        body = self._parse_response_body(response=response, endpoint=endpoint)
+        if response.status_code < 200 or response.status_code >= 300 or body.get("ok") is not True:
+            raise BenchmarkError(
+                f"MemWing server is not ready: endpoint={endpoint} "
+                f"status_code={response.status_code}"
+            )
 
     def memory_search_details(
         self,
@@ -207,6 +255,8 @@ class MemWingAdapter:
         except httpx.TimeoutException as exc:
             latency_ms = _latency_ms(started)
             self._record_request(
+                kind=_request_kind(endpoint),
+                method="POST",
                 endpoint=endpoint,
                 status_code=None,
                 latency_ms=latency_ms,
@@ -218,6 +268,8 @@ class MemWingAdapter:
         except httpx.HTTPError as exc:
             latency_ms = _latency_ms(started)
             self._record_request(
+                kind=_request_kind(endpoint),
+                method="POST",
                 endpoint=endpoint,
                 status_code=None,
                 latency_ms=latency_ms,
@@ -227,6 +279,8 @@ class MemWingAdapter:
 
         latency_ms = _latency_ms(started)
         self._record_request(
+            kind=_request_kind(endpoint),
+            method="POST",
             endpoint=endpoint,
             status_code=response.status_code,
             latency_ms=latency_ms,
@@ -267,6 +321,8 @@ class MemWingAdapter:
     def _record_request(
         self,
         *,
+        kind: str,
+        method: str,
         endpoint: str,
         status_code: int | None,
         latency_ms: int,
@@ -274,7 +330,8 @@ class MemWingAdapter:
         trace_id: str | None = None,
     ) -> None:
         record: dict[str, Any] = {
-            "method": "POST",
+            "kind": kind,
+            "method": method,
             "endpoint": endpoint,
             "status_code": status_code,
             "latency_ms": latency_ms,
@@ -312,6 +369,16 @@ def _normalize_results(results: list[Any]) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+def _request_kind(endpoint: str) -> str:
+    if endpoint == SEARCH_MEMORY_ENDPOINT:
+        return "search"
+    if endpoint == INGEST_EVENT_ENDPOINT:
+        return "ingest"
+    if endpoint == HEALTH_ENDPOINT:
+        return "health"
+    return "http"
 
 
 def _latency_ms(started: float) -> int:

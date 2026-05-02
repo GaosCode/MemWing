@@ -139,6 +139,9 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
         def __init__(self, _config):
             self.records = []
 
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
         def ingest_seed_messages(self, *, case, run_id):
             return [
                 {
@@ -152,6 +155,9 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
             ]
 
         def memory_search_details(self, question, *, max_results):
+            self.records.append(
+                {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
+            )
             return MemorySearchDetails(
                 contexts=["云帆看板改造项目负责人确定为沈南。"],
                 results=[
@@ -160,7 +166,7 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
                         "score": 0.91,
                         "source": "memory_item",
                         "snippet": "云帆看板改造项目负责人确定为沈南。",
-                        "source_event_ids": ["source_event_001"],
+                        "source_event_ids": ["bs001_s1"],
                     }
                 ],
                 latency_ms=7,
@@ -226,14 +232,143 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
     assert run_config["backend"] == "memwing-http"
     assert normalized["backend"] == "memwing-http"
     assert normalized["durable_memory_available"] is True
-    assert normalized["retrieved_evidence_ids"] == ["source_event_001"]
+    assert normalized["retrieved_evidence_ids"] == ["bs001_s1"]
+    assert raw_records["memwing_http_health"][0]["endpoint"] == "/healthz"
     assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
+
+
+def test_cli_memwing_openclaw_plugin_retrieval_uses_memwing_search_with_preflight(
+    monkeypatch, tmp_path: Path
+) -> None:
+    preflight_paths = []
+
+    class FakeOpenClawAdapter:
+        commands = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_config_value(self, path):
+            preflight_paths.append(path)
+            if path == "plugins.entries.memwing.enabled":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.hooks.allowConversationAccess":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.config.memwingBaseUrl":
+                return ConfigValue(present=True, value="http://memwing.test")
+            return ConfigValue(present=False)
+
+        def get_default_workspace(self):
+            raise AssertionError("plugin retrieval must not read OpenClaw native memory files")
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = [{"endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}]
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def memory_search_details(self, question, *, max_results):
+            assert max_results == 5
+            self.records.append(
+                {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
+            )
+            return MemorySearchDetails(
+                contexts=[f"MemWing plugin retrieval memory: {question}"],
+                results=[
+                    {
+                        "rank": 1,
+                        "score": 0.91,
+                        "source": "memory_item",
+                        "snippet": question,
+                        "source_event_ids": ["bs001_s1"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    class FakeJudge:
+        def evaluate_retrieval(self, **kwargs):
+            return JudgeResult(
+                judge_type="offline_retrieval",
+                case_id=kwargs["case_id"],
+                probe_id=kwargs["probe"].id,
+                retrieval=RetrievalJudgeBlock(
+                    recall_at_1=True,
+                    recall_at_3=True,
+                    recall_at_5=True,
+                    matched_gold_memory_ids=kwargs["probe"].gold_evidence_ids,
+                ),
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {
+                    "openclaw_repo_dir": "/tmp/openclaw",
+                    "runs_dir": str(tmp_path / "runs"),
+                },
+                "memwing": {
+                    "base_url": "http://memwing.test/",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                    "poll_interval_seconds": 0.01,
+                    "poll_timeout_seconds": 0,
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-openclaw-plugin",
+            "--mode",
+            "retrieval",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    run_config = loads_json((run_dir / "config.json").read_bytes())
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert run_config["backend"] == "memwing-openclaw-plugin"
+    assert normalized["backend"] == "memwing-openclaw-plugin"
+    assert normalized["durable_memory_available"] is True
+    assert raw_records["memwing"][0]["endpoint"] == "/v1/memwing/tools/search-memory"
+    assert raw_records["memwing_http_health"][0]["endpoint"] == "/healthz"
+    assert raw_records["openclaw_plugin_tool_evidence"][0]["kind"] == "search"
+    assert "plugins.entries.memwing.enabled" in preflight_paths
+    assert "plugins.entries.memwing.hooks.allowConversationAccess" in preflight_paths
+    assert "plugins.entries.memwing.config.memwingBaseUrl" in preflight_paths
 
 
 def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp_path: Path) -> None:
     class FakeMemWingAdapter:
         def __init__(self, _config):
             self.records = [{"endpoint": "/v1/openclaw/events/ingest", "status_code": 202}]
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
 
         def ingest_seed_messages(self, *, case, run_id):
             return [
@@ -310,8 +445,14 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
         def __init__(self, _config):
             self.records = []
 
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
         def memory_search_details(self, question, *, max_results):
             assert max_results == 5
+            self.records.append(
+                {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
+            )
             return MemorySearchDetails(
                 contexts=[f"MemWing memory: {question}"],
                 results=[
@@ -510,11 +651,17 @@ def test_cli_memwing_openclaw_plugin_live_ingest_uses_feishu_not_http_ingest(
         def __init__(self, _config):
             self.records = []
 
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
         def ingest_seed_messages(self, *, case, run_id):
             raise AssertionError("plugin live ingest must not call MemWing HTTP ingest directly")
 
         def memory_search_details(self, question, *, max_results):
             searched_questions.append((question, max_results))
+            self.records.append(
+                {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
+            )
             return MemorySearchDetails(
                 contexts=[f"MemWing plugin memory: {question}"],
                 results=[
@@ -620,8 +767,14 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
         def __init__(self, _config):
             self.records = []
 
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
         def memory_search_details(self, question, *, max_results):
             assert max_results == 5
+            self.records.append(
+                {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
+            )
             return MemorySearchDetails(
                 contexts=[f"MemWing plugin memory: {question}"],
                 results=[

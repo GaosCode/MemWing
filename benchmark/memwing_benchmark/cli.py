@@ -179,6 +179,9 @@ def run(
         "feishu": [],
         "feishu_commands": [],
         "memwing": [],
+        "memwing_http_health": [],
+        "memwing_http_search": [],
+        "openclaw_plugin_tool_evidence": [],
         "memwing_ingest": [],
         "memwing_polls": [],
         "openclaw": [],
@@ -201,6 +204,7 @@ def run(
         if live:
             raise BenchmarkError("--backend memwing-http does not support --live yet")
         adapter = MemWingAdapter(config.memwing)
+        _preflight_memwing_http(adapter=adapter, raw_records=raw_records)
         if mode == "retrieval":
             results = _run_memwing_retrieval_batch(
                 run_id=run_id,
@@ -212,6 +216,7 @@ def run(
                 poll_interval_seconds=config.memwing.poll_interval_seconds,
                 timeout_seconds=config.memwing.poll_timeout_seconds,
                 yes=yes,
+                ingest_seed_events=False,
             )
         elif phase == "ingest":
             results = _run_memwing_write_ingest_batch(
@@ -233,7 +238,7 @@ def run(
             )
         else:
             raise BenchmarkError("--backend memwing-http write currently supports --phase ingest or evaluate")
-        raw_records["memwing"] = list(adapter.records)
+        _record_memwing_http_records(raw_records, adapter.records)
         finished_at = utc_now_iso()
         run_config = {
             "benchmark_version": "v1",
@@ -275,8 +280,60 @@ def run(
             adapter=adapter,
             raw_records=raw_records,
         )
-        if mode != "write":
-            raise BenchmarkError("--backend memwing-openclaw-plugin currently supports --mode write only")
+        if live and mode == "retrieval":
+            raise BenchmarkError(
+                "--backend memwing-openclaw-plugin --mode retrieval uses MemWing APIs; omit --live"
+            )
+        memwing_adapter = MemWingAdapter(config.memwing)
+        _preflight_memwing_http(adapter=memwing_adapter, raw_records=raw_records)
+        if mode == "retrieval":
+            results = _run_memwing_retrieval_batch(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                adapter=memwing_adapter,
+                judge=judge,
+                raw_records=raw_records,
+                poll_interval_seconds=config.memwing.poll_interval_seconds,
+                timeout_seconds=config.memwing.poll_timeout_seconds,
+                yes=yes,
+                ingest_seed_events=False,
+            )
+            _record_memwing_http_records(
+                raw_records, memwing_adapter.records, openclaw_plugin=True
+            )
+            raw_records["openclaw"] = [
+                command.model_dump(mode="json") for command in adapter.commands
+            ]
+            finished_at = utc_now_iso()
+            run_config = {
+                "benchmark_version": "v1",
+                "backend": backend,
+                "mode": mode,
+                "phase": phase,
+                "run_id": run_id,
+                "run_mode": run_mode,
+                "run_day": run_day,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "case_file": str(cases_path),
+                "case_ids": [case.case_id for case in cases],
+                "batch": batch,
+                "chat_id": None,
+                "seed_chat_id": None,
+                "probe_chat_id": None,
+                "live": live,
+                "config": sanitize_config_for_run(config),
+                "side_effects": raw_records["side_effects"],
+            }
+            write_run_outputs(
+                run_dir=run_dir,
+                run_config=run_config,
+                results=results,
+                raw_records=raw_records,
+            )
+            typer.echo(str(run_dir))
+            return run_dir
         if phase == "full":
             raise BenchmarkError(
                 "--backend memwing-openclaw-plugin currently supports --phase ingest or evaluate"
@@ -288,7 +345,6 @@ def run(
                 raise BenchmarkError(
                     "--backend memwing-openclaw-plugin --phase evaluate uses MemWing APIs; omit --live"
                 )
-            memwing_adapter = MemWingAdapter(config.memwing)
             results = _run_memwing_write_evaluate_batch(
                 run_id=run_id,
                 backend=backend,
@@ -297,7 +353,9 @@ def run(
                 judge=judge,
                 raw_records=raw_records,
             )
-            raw_records["memwing"] = list(memwing_adapter.records)
+            _record_memwing_http_records(
+                raw_records, memwing_adapter.records, openclaw_plugin=True
+            )
             raw_records["openclaw"] = [
                 command.model_dump(mode="json") for command in adapter.commands
             ]
@@ -369,6 +427,7 @@ def run(
             if phase == "ingest":
                 if backend == MEMWING_OPENCLAW_PLUGIN_BACKEND:
                     memwing_adapter = MemWingAdapter(config.memwing)
+                    _preflight_memwing_http(adapter=memwing_adapter, raw_records=raw_records)
                     results = _run_memwing_openclaw_plugin_write_ingest_batch(
                         run_id=run_id,
                         backend=backend,
@@ -648,6 +707,33 @@ def _restore_live_workspace(
                 "restored_present": restore.memory_flush_present,
             }
         )
+
+
+def _preflight_memwing_http(*, adapter: MemWingAdapter, raw_records: dict[str, Any]) -> None:
+    health = getattr(adapter, "health", None)
+    if callable(health):
+        _debug(raw_records, "检查 MemWing HTTP readiness")
+        health()
+        _record_memwing_http_records(raw_records, adapter.records)
+
+
+def _record_memwing_http_records(
+    raw_records: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    openclaw_plugin: bool = False,
+) -> None:
+    raw_records["memwing"] = list(records)
+    raw_records["memwing_http_health"] = [
+        record for record in records if record.get("kind") == "health"
+    ]
+    raw_records["memwing_http_search"] = [
+        record for record in records if record.get("kind") == "search"
+    ]
+    if openclaw_plugin:
+        raw_records["openclaw_plugin_tool_evidence"] = [
+            record for record in records if record.get("kind") == "search"
+        ]
 
 
 def _preflight_memwing_openclaw_plugin(
@@ -1082,12 +1168,13 @@ def _run_memwing_retrieval_batch(
     poll_interval_seconds: float,
     timeout_seconds: float,
     yes: bool,
+    ingest_seed_events: bool = True,
 ) -> list[NormalizedResult]:
     if poll_interval_seconds <= 0:
         raise BenchmarkError("memwing.poll_interval_seconds must be greater than 0")
     if timeout_seconds < 0:
         raise BenchmarkError("memwing.poll_timeout_seconds must be greater than or equal to 0")
-    if any(case.seed_messages for case in cases):
+    if ingest_seed_events and any(case.seed_messages for case in cases):
         _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
 
     results: list[NormalizedResult] = []
@@ -1099,7 +1186,11 @@ def _run_memwing_retrieval_batch(
             seed_message_count=len(case.seed_messages),
             probe_count=len(case.probes),
         )
-        ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id)
+        ingest_records = (
+            adapter.ingest_seed_messages(case=case, run_id=run_id)
+            if ingest_seed_events
+            else []
+        )
         seed_completed_at = utc_now_iso()
         raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
         source_event_ids_by_seed = {
@@ -1110,15 +1201,19 @@ def _run_memwing_retrieval_batch(
         }
 
         for probe in case.probes:
-            expected_source_event_ids = [
-                source_event_ids_by_seed[evidence_id]
-                for evidence_id in probe.gold_evidence_ids
-                if evidence_id in source_event_ids_by_seed
-            ] or [
-                source_event_id
-                for source_event_id in source_event_ids_by_seed.values()
-                if source_event_id
-            ]
+            expected_source_event_ids = (
+                [
+                    source_event_ids_by_seed[evidence_id]
+                    for evidence_id in probe.gold_evidence_ids
+                    if evidence_id in source_event_ids_by_seed
+                ]
+                or [
+                    source_event_id
+                    for source_event_id in source_event_ids_by_seed.values()
+                    if source_event_id
+                ]
+                or ([] if ingest_seed_events else list(probe.gold_evidence_ids))
+            )
             poll = _poll_memwing_readiness(
                 adapter=adapter,
                 query=probe.question,
@@ -1667,7 +1762,7 @@ def _run_memwing_openclaw_plugin_write_ingest_batch(
                 **poll,
             }
         )
-    raw_records["memwing"] = list(memwing_adapter.records)
+    _record_memwing_http_records(raw_records, memwing_adapter.records, openclaw_plugin=True)
     return results
 
 

@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from memwing_benchmark.adapters.memwing import (
+    HEALTH_ENDPOINT,
     INGEST_EVENT_ENDPOINT,
     SEARCH_MEMORY_ENDPOINT,
     MemWingAdapter,
@@ -69,6 +70,7 @@ def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> N
     assert details.raw["trace_id"] == "trace_search"
     assert adapter.records == [
         {
+            "kind": "search",
             "method": "POST",
             "endpoint": SEARCH_MEMORY_ENDPOINT,
             "status_code": 200,
@@ -85,6 +87,40 @@ def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> N
             "trace_id": "trace_search",
         }
     ]
+
+
+def test_health_checks_memwing_server_readiness() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == HEALTH_ENDPOINT
+        return httpx.Response(200, json={"ok": True})
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+
+    adapter.health()
+
+    assert adapter.records == [
+        {
+            "kind": "health",
+            "method": "GET",
+            "endpoint": HEALTH_ENDPOINT,
+            "status_code": 200,
+            "latency_ms": adapter.records[0]["latency_ms"],
+            "request_fields": [],
+        }
+    ]
+
+
+def test_health_failure_raises_readiness_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"ok": False})
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+
+    with pytest.raises(BenchmarkError, match="server is not ready"):
+        adapter.health()
+    assert adapter.records[0]["kind"] == "health"
+    assert adapter.records[0]["status_code"] == 503
 
 
 def test_ingest_seed_messages_posts_source_events_to_openclaw_ingest_url() -> None:
@@ -142,6 +178,7 @@ def test_ingest_seed_messages_posts_source_events_to_openclaw_ingest_url() -> No
     assert seen_payloads[0]["content"] == "负责人是沈南。"
     assert seen_payloads[0]["payload"]["seed_message_id"] == "bs001_s1"
     assert adapter.records[0]["endpoint"] == INGEST_EVENT_ENDPOINT
+    assert adapter.records[0]["kind"] == "ingest"
     assert adapter.records[0]["status_code"] == 202
     assert adapter.records[0]["trace_id"] == "trace_ingest"
 
@@ -176,6 +213,7 @@ def test_malformed_json_response_does_not_become_empty_success() -> None:
         adapter.memory_search_details("demo scope", limit=5)
     assert adapter.records == [
         {
+            "kind": "search",
             "method": "POST",
             "endpoint": SEARCH_MEMORY_ENDPOINT,
             "status_code": 200,
