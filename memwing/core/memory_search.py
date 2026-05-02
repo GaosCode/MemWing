@@ -10,12 +10,12 @@ from memwing.core.scope import EffectiveScope
 MemorySearchMode = Literal["current", "history"]
 MemorySearchSort = Literal["relevance", "event_time", "updated_at"]
 MemorySearchResultSource = Literal[
-    "graph",
+    "graph_backend",
     "memory_item",
     "page_memory",
-    "evidence",
+    "evidence_index",
     "working_memory",
-    "raw_event",
+    "source_event",
 ]
 
 

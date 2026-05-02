@@ -129,7 +129,7 @@ def _edge_to_result_item(edge: object) -> MemorySearchResultItem:
         id=edge_id,
         text=fact,
         score=_optional_float_attr(edge, "score"),
-        source="graph",
+        source="graph_backend",
         source_event_ids=tuple(),
         memory_item_ids=tuple(),
         valid_from=_optional_datetime_attr(edge, "valid_at"),

@@ -18,11 +18,12 @@ from memwing.core.validation import (
 MemoryAccessSort = Literal["relevance", "event_time", "updated_at"]
 MemoryAccessMode = Literal["current", "history"]
 MemoryAccessResultSource = Literal[
-    "graph",
+    "graph_backend",
     "memory_item",
     "page_memory",
-    "evidence",
+    "evidence_index",
     "working_memory",
+    "source_event",
 ]
 MAX_MEMORY_ACCESS_LIMIT = 100
 
@@ -71,11 +72,12 @@ class MemoryAccessResultItem:
         object.__setattr__(self, "id", require_text(self.id, "id"))
         object.__setattr__(self, "text", require_text(self.text, "text"))
         if self.source not in (
-            "graph",
+            "graph_backend",
             "memory_item",
             "page_memory",
-            "evidence",
+            "evidence_index",
             "working_memory",
+            "source_event",
         ):
             raise SchemaValidationError("source is not a supported memory result source")
         object.__setattr__(self, "source_event_ids", tuple(self.source_event_ids))

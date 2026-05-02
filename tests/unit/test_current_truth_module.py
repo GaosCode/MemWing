@@ -67,7 +67,7 @@ def test_current_truth_includes_raw_event_branch_as_last_resort_evidence() -> No
         assert result.current_facts == ()
         assert result.background == ()
         assert tuple(item.id for item in result.raw_events) == ("source_001",)
-        assert result.raw_events[0].source == "raw_event"
+        assert result.raw_events[0].source == "source_event"
         assert result.raw_events[0].text == "Skyline was mentioned in the raw source."
         assert result.warnings == ()
 
@@ -108,7 +108,7 @@ def test_current_truth_raw_event_fallback_ignores_unavailable_memory_items() -> 
 
         assert result.current_facts == ()
         assert tuple(item.id for item in result.raw_events) == ("source_001",)
-        assert result.raw_events[0].source == "raw_event"
+        assert result.raw_events[0].source == "source_event"
 
     for item in unavailable_items:
         asyncio.run(scenario(item))
@@ -259,7 +259,7 @@ class BarrierGraphBackend:
             id="graph_current",
             text="Skyline is current in graph.",
             score=0.9,
-            source="graph",
+            source="graph_backend",
             source_event_ids=("source_graph",),
             memory_item_ids=(),
             valid_from=NOW,
@@ -298,7 +298,7 @@ class BarrierEvidenceIndex:
             id="evidence_current",
             text="Skyline is supported by evidence.",
             score=0.6,
-            source="evidence",
+            source="evidence_index",
             source_event_ids=("source_evidence",),
             memory_item_ids=(),
             valid_from=NOW,

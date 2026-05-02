@@ -144,8 +144,8 @@ def test_recall_current_falls_back_to_raw_events_when_no_derived_memory_exists()
         )
 
         assert tuple(item.id for item in result.results) == ("source_001",)
-        assert result.results[0].source == "evidence"
-        assert result.results[0].metadata["source"] == "raw_event"
+        assert result.results[0].source == "source_event"
+        assert result.results[0].metadata["source"] == "source_event"
 
     asyncio.run(scenario())
 
@@ -257,7 +257,7 @@ def test_recall_history_uses_graph_history_and_preserves_historical_validity() -
         assert len(graph_backend.history_queries) == 1
         assert graph_backend.history_queries[0].mode == "history"
         assert tuple(item.id for item in result.results) == ("graph_fact_old",)
-        assert result.results[0].source == "graph"
+        assert result.results[0].source == "graph_backend"
         assert result.results[0].valid_to == NOW
         assert result.results[0].metadata["historical_state"] == "invalidated"
 
@@ -332,7 +332,7 @@ class HistoryGraphBackend:
             id="graph_fact_old",
             text="The project codename was Apollo.",
             score=0.8,
-            source="graph",
+            source="graph_backend",
             source_event_ids=("source_old",),
             memory_item_ids=("memory_old",),
             valid_from=NOW,

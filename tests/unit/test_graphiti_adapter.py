@@ -198,7 +198,7 @@ def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     ]
     assert result.contexts == ("The roadmap is due Friday.",)
     assert result.results[0].id == "edge_002"
-    assert result.results[0].source == "graph"
+    assert result.results[0].source == "graph_backend"
     assert result.results[0].metadata["backend"] == "graphiti"
 
 
