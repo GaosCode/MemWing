@@ -168,11 +168,11 @@ _LIST_MEMORY_ITEMS_FOR_SCOPE_SQL = """
 SELECT *
 FROM memory_items
 WHERE project_memory_space_id = %(project_memory_space_id)s
-  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
-  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (%(group_ids)s::text[] IS NULL OR group_id = ANY(%(group_ids)s::text[]))
+  AND (%(thread_id)s::text IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s::text)
   AND (
-      %(shared_group_id)s IS NULL
-      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+      %(shared_group_id)s::text IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s::text
   )
 ORDER BY {order_by}
 LIMIT %(limit)s
@@ -382,11 +382,11 @@ _LIST_MEMORY_PAGES_FOR_SCOPE_SQL = """
 SELECT *
 FROM memory_pages
 WHERE project_memory_space_id = %(project_memory_space_id)s
-  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
-  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (%(group_ids)s::text[] IS NULL OR group_id = ANY(%(group_ids)s::text[]))
+  AND (%(thread_id)s::text IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s::text)
   AND (
-      %(shared_group_id)s IS NULL
-      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+      %(shared_group_id)s::text IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s::text
   )
 ORDER BY {order_by}
 LIMIT %(limit)s

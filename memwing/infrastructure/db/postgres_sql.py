@@ -103,11 +103,11 @@ FROM source_events
 WHERE project_memory_space_id = %(project_memory_space_id)s
   AND purged_at IS NULL
   AND purge_level = 'none'
-  AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
-  AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+  AND (%(group_ids)s::text[] IS NULL OR group_id = ANY(%(group_ids)s::text[]))
+  AND (%(thread_id)s::text IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s::text)
   AND (
-      %(shared_group_id)s IS NULL
-      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+      %(shared_group_id)s::text IS NULL
+      OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s::text
   )
 ORDER BY event_time ASC, id ASC
 LIMIT %(limit)s
@@ -120,11 +120,11 @@ WITH recent_source_events AS (
     WHERE project_memory_space_id = %(project_memory_space_id)s
       AND purged_at IS NULL
       AND purge_level = 'none'
-      AND (%(group_ids)s IS NULL OR group_id = ANY(%(group_ids)s))
-      AND (%(thread_id)s IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s)
+      AND (%(group_ids)s::text[] IS NULL OR group_id = ANY(%(group_ids)s::text[]))
+      AND (%(thread_id)s::text IS NULL OR thread_id IS NOT DISTINCT FROM %(thread_id)s::text)
       AND (
-          %(shared_group_id)s IS NULL
-          OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s
+          %(shared_group_id)s::text IS NULL
+          OR shared_group_id IS NOT DISTINCT FROM %(shared_group_id)s::text
       )
     ORDER BY event_time DESC, id DESC
     LIMIT %(limit)s
