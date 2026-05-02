@@ -197,6 +197,34 @@ WHERE job.id = claim.id
 RETURNING job.*
 """
 
+_CLAIM_OUTBOX_JOBS_FOR_PROJECT_SQL = """
+WITH claim AS (
+    SELECT id
+    FROM outbox_jobs
+    WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND (
+          (status = 'pending' AND next_run_at <= %(now)s)
+       OR (status = 'processing' AND lock_expires_at <= %(now)s)
+      )
+    ORDER BY
+        CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+        next_run_at,
+        priority DESC,
+        created_at
+    LIMIT %(limit)s
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox_jobs AS job
+SET status = 'processing',
+    locked_at = %(now)s,
+    locked_by = %(worker_id)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+FROM claim
+WHERE job.id = claim.id
+RETURNING job.*
+"""
+
 _MARK_OUTBOX_SUCCEEDED_SQL = """
 UPDATE outbox_jobs
 SET status = 'succeeded',

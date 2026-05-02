@@ -8,6 +8,7 @@ from memwing.ports.event_store import OutboxLockOwnershipError
 from .postgres_derived_rows import graph_write_job_from_row, memory_graph_link_from_row
 from .postgres_derived_sql import (
     _CLAIM_GRAPH_WRITE_JOBS_SQL,
+    _CLAIM_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
     _EXTEND_GRAPH_WRITE_LOCK_SQL,
     _INSERT_GRAPH_WRITE_JOB_SQL,
     _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
@@ -70,6 +71,27 @@ class PostgresGraphWriteJobRepository:
         rows = await self._executor.fetch(
             _CLAIM_GRAPH_WRITE_JOBS_SQL,
             {
+                "now": now,
+                "worker_id": worker_id,
+                "lock_expires_at": now + lock_duration,
+                "limit": limit,
+            },
+        )
+        return tuple(graph_write_job_from_row(row) for row in rows)
+
+    async def claim_pending_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        rows = await self._executor.fetch(
+            _CLAIM_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
                 "now": now,
                 "worker_id": worker_id,
                 "lock_expires_at": now + lock_duration,

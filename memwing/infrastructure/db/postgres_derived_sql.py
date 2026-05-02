@@ -537,6 +537,62 @@ WHERE job.id = claim.id
 RETURNING job.*
 """
 
+_CLAIM_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL = """
+WITH candidates AS (
+    SELECT
+        job.id,
+        job.status,
+        job.next_run_at,
+        job.priority,
+        job.created_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id
+            ORDER BY
+                CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
+                job.next_run_at,
+                job.priority DESC,
+                job.created_at
+        ) AS group_rank
+    FROM graph_write_jobs AS job
+    WHERE job.project_memory_space_id = %(project_memory_space_id)s
+      AND (
+            (job.status = 'pending' AND job.next_run_at <= %(now)s)
+         OR (job.status = 'processing' AND job.lock_expires_at <= %(now)s)
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM graph_write_jobs AS active
+          WHERE active.project_memory_space_id = job.project_memory_space_id
+            AND active.thread_id IS NOT DISTINCT FROM job.thread_id
+            AND active.saga_id IS NOT DISTINCT FROM job.saga_id
+            AND active.status = 'processing'
+            AND (active.lock_expires_at IS NULL OR active.lock_expires_at > %(now)s)
+      )
+),
+claim AS (
+    SELECT job.id
+    FROM graph_write_jobs AS job
+    INNER JOIN candidates ON candidates.id = job.id
+    WHERE candidates.group_rank = 1
+    ORDER BY
+        CASE WHEN candidates.status = 'processing' THEN 0 ELSE 1 END,
+        candidates.next_run_at,
+        candidates.priority DESC,
+        candidates.created_at
+    LIMIT %(limit)s
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE graph_write_jobs AS job
+SET status = 'processing',
+    locked_at = %(now)s,
+    locked_by = %(worker_id)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+FROM claim
+WHERE job.id = claim.id
+RETURNING job.*
+"""
+
 _MARK_GRAPH_WRITE_SUCCEEDED_SQL = """
 UPDATE graph_write_jobs
 SET status = 'succeeded',

@@ -236,6 +236,43 @@ class InMemoryOutboxJobRepository:
             claimed.append(updated)
         return tuple(claimed)
 
+    async def claim_pending_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        eligible = [
+            job
+            for job in self._tx.state.outbox_jobs.values()
+            if job.project_memory_space_id == project_memory_space_id and _is_claimable(job, now)
+        ]
+        eligible.sort(
+            key=lambda job: (
+                0 if job.status == "pending" else 1,
+                job.next_run_at,
+                -job.priority,
+                job.created_at,
+            )
+        )
+
+        claimed: list[OutboxJob] = []
+        for job in eligible[:limit]:
+            updated = replace(
+                job,
+                status="processing",
+                locked_at=now,
+                locked_by=worker_id,
+                lock_expires_at=now + lock_duration,
+                updated_at=now,
+            )
+            self._tx.state.outbox_jobs[job.id] = updated
+            claimed.append(updated)
+        return tuple(claimed)
+
     async def mark_succeeded(
         self,
         *,

@@ -15,6 +15,7 @@ from .postgres_rows import (
 )
 from .postgres_sql import (
     _CLAIM_OUTBOX_JOBS_SQL,
+    _CLAIM_OUTBOX_JOBS_FOR_PROJECT_SQL,
     _INSERT_AUDIT_EVENT_SQL,
     _INSERT_OUTBOX_JOB_SQL,
     _INSERT_SOURCE_EVENT_SQL,
@@ -268,6 +269,27 @@ class PostgresOutboxJobRepository:
         rows = await self._executor.fetch(
             _CLAIM_OUTBOX_JOBS_SQL,
             {
+                "now": now,
+                "worker_id": worker_id,
+                "lock_expires_at": now + lock_duration,
+                "limit": limit,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
+    async def claim_pending_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        rows = await self._executor.fetch(
+            _CLAIM_OUTBOX_JOBS_FOR_PROJECT_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
                 "now": now,
                 "worker_id": worker_id,
                 "lock_expires_at": now + lock_duration,

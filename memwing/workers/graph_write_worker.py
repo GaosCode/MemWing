@@ -54,15 +54,25 @@ class GraphWriteWorker:
         *,
         now: datetime | None = None,
         limit: int = 1,
+        project_memory_space_id: str | None = None,
     ) -> GraphWriteWorkerResult:
         run_at = now or datetime.now(UTC)
         async with self._unit_of_work.transaction() as tx:
-            claimed = await tx.graph_write_jobs.claim_pending(
-                now=run_at,
-                worker_id=self._worker_id,
-                lock_duration=self._lock_duration,
-                limit=limit,
-            )
+            if project_memory_space_id is None:
+                claimed = await tx.graph_write_jobs.claim_pending(
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
+            else:
+                claimed = await tx.graph_write_jobs.claim_pending_for_project(
+                    project_memory_space_id=project_memory_space_id,
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
 
         succeeded = 0
         retried = 0

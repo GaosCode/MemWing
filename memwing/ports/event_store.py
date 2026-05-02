@@ -122,6 +122,17 @@ class OutboxJobRepositoryPort(Protocol):
     ) -> tuple[OutboxJob, ...]:
         ...
 
+    async def claim_pending_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
     async def mark_succeeded(
         self,
         *,
@@ -356,6 +367,17 @@ class GraphWriteJobRepositoryPort(Protocol):
     async def claim_pending(
         self,
         *,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[GraphWriteJob, ...]:
+        ...
+
+    async def claim_pending_for_project(
+        self,
+        *,
+        project_memory_space_id: str,
         now: datetime,
         worker_id: str,
         lock_duration: timedelta,
