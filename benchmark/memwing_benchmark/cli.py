@@ -13,7 +13,12 @@ import typer
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
 from memwing_benchmark.channels.feishu_cli import FeishuCli
 from memwing_benchmark.collectors.openclaw_trajectory import parse_trajectory_dir
-from memwing_benchmark.config import apply_overrides, load_config, sanitize_config_for_run
+from memwing_benchmark.config import (
+    apply_overrides,
+    load_config,
+    sanitize_config_for_run,
+    validate_config_for_backend,
+)
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.evaluators.llm_judge import JudgeResult, LlmJudge
 from memwing_benchmark.metrics.retrieval import recall_at_k, unique_preserve_order
@@ -113,8 +118,8 @@ def run(
     memory_poll_interval_seconds: float,
     memory_timeout_seconds: float,
 ) -> Path:
-    if backend != "openclaw-native":
-        raise BenchmarkError("v1 only supports backend=openclaw-native")
+    if backend not in {"openclaw-native", "memwing"}:
+        raise BenchmarkError("--backend must be one of: openclaw-native, memwing")
     if mode not in {"retrieval", "write"}:
         raise BenchmarkError("--mode must be one of: retrieval, write")
     if phase not in {"full", "ingest", "evaluate"}:
@@ -137,6 +142,9 @@ def run(
         chat_id=chat_id,
         trajectory_dir=trajectory_dir,
     )
+    validate_config_for_backend(config, backend=backend)
+    if backend == "memwing":
+        raise BenchmarkError("--backend memwing CLI dispatch is not implemented yet")
     cases = load_cases(cases_path, case_id=case_id)
     if not batch and len(cases) != 1:
         raise BenchmarkError("non-batch runs require exactly one case; pass --case-id or --batch")

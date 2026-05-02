@@ -23,6 +23,7 @@ from memwing_benchmark.evaluators.llm_judge import (
     RetrievalJudgeBlock,
     WriteJudgeBlock,
 )
+from memwing_benchmark.json_utils import dumps_json
 from memwing_benchmark.schema import BenchmarkCase, Probe, SeedMessage
 
 
@@ -94,6 +95,41 @@ def test_cli_requires_single_case_without_batch() -> None:
 
     assert result.exit_code == 1
     assert "non-batch runs require exactly one case" in result.output
+
+
+def test_cli_validates_memwing_config_before_dispatch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "memwing": {
+                    "base_url": "",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing",
+            "--mode",
+            "retrieval",
+            "--case-id",
+            "bs001",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "memwing.base_url is required" in result.output
 
 
 def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:

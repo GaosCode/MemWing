@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.json_utils import loads_json
 
 
@@ -47,6 +49,40 @@ class OpenClawConfig(BaseModel):
     workspace_dir: str = ""
 
 
+class MemWingConfig(BaseModel):
+    base_url: str = ""
+    agent_id: str = "main"
+    workspace_id: str = "workspace_001"
+    session_id: str = "memwing-benchmark"
+    project_memory_space_id: str = "project_001"
+    group_id: str = "benchmark_group"
+    thread_id: str = "benchmark_thread"
+    shared_group_id: str = ""
+    safe_mode: bool = False
+    ingest_timeout_seconds: float = 30
+    search_timeout_seconds: float = 30
+    settle_seconds: float = 2
+    poll_interval_seconds: float = 2
+    poll_timeout_seconds: float = 60
+
+    @field_validator(
+        "ingest_timeout_seconds",
+        "search_timeout_seconds",
+        "settle_seconds",
+        "poll_interval_seconds",
+        "poll_timeout_seconds",
+    )
+    @classmethod
+    def _validate_non_negative_seconds(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("timeout and interval values must be non-negative")
+        return value
+
+    @property
+    def normalized_base_url(self) -> str:
+        return self.base_url.rstrip("/")
+
+
 class BenchmarkConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -54,6 +90,7 @@ class BenchmarkConfig(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     openclaw: OpenClawConfig = Field(default_factory=OpenClawConfig)
+    memwing: MemWingConfig = Field(default_factory=MemWingConfig)
 
 
 def load_config(path: Path) -> BenchmarkConfig:
@@ -67,7 +104,61 @@ def load_config(path: Path) -> BenchmarkConfig:
 def sanitize_config_for_run(config: BenchmarkConfig) -> dict[str, Any]:
     data = config.model_dump(mode="json")
     data["judge"].pop("api_key", None)
+    _redact_keys(
+        data.get("feishu"),
+        {
+            "bot_app_id",
+            "bot_open_id",
+            "mention_text",
+            "chat_id",
+            "seed_chat_id",
+            "probe_chat_id",
+        },
+    )
+    memwing = data.get("memwing")
+    if isinstance(memwing, dict):
+        memwing["base_url"] = _sanitize_url(memwing.get("base_url"))
+        _redact_keys(
+            memwing,
+            {
+                "group_id",
+                "thread_id",
+                "shared_group_id",
+            },
+        )
     return data
+
+
+def validate_config_for_backend(config: BenchmarkConfig, *, backend: str) -> None:
+    if backend == "memwing":
+        if not config.memwing.normalized_base_url:
+            raise BenchmarkError("memwing.base_url is required for --backend memwing")
+        if not config.memwing.project_memory_space_id.strip():
+            raise BenchmarkError("memwing.project_memory_space_id is required")
+        if not config.memwing.group_id.strip():
+            raise BenchmarkError("memwing.group_id is required")
+        if not config.memwing.thread_id.strip():
+            raise BenchmarkError("memwing.thread_id is required")
+
+
+def _redact_keys(section: object, keys: set[str]) -> None:
+    if not isinstance(section, dict):
+        return
+    for key in keys:
+        if key in section:
+            section[key] = ""
+
+
+def _sanitize_url(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.username is None and parsed.password is None:
+        return value
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
 def apply_overrides(

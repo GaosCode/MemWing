@@ -27,6 +27,23 @@
     "agent_id": "main",
     "trajectory_dir": "",
     "configure_allowlist": false,
-    "restart_gateway": false
+    "restart_gateway": false,
+    "workspace_dir": ""
+  },
+  "memwing": {
+    "base_url": "http://127.0.0.1:8000",
+    "agent_id": "main",
+    "workspace_id": "workspace_001",
+    "session_id": "memwing-benchmark",
+    "project_memory_space_id": "project_001",
+    "group_id": "benchmark_group",
+    "thread_id": "benchmark_thread",
+    "shared_group_id": "",
+    "safe_mode": false,
+    "ingest_timeout_seconds": 30,
+    "search_timeout_seconds": 30,
+    "settle_seconds": 2,
+    "poll_interval_seconds": 2,
+    "poll_timeout_seconds": 60
   }
 }
