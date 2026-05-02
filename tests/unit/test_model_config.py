@@ -63,6 +63,7 @@ def test_model_config_resolver_reads_openclaw_plugin_config_shape() -> None:
                 "graphitiExtraction": "graph-current",
                 "graphitiEmbedding": "embedding-current",
                 "graphitiRerank": "rerank-current",
+                "evidenceEmbedding": "evidence-current",
             },
             "modelTimeoutSeconds": 30,
         }
@@ -73,6 +74,7 @@ def test_model_config_resolver_reads_openclaw_plugin_config_shape() -> None:
     assert resolver.selection_for("graphiti_extraction").model == "graph-current"
     assert resolver.selection_for("graphiti_embedding").model == "embedding-current"
     assert resolver.selection_for("graphiti_rerank").model == "rerank-current"
+    assert resolver.selection_for("evidence_embedding").model == "evidence-current"
     assert resolver.selection_for("graphiti_rerank").timeout_seconds == 30
 
 

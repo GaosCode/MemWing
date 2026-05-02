@@ -20,6 +20,7 @@ def test_model_runtime_roles_cover_product_model_paths() -> None:
         "graphiti_extraction",
         "graphiti_embedding",
         "graphiti_rerank",
+        "evidence_embedding",
     )
     assert set(get_args(MemWingModelRole)) == set(MEMWING_MODEL_ROLES)
 

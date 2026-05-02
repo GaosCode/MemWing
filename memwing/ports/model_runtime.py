@@ -10,6 +10,7 @@ MemWingModelRole = Literal[
     "graphiti_extraction",
     "graphiti_embedding",
     "graphiti_rerank",
+    "evidence_embedding",
 ]
 MemWingModelRuntime = Literal["test", "openai_compatible", "openclaw"]
 MemWingModelTransport = Literal["local", "gateway"]
@@ -20,6 +21,7 @@ MEMWING_MODEL_ROLES: tuple[MemWingModelRole, ...] = (
     "graphiti_extraction",
     "graphiti_embedding",
     "graphiti_rerank",
+    "evidence_embedding",
 )
 
 

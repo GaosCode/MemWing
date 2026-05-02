@@ -19,6 +19,7 @@ _ROLE_ENV_SUFFIXES: Mapping[MemWingModelRole, str] = {
     "graphiti_extraction": "GRAPHITI_EXTRACTION",
     "graphiti_embedding": "GRAPHITI_EMBEDDING",
     "graphiti_rerank": "GRAPHITI_RERANK",
+    "evidence_embedding": "EVIDENCE_EMBEDDING",
 }
 
 _PLUGIN_MODEL_KEYS: Mapping[str, MemWingModelRole] = {
@@ -27,6 +28,7 @@ _PLUGIN_MODEL_KEYS: Mapping[str, MemWingModelRole] = {
     "graphitiExtraction": "graphiti_extraction",
     "graphitiEmbedding": "graphiti_embedding",
     "graphitiRerank": "graphiti_rerank",
+    "evidenceEmbedding": "evidence_embedding",
 }
 
 

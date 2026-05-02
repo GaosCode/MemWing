@@ -17,5 +17,19 @@ services:
       retries: 10
       start_period: 10s
 
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - memwing_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "timeout 5 bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 volumes:
   memwing_postgres_data:
+  memwing_qdrant_data:

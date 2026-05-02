@@ -56,6 +56,13 @@
               "null"
             ],
             "minLength": 1
+          },
+          "evidenceEmbedding": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
           }
         },
         "additionalProperties": false

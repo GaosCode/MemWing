@@ -28,7 +28,8 @@ test("manifest config schema accepts documented MemWing base URL", () => {
     "longTermFilter",
     "graphitiExtraction",
     "graphitiEmbedding",
-    "graphitiRerank"
+    "graphitiRerank",
+    "evidenceEmbedding"
   ]);
 });
 

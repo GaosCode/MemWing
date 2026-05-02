@@ -31,6 +31,7 @@ def test_openclaw_plugin_schema_accepts_model_runtime_config() -> None:
         "graphitiExtraction",
         "graphitiEmbedding",
         "graphitiRerank",
+        "evidenceEmbedding",
     }
     assert models["properties"]["graphitiExtraction"]["type"] == ["string", "null"]
 
@@ -58,6 +59,7 @@ def test_openclaw_plugin_schema_allows_role_specific_model_refs() -> None:
         "graphitiExtraction": "current",
         "graphitiEmbedding": "current",
         "graphitiRerank": "current",
+        "evidenceEmbedding": "current",
     }
 
     assert set(payload).issubset(models_schema["properties"])
