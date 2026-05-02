@@ -41,6 +41,10 @@ from memwing_benchmark.schema import (
 
 app = typer.Typer(add_completion=False, invoke_without_command=True)
 
+MEMWING_CHANGED_FILE_METRICS_MISSING_REASON = (
+    "MemWing backend is evaluated through HTTP search APIs, not local memory files."
+)
+
 
 @app.callback(invoke_without_command=True)
 def main(
@@ -129,9 +133,9 @@ def run(
         raise BenchmarkError("--phase is only supported with --mode write")
     if mode == "retrieval" and live and batch:
         raise BenchmarkError("--mode retrieval --live currently supports a single case only")
-    if mode == "write" and phase in {"full", "ingest"} and not live:
+    if backend == "openclaw-native" and mode == "write" and phase in {"full", "ingest"} and not live:
         raise BenchmarkError("--mode write --phase full/ingest requires --live")
-    if mode == "write" and phase == "evaluate" and live:
+    if backend == "openclaw-native" and mode == "write" and phase == "evaluate" and live:
         raise BenchmarkError("--mode write --phase evaluate reads local memory files; omit --live")
     if memory_poll_interval_seconds <= 0:
         raise BenchmarkError("--memory-poll-interval-seconds must be greater than 0")
@@ -177,21 +181,40 @@ def run(
     )
     if backend == "memwing":
         if live:
-            raise BenchmarkError("--backend memwing retrieval does not support --live yet")
-        if mode != "retrieval":
-            raise BenchmarkError("--backend memwing currently supports --mode retrieval only")
+            raise BenchmarkError("--backend memwing does not support --live yet")
         adapter = MemWingAdapter(config.memwing)
-        results = _run_memwing_retrieval_batch(
-            run_id=run_id,
-            backend=backend,
-            cases=cases,
-            adapter=adapter,
-            judge=judge,
-            raw_records=raw_records,
-            poll_interval_seconds=config.memwing.poll_interval_seconds,
-            timeout_seconds=config.memwing.poll_timeout_seconds,
-            yes=yes,
-        )
+        if mode == "retrieval":
+            results = _run_memwing_retrieval_batch(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                adapter=adapter,
+                judge=judge,
+                raw_records=raw_records,
+                poll_interval_seconds=config.memwing.poll_interval_seconds,
+                timeout_seconds=config.memwing.poll_timeout_seconds,
+                yes=yes,
+            )
+        elif phase == "ingest":
+            results = _run_memwing_write_ingest_batch(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                adapter=adapter,
+                raw_records=raw_records,
+                yes=yes,
+            )
+        elif phase == "evaluate":
+            results = _run_memwing_write_evaluate_batch(
+                run_id=run_id,
+                backend=backend,
+                cases=cases,
+                adapter=adapter,
+                judge=judge,
+                raw_records=raw_records,
+            )
+        else:
+            raise BenchmarkError("--backend memwing write currently supports --phase ingest or evaluate")
         raw_records["memwing"] = list(adapter.records)
         finished_at = utc_now_iso()
         run_config = {
@@ -1024,6 +1047,161 @@ def _run_memwing_retrieval_batch(
                     },
                 )
             )
+    return results
+
+
+def _run_memwing_write_ingest_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    raw_records: dict[str, Any],
+    yes: bool,
+) -> list[NormalizedResult]:
+    if any(case.seed_messages for case in cases):
+        _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
+
+    results: list[NormalizedResult] = []
+    for case in cases:
+        _debug(
+            raw_records,
+            "MemWing write ingest case 开始",
+            case_id=case.case_id,
+            seed_message_count=len(case.seed_messages),
+        )
+        ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id)
+        seed_completed_at = utc_now_iso()
+        raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
+        raw_records.setdefault("memory_writes", []).append(
+            {
+                "phase": "ingest",
+                "backend": "memwing",
+                "case_id": case.case_id,
+                "seed_message_count": len(case.seed_messages),
+                "accepted_count": sum(1 for record in ingest_records if record.get("accepted") is True),
+                "source_event_ids": [
+                    record["source_event_id"]
+                    for record in ingest_records
+                    if isinstance(record.get("source_event_id"), str)
+                ],
+                "note": "MemWing ingest sends Source Events through the HTTP adapter; run --mode write --phase evaluate after indexing settles.",
+            }
+        )
+        results.append(
+            _result_from_write_ingest(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                chat_id=None,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                seed_completed_at=seed_completed_at,
+                raw_extra={
+                    "backend": "memwing",
+                    "ingest_records": ingest_records,
+                },
+                observability_note=(
+                    "MemWing write ingest sends Source Events through HTTP; evaluate after indexing settles."
+                ),
+            )
+        )
+    return results
+
+
+def _run_memwing_write_evaluate_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+) -> list[NormalizedResult]:
+    results: list[NormalizedResult] = []
+    total_cases = len(cases)
+    for index, case in enumerate(cases, start=1):
+        expected_memories = _expected_memories(case)
+        noise_memories = _noise_memories(case)
+        allowed_other_memories = _expected_memories_for_other_cases(cases, case.case_id)
+        _debug(
+            raw_records,
+            "MemWing write evaluate case 开始",
+            case_id=case.case_id,
+            case_index=index,
+            case_count=total_cases,
+            expected_memory_count=len(expected_memories),
+            noise_memory_count=len(noise_memories),
+            allowed_other_memory_count=len(allowed_other_memories),
+        )
+        searches: list[dict[str, Any]] = []
+        written_contexts: list[str] = []
+        search_latencies: list[int] = []
+        search_errors: list[str] = []
+        for item in case.expected_memory_items:
+            search = _safe_memory_search(adapter, item.fact)
+            search_raw = _memory_search_raw(search)
+            if search.error:
+                search_errors.append(search.error)
+            search_latencies.append(search.details.latency_ms)
+            written_contexts.extend(search.details.contexts)
+            searches.append(
+                {
+                    "case_id": case.case_id,
+                    "expected_memory_id": item.id,
+                    "query": item.fact,
+                    **search_raw,
+                }
+            )
+            raw_records.setdefault("memory_searches", []).append(
+                {
+                    "mode": "memwing_write_evaluate",
+                    "case_id": case.case_id,
+                    "expected_memory_id": item.id,
+                    "query": item.fact,
+                    **search_raw,
+                }
+            )
+        written_contexts = unique_preserve_order(written_contexts)
+        _debug(
+            raw_records,
+            "MemWing write evaluate search 完成",
+            case_id=case.case_id,
+            written_context_count=len(written_contexts),
+            search_error_count=len(search_errors),
+        )
+        write_result = _evaluate_write(
+            judge=judge,
+            case_id=case.case_id,
+            expected_memories=expected_memories,
+            noise_memories=noise_memories,
+            written_contexts=written_contexts,
+            allowed_other_memories=allowed_other_memories,
+        )
+        raw_records.setdefault("memory_writes", []).append(
+            {
+                "phase": "evaluate",
+                "backend": "memwing",
+                "case_id": case.case_id,
+                "searches": searches,
+                "written_context_count": len(written_contexts),
+                "changed_file_metrics_available": False,
+                "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
+                "write_judge": write_result.model_dump(mode="json") if write_result else None,
+            }
+        )
+        results.append(
+            _result_from_memwing_write(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                written_contexts=written_contexts,
+                search_latencies=search_latencies,
+                search_errors=search_errors,
+                write_result=write_result,
+                searches=searches,
+            )
+        )
     return results
 
 
@@ -2101,9 +2279,11 @@ def _result_from_write_ingest(
     run_id: str,
     backend: str,
     case: BenchmarkCase,
-    chat_id: str,
+    chat_id: str | None,
     seed_message_ids: list[str],
     seed_completed_at: str | None,
+    raw_extra: dict[str, Any] | None = None,
+    observability_note: str | None = None,
 ) -> NormalizedResult:
     return NormalizedResult(
         run_id=run_id,
@@ -2124,13 +2304,90 @@ def _result_from_write_ingest(
         tokens=TokenUsage(available=False, missing_reason="write ingest does not collect tokens"),
         observability=Observability(
             notes=[
-                "Write ingest phase only sends seed messages; evaluate memory after OpenClaw finishes writing.",
+                observability_note
+                or "Write ingest phase only sends seed messages; evaluate memory after OpenClaw finishes writing.",
             ],
         ),
         raw={
             "mode": "memory_write_ingest",
             "phase": "ingest",
             "seed_completed_at": seed_completed_at,
+            **(raw_extra or {}),
+        },
+    )
+
+
+def _result_from_memwing_write(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    seed_message_ids: list[str],
+    written_contexts: list[str],
+    search_latencies: list[int],
+    search_errors: list[str],
+    write_result: JudgeResult | None,
+    searches: list[dict[str, Any]],
+) -> NormalizedResult:
+    expected_count = len(case.expected_memory_items)
+    write = write_result.write if write_result else None
+    matched_count = len(write.matched_expected_memory_ids) if write else None
+    missing_count = (
+        len(write.missing_expected_memory_ids)
+        if write and write.missing_expected_memory_ids
+        else (expected_count - matched_count if matched_count is not None else None)
+    )
+    unexpected_count = len(write.unexpected_facts) if write else None
+    noise_count = len(write.noise_facts) if write else None
+    wrong_count = len(write.wrong_facts) if write else None
+    stale_count = len(write.stale_facts) if write else None
+    memory_recall_latency_ms = sum(search_latencies) if search_latencies else None
+    return NormalizedResult(
+        run_id=run_id,
+        backend=backend,
+        case_id=case.case_id,
+        probe_id=f"{case.case_id}_write",
+        chat_id=None,
+        seed_message_ids=seed_message_ids,
+        question="memory_write",
+        answer="",
+        expected_answer="\n".join(item.fact for item in case.expected_memory_items),
+        gold_evidence_ids=[item.id for item in case.expected_memory_items],
+        written_contexts=written_contexts,
+        durable_memory_available=bool(written_contexts),
+        extraction_timeout=False,
+        memory_search_latency_ms=memory_recall_latency_ms,
+        write_expected_count=expected_count,
+        write_matched_expected_count=matched_count,
+        write_missing_expected_count=missing_count,
+        write_unexpected_count=unexpected_count,
+        write_noise_count=noise_count,
+        write_wrong_count=wrong_count,
+        write_stale_count=stale_count,
+        write_changed_file_count=None,
+        write_written_claim_count=write.written_claim_count if write else None,
+        write_recall=write.write_recall if write else None,
+        write_precision=write.write_precision if write else None,
+        tokens=TokenUsage(available=False, missing_reason="write mode does not collect tokens"),
+        observability=Observability(
+            memory_recall_latency_ms=memory_recall_latency_ms,
+            notes=[
+                "MemWing write evaluate scores durable memory through HTTP search APIs.",
+                MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
+            ],
+        ),
+        raw={
+            "mode": "memory_write",
+            "phase": "evaluate",
+            "backend": "memwing",
+            "durable_memory_available": bool(written_contexts),
+            "extraction_timeout": False,
+            "changed_memory_files": None,
+            "changed_file_metrics_available": False,
+            "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
+            "memory_searches": searches,
+            "memory_search_errors": search_errors,
+            "write_judge": write_result.model_dump(mode="json") if write_result else None,
         },
     )
 
@@ -2254,7 +2511,7 @@ def _noise_memories(case: BenchmarkCase) -> list[GoldMemory]:
     ]
 
 
-def _safe_memory_search(adapter: OpenClawNativeAdapter, question: str) -> MemorySearchOutcome:
+def _safe_memory_search(adapter: Any, question: str) -> MemorySearchOutcome:
     try:
         return MemorySearchOutcome(details=adapter.memory_search_details(question, max_results=5))
     except Exception as exc:

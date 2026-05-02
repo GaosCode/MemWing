@@ -230,6 +230,176 @@ def test_cli_memwing_retrieval_creates_run_outputs(monkeypatch, tmp_path: Path) 
     assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
 
 
+def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp_path: Path) -> None:
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = [{"endpoint": "/v1/openclaw/events/ingest", "status_code": 202}]
+
+        def ingest_seed_messages(self, *, case, run_id):
+            return [
+                {
+                    "case_id": case.case_id,
+                    "seed_message_id": "bs001_s1",
+                    "accepted": True,
+                    "source_event_id": "source_event_001",
+                    "trace_id": "trace_ingest",
+                    "latency_ms": 3,
+                }
+            ]
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing",
+            "--mode",
+            "write",
+            "--phase",
+            "ingest",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    run_config = loads_json((run_dir / "config.json").read_bytes())
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert run_config["backend"] == "memwing"
+    assert run_config["mode"] == "write"
+    assert run_config["phase"] == "ingest"
+    assert run_config["live"] is False
+    assert normalized["backend"] == "memwing"
+    assert normalized["raw"]["mode"] == "memory_write_ingest"
+    assert normalized["raw"]["backend"] == "memwing"
+    assert len(normalized["seed_message_ids"]) == 13
+    assert raw_records["memwing_ingest"][0]["source_event_id"] == "source_event_001"
+    assert raw_records["memory_writes"][0]["phase"] == "ingest"
+
+
+def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = []
+
+        def memory_search_details(self, question, *, max_results):
+            assert max_results == 5
+            return MemorySearchDetails(
+                contexts=[f"MemWing memory: {question}"],
+                results=[
+                    {
+                        "rank": 1,
+                        "score": 0.91,
+                        "source": "memory_item",
+                        "snippet": question,
+                        "source_event_ids": ["source_event_001"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    class FakeJudge:
+        def evaluate_write(self, **kwargs):
+            assert len(kwargs["written_context"]) == 4
+            assert "MemWing memory: 云帆看板改造项目负责人是沈南。" in kwargs[
+                "written_context"
+            ]
+            assert kwargs["allowed_other_memories"] == []
+            return JudgeResult(
+                judge_type="memory_write",
+                case_id=kwargs["case_id"],
+                probe_id="bs001_write",
+                write=WriteJudgeBlock(
+                    write_recall=1.0,
+                    write_precision=1.0,
+                    written_claim_count=1,
+                    matched_expected_memory_ids=["bs001_m1"],
+                    missing_expected_memory_ids=[],
+                ),
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing",
+            "--mode",
+            "write",
+            "--phase",
+            "evaluate",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text().splitlines()[0])
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    assert normalized["backend"] == "memwing"
+    assert normalized["write_recall"] == 1.0
+    assert normalized["write_precision"] == 1.0
+    assert normalized["write_changed_file_count"] is None
+    assert normalized["raw"]["changed_file_metrics_available"] is False
+    assert "HTTP search APIs" in normalized["raw"]["changed_file_metrics_missing_reason"]
+    assert raw_records["memory_writes"][0]["changed_file_metrics_available"] is False
+    assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
+
+
 def test_offline_batch_uses_default_workspace_per_case(tmp_path: Path) -> None:
     original_workspace = str(tmp_path / "openclaw-workspace")
     preseed_cases = []

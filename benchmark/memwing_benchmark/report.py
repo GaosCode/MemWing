@@ -270,6 +270,27 @@ def render_report(
                 f"{_fmt(result.write_noise_count)} | {_fmt(result.write_wrong_count)} | "
                 f"{_fmt(result.write_stale_count)} | {result.extraction_timeout} |"
             )
+        unavailable_file_metrics = [
+            result
+            for result in results
+            if result.raw.get("mode") == "memory_write"
+            and result.raw.get("changed_file_metrics_available") is False
+        ]
+        if unavailable_file_metrics:
+            lines.extend(
+                [
+                    "",
+                    "## Write File Metrics Unavailable",
+                    "",
+                    "| case_id | reason |",
+                    "|---|---|",
+                ]
+            )
+            for result in unavailable_file_metrics:
+                lines.append(
+                    f"| {result.case_id} | "
+                    f"{_fmt(result.raw.get('changed_file_metrics_missing_reason'))} |"
+                )
         lines.extend(["", "## Written Memory Contexts", ""])
         for result in results:
             if not result.written_contexts:

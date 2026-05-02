@@ -75,3 +75,43 @@ def test_scores_and_report_include_missing_data() -> None:
     assert "| bs001 | bs001_p1 | oc_seed | oc_probe | False | True | null |" in report
     assert "OpenClaw Retrieved Contexts" in report
     assert "云帆看板改造项目负责人确定为沈南" in report
+
+
+def test_write_report_explains_unavailable_file_diff_metrics() -> None:
+    result = NormalizedResult(
+        run_id="run1",
+        backend="memwing",
+        case_id="bs001",
+        probe_id="bs001_write",
+        chat_id=None,
+        question="memory_write",
+        answer="",
+        expected_answer="负责人是沈南。",
+        gold_evidence_ids=["bs001_m1"],
+        written_contexts=["MemWing memory: 负责人是沈南。"],
+        durable_memory_available=True,
+        write_expected_count=1,
+        write_matched_expected_count=1,
+        write_missing_expected_count=0,
+        write_changed_file_count=None,
+        write_written_claim_count=1,
+        write_recall=1.0,
+        write_precision=1.0,
+        raw={
+            "mode": "memory_write",
+            "changed_file_metrics_available": False,
+            "changed_file_metrics_missing_reason": (
+                "MemWing backend is evaluated through HTTP search APIs, not local memory files."
+            ),
+        },
+    )
+
+    report = render_report(
+        run_config={"run_id": "run1", "backend": "memwing"},
+        scores=build_scores([result]),
+        results=[result],
+    )
+
+    assert "Write File Metrics Unavailable" in report
+    assert "HTTP search APIs" in report
+    assert "| bs001 | 1 | 1 | 0 | 1.0000 | 1.0000 | null | 1 |" in report
