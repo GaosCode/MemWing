@@ -57,3 +57,4 @@ memwing/infrastructure/graph/graphiti/**/.ruff_cache/
 memwing/infrastructure/graph/graphiti/**/*.db
 memwing/infrastructure/graph/graphiti/**/*.sqlite
 memwing/infrastructure/graph/graphiti/**/*.sqlite3
+.gstack/
