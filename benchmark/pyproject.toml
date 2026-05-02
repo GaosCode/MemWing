@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 memwing-benchmark = "memwing_benchmark.cli:app"
+memwing-benchmark-pg-seed = "memwing_benchmark.seed_pg:app"
 
 [build-system]
 requires = ["hatchling"]
