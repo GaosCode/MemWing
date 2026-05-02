@@ -2763,6 +2763,9 @@ def _result_from_eval(
         ),
         retrieval_top_start_line=_optional_int(raw.get("memory_search_top_start_line")),
         retrieval_top_end_line=_optional_int(raw.get("memory_search_top_end_line")),
+        retrieval_source_mix=_int_dict(raw.get("memory_search_source_mix")),
+        memory_search_warnings=_dict_list(raw.get("memory_search_warnings")),
+        readiness_summary=raw.get("readiness") if isinstance(raw.get("readiness"), dict) else {},
         retrieval_recall_at_1=(
             retrieval_result.retrieval.recall_at_1 if retrieval_result else None
         ),
@@ -3186,12 +3189,15 @@ def _safe_memory_search(adapter: Any, question: str) -> MemorySearchOutcome:
 
 def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
     top = search.details.results[0] if search.details.results else {}
+    raw_warnings = search.details.raw.get("warnings") if search.details.raw else None
     return {
         "memory_search_error": search.error,
         "memory_search_latency_ms": search.details.latency_ms,
         "memory_search_result_count": len(search.details.results),
         "memory_search_results": search.details.results,
         "memory_search_raw": search.details.raw,
+        "memory_search_source_mix": _source_mix(search.details.results),
+        "memory_search_warnings": raw_warnings if isinstance(raw_warnings, list) else [],
         "memory_search_top_score": top.get("score") if isinstance(top, dict) else None,
         "memory_search_top_vector_score": top.get("vectorScore") if isinstance(top, dict) else None,
         "memory_search_top_text_score": top.get("textScore") if isinstance(top, dict) else None,
@@ -3199,6 +3205,32 @@ def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
         "memory_search_top_start_line": top.get("startLine") if isinstance(top, dict) else None,
         "memory_search_top_end_line": top.get("endLine") if isinstance(top, dict) else None,
     }
+
+
+def _source_mix(results: list[dict[str, Any]]) -> dict[str, int]:
+    mix: dict[str, int] = {}
+    for result in results:
+        source = result.get("source")
+        if not isinstance(source, str) or not source:
+            source = "unknown"
+        mix[source] = mix.get(source, 0) + 1
+    return mix
+
+
+def _int_dict(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, int)
+    }
+
+
+def _dict_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _message_text(message: dict[str, Any]) -> str:

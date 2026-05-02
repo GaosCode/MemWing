@@ -223,9 +223,14 @@ class MemWingAdapter:
     def cleanup_benchmark_scope(self, scope: MemWingCaseScope) -> dict[str, Any]:
         body, _latency_ms = self._post_json(
             endpoint=CLEANUP_BENCHMARK_SCOPE_ENDPOINT,
-            payload={"scope": scope.payload()},
+            payload={
+                "agent_id": self.config.agent_id,
+                "workspace_id": self.config.workspace_id,
+                "session_id": self._runtime_session_id(scope),
+                "scope": scope.payload(),
+            },
             timeout_seconds=self.config.ingest_timeout_seconds,
-            request_fields=["scope"],
+            request_fields=["agent_id", "workspace_id", "session_id", "scope"],
         )
         return body
 
@@ -243,15 +248,17 @@ class MemWingAdapter:
         *,
         scope: MemWingCaseScope,
         expected_source_event_ids: list[str],
+        queries: list[str] | None = None,
     ) -> dict[str, Any]:
         body, _latency_ms = self._post_json(
             endpoint=BENCHMARK_READINESS_ENDPOINT,
             payload={
                 "scope": scope.payload(),
                 "expected_source_event_ids": expected_source_event_ids,
+                "queries": queries or [],
             },
             timeout_seconds=self.config.search_timeout_seconds,
-            request_fields=["scope", "expected_source_event_ids"],
+            request_fields=["scope", "expected_source_event_ids", "queries"],
         )
         return body
 
@@ -268,6 +275,7 @@ class MemWingAdapter:
             readiness = self.benchmark_readiness(
                 scope=scope,
                 expected_source_event_ids=expected_source_event_ids,
+                queries=[probe.question for probe in case.probes],
             )
             attempts.append(readiness)
             if readiness.get("ready") is True:
@@ -298,7 +306,7 @@ class MemWingAdapter:
         return {
             "agent_id": self.config.agent_id,
             "workspace_id": self.config.workspace_id,
-            "session_id": self.config.session_id,
+            "session_id": self._runtime_session_id(scope),
             "query": query,
             "mode": "current",
             "limit": limit,
@@ -322,7 +330,7 @@ class MemWingAdapter:
         return {
             "agent_id": self.config.agent_id,
             "workspace_id": self.config.workspace_id,
-            "session_id": self.config.session_id,
+            "session_id": self._runtime_session_id(scope),
             "run_id": run_id,
             "benchmark_case_id": case.case_id,
             "seed_message_id": message.id,
@@ -355,6 +363,11 @@ class MemWingAdapter:
         if self.config.shared_group_id:
             scope["shared_group_id"] = self.config.shared_group_id
         return scope
+
+    def _runtime_session_id(self, scope: MemWingCaseScope | None) -> str:
+        if scope is not None:
+            return scope.thread_id
+        return self.config.session_id
 
     def _post_json(
         self,

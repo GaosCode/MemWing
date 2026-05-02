@@ -244,6 +244,7 @@ def test_ingest_seed_messages_includes_benchmark_metadata_and_case_scope() -> No
 
     payload = seen_payloads[0]
     assert payload["benchmark_case_id"] == "bs001"
+    assert payload["session_id"] == "benchmark:bs001"
     assert payload["seed_message_id"] == "bs001_s1"
     assert payload["run_id"] == "run1"
     assert payload["idempotency_key"].startswith("mwb:bs001:bs001_s1:")
@@ -280,6 +281,9 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
         (
             CLEANUP_BENCHMARK_SCOPE_ENDPOINT,
             {
+                "agent_id": "main",
+                "workspace_id": "workspace_001",
+                "session_id": "benchmark:bs001",
                 "scope": {
                     "project_memory_space_id": "benchmark:run1:bs001",
                     "group_id": "benchmark:bs001",
@@ -306,6 +310,7 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
                     "thread_id": "benchmark:bs001",
                 },
                 "expected_source_event_ids": ["source_event_001"],
+                "queries": [],
             },
         ),
     ]

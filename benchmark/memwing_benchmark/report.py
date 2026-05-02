@@ -200,11 +200,28 @@ def render_report(
         f"- evidence_correct_rate: {_fmt(scores.get('evidence_correct_rate'))}",
         f"- avg_answer_latency_ms: {_fmt(scores.get('avg_answer_latency_ms'))}",
         "",
+        "## MemWing Pipeline",
+        "",
+        "| case_id | probe_id | ready | sources | warnings | pending_jobs | dead_letters |",
+        "|---|---|---|---|---|---:|---:|",
+    ]
+    for result in results:
+        lines.append(
+            f"| {result.case_id} | {result.probe_id} | {_fmt(_readiness_ready(result))} | "
+            f"{_fmt(_source_mix_text(result.retrieval_source_mix))} | "
+            f"{_fmt(_warnings_text(result.memory_search_warnings))} | "
+            f"{_fmt(_readiness_job_count(result, 'pending_count'))} | "
+            f"{_fmt(_readiness_job_count(result, 'dead_letter_count'))} |"
+        )
+    lines.extend(
+        [
+            "",
         "## Durable Memory",
         "",
         "| case_id | probe_id | seed_chat_id | probe_chat_id | available | timeout | latency_ms |",
         "|---|---|---|---|---|---|---:|",
-    ]
+        ]
+    )
     for result in results:
         lines.append(
             f"| {result.case_id} | {result.probe_id} | {_fmt(result.seed_chat_id)} | "
@@ -445,3 +462,43 @@ def _hit_location(hit: dict[str, Any]) -> str | None:
     if isinstance(start, int) and isinstance(end, int):
         return f"{path}:{start}-{end}"
     return path
+
+
+def _source_mix_text(source_mix: dict[str, int]) -> str | None:
+    if not source_mix:
+        return None
+    return ", ".join(f"{key}:{source_mix[key]}" for key in sorted(source_mix))
+
+
+def _warnings_text(warnings: list[dict[str, Any]]) -> str | None:
+    if not warnings:
+        return None
+    labels: list[str] = []
+    for warning in warnings:
+        branch = warning.get("branch")
+        reason = warning.get("reason_code")
+        if isinstance(branch, str) and isinstance(reason, str):
+            labels.append(f"{branch}:{reason}")
+    return ", ".join(labels) if labels else f"{len(warnings)} warning(s)"
+
+
+def _readiness_ready(result: NormalizedResult) -> bool | None:
+    readiness = _readiness_final(result)
+    ready = readiness.get("ready")
+    return ready if isinstance(ready, bool) else None
+
+
+def _readiness_job_count(result: NormalizedResult, field_name: str) -> int | None:
+    readiness = _readiness_final(result)
+    jobs = readiness.get("jobs")
+    if not isinstance(jobs, dict):
+        return None
+    value = jobs.get(field_name)
+    return value if isinstance(value, int) else None
+
+
+def _readiness_final(result: NormalizedResult) -> dict[str, Any]:
+    final = result.readiness_summary.get("final")
+    if isinstance(final, dict):
+        return final
+    return result.readiness_summary

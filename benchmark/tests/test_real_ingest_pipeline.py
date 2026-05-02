@@ -52,6 +52,11 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
     assert raw_records["memwing_pipeline_drains"]
     assert raw_records["memwing_readiness"]
     assert raw_records["memory_searches"][0]["mode"] == "memwing_real_ingest_retrieval"
+    assert results[0].retrieval_source_mix == {"evidence_index": 1}
+    assert results[0].memory_search_warnings == [
+        {"branch": "graph_backend", "reason_code": "timeout"}
+    ]
+    assert results[0].readiness_summary["final"]["ready"] is True
 
 
 def test_real_ingest_run_config_records_backend_semantics() -> None:
@@ -153,13 +158,13 @@ class RecordingAdapter:
             results=[
                 {
                     "rank": 1,
-                    "source": "memory_item",
+                    "source": "evidence_index",
                     "snippet": "云帆看板改造项目负责人确定为沈南。",
                     "source_event_ids": ["source_event:bs001_s1"],
                 }
             ],
             latency_ms=5,
-            raw={"results": []},
+            raw={"results": [], "warnings": [{"branch": "graph_backend", "reason_code": "timeout"}]},
         )
 
 

@@ -27,6 +27,16 @@ def test_scores_and_report_include_missing_data() -> None:
         retrieval_top_path="memory/2026-04-26.md",
         retrieval_top_start_line=1,
         retrieval_top_end_line=5,
+        retrieval_source_mix={"evidence_index": 1},
+        memory_search_warnings=[
+            {"branch": "graph_backend", "reason_code": "provider_transient_failure"}
+        ],
+        readiness_summary={
+            "final": {
+                "ready": True,
+                "jobs": {"pending_count": 0, "dead_letter_count": 0},
+            }
+        },
         retrieval_recall_at_1=False,
         retrieval_recall_at_3=False,
         retrieval_recall_at_5=False,
@@ -75,6 +85,9 @@ def test_scores_and_report_include_missing_data() -> None:
     assert "| bs001 | bs001_p1 | oc_seed | oc_probe | False | True | null |" in report
     assert "OpenClaw Retrieved Contexts" in report
     assert "云帆看板改造项目负责人确定为沈南" in report
+    assert "MemWing Pipeline" in report
+    assert "evidence_index:1" in report
+    assert "graph_backend:provider_transient_failure" in report
 
 
 def test_write_report_explains_unavailable_file_diff_metrics() -> None:
