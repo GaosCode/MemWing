@@ -84,6 +84,11 @@ def evidence_vector_size_from_env(env: Mapping[str, str] | None = None) -> int:
     return vector_size
 
 
+def benchmark_admin_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
+    value = _optional_env(env, "MEMWING_BENCHMARK_ADMIN_ENABLED")
+    return value is not None and value.casefold() == "true"
+
+
 def _optional_env(env: Mapping[str, str] | None, name: str) -> str | None:
     source = os.environ if env is None else env
     value = source.get(name)

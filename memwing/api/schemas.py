@@ -22,6 +22,7 @@ from memwing.api.agent_runtime import (
     RememberEventResult,
     SortOrder,
 )
+from memwing.api.benchmark_admin import BenchmarkAdminHttpResponse
 from memwing.api.control import (
     ControlIntegrationResponse,
     ControlIntegrationsResponse,
@@ -72,6 +73,7 @@ __all__ = [
     "AgentRuntimeRef",
     "AgentRuntimeStatusRequest",
     "AgentRuntimeStatusResult",
+    "BenchmarkAdminHttpResponse",
     "ErrorResponse",
     "ControlForgettingReviewItemResponse",
     "ControlGraphLinkResponse",

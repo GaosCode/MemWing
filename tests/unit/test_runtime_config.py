@@ -2,6 +2,7 @@ import pytest
 
 from memwing.api.runtime_config import (
     OpenClawRuntimeUnavailableError,
+    benchmark_admin_enabled_from_env,
     evidence_backend_from_env,
     evidence_vector_size_from_env,
     graph_backend_from_env,
@@ -46,3 +47,9 @@ def test_runtime_config_rejects_invalid_backends() -> None:
 def test_runtime_config_rejects_invalid_evidence_vector_size(raw_value: str) -> None:
     with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_EVIDENCE_VECTOR_SIZE"):
         evidence_vector_size_from_env({"MEMWING_EVIDENCE_VECTOR_SIZE": raw_value})
+
+
+def test_benchmark_admin_enabled_requires_literal_true() -> None:
+    assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "true"}) is True
+    assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "1"}) is False
+    assert benchmark_admin_enabled_from_env({}) is False
