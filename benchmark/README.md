@@ -111,6 +111,22 @@ Use `config.example.json` as the starting point and replace every placeholder in
     "configure_allowlist": false,
     "restart_gateway": false,
     "workspace_dir": ""
+  },
+  "memwing": {
+    "base_url": "http://127.0.0.1:8000",
+    "agent_id": "main",
+    "workspace_id": "workspace_001",
+    "session_id": "memwing-benchmark",
+    "project_memory_space_id": "project_001",
+    "group_id": "benchmark_group",
+    "thread_id": "benchmark_thread",
+    "shared_group_id": "",
+    "safe_mode": false,
+    "ingest_timeout_seconds": 30,
+    "search_timeout_seconds": 30,
+    "settle_seconds": 2,
+    "poll_interval_seconds": 2,
+    "poll_timeout_seconds": 60
   }
 }
 ```
@@ -128,6 +144,19 @@ Configuration notes:
   Lark/Feishu chat allowlist.
 - `openclaw.restart_gateway=true` allows the harness to restart OpenClaw gateway
   after configuration changes.
+- `memwing.base_url` is required for the MemWing HTTP backend and should point
+  at the MemWing server under test.
+- `memwing.project_memory_space_id` is the Project Memory Space scope hint used
+  for benchmark Source Event ingest and memory search.
+- `memwing.group_id`, `memwing.thread_id`, and `memwing.shared_group_id` are
+  local scope hints. Do not commit private platform chat, group, thread, or
+  shared-group values.
+- `memwing.safe_mode` documents the intended local test posture only. Effective
+  Scope and Safe Mode remain server-authoritative.
+- `memwing.ingest_timeout_seconds`, `memwing.search_timeout_seconds`,
+  `memwing.settle_seconds`, `memwing.poll_interval_seconds`, and
+  `memwing.poll_timeout_seconds` control local benchmark HTTP and readiness
+  timing.
 
 Do not commit `config.local.json`, `.env`, generated run records, chat exports,
 or raw memory snapshots unless they have been reviewed and sanitized.
@@ -203,7 +232,7 @@ pnpm openclaw memory search \
 | Option | Default | Description |
 |---|---|---|
 | `--config` | `config.example.json` | Config file path. Use `config.local.json` for real runs. |
-| `--backend` | `openclaw-native` | Benchmark backend. v1 supports OpenClaw native only. |
+| `--backend` | `openclaw-native` | Benchmark backend: `openclaw-native` or `memwing`. MemWing currently supports retrieval mode through the HTTP API. |
 | `--mode` | `retrieval` | Run mode: `retrieval` or `write`. |
 | `--phase` | `full` | Write mode phase: `full`, `ingest`, or `evaluate`. |
 | `--cases` | `datasets` | Case file or directory. |
@@ -444,8 +473,9 @@ Common `run_mode` values:
 
 Generated files:
 
-- `config.json`: sanitized run configuration. API keys are removed, but paths and
-  chat IDs may still reveal local or organizational context.
+- `config.json`: sanitized run configuration. API keys, Feishu bot identifiers,
+  Feishu chat identifiers, MemWing group/thread hints, and URL credentials are
+  removed; paths and non-secret endpoints may still reveal local context.
 - `normalized.jsonl`: structured probe or case results.
 - `scores.json`: aggregate metrics.
 - `report.md`: human-readable report for review.
@@ -491,7 +521,8 @@ Metric caveats:
 
 ## Known Limitations
 
-- v1 supports only `--backend openclaw-native`.
+- `--backend memwing` currently supports retrieval mode only; MemWing write mode
+  remains a later checkpoint.
 - Live retrieval does not support batch mode.
 - Write ingest does not verify that asynchronous memory writing has completed.
 - Write evaluate reads the current OpenClaw workspace; verify the workspace before

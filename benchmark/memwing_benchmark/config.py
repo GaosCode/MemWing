@@ -80,7 +80,7 @@ class MemWingConfig(BaseModel):
 
     @property
     def normalized_base_url(self) -> str:
-        return self.base_url.rstrip("/")
+        return self.base_url.strip().rstrip("/")
 
 
 class BenchmarkConfig(BaseModel):
@@ -151,6 +151,9 @@ def _redact_keys(section: object, keys: set[str]) -> None:
 
 def _sanitize_url(value: object) -> str:
     if not isinstance(value, str) or not value:
+        return ""
+    value = value.strip()
+    if not value:
         return ""
     parsed = urlsplit(value)
     if parsed.username is None and parsed.password is None:

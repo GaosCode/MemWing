@@ -43,6 +43,31 @@ def test_validate_memwing_backend_requires_runtime_scope_fields(tmp_path: Path) 
         raise AssertionError("expected BenchmarkError")
 
 
+def test_validate_memwing_backend_rejects_whitespace_base_url(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "memwing": {
+                    "base_url": "   ",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+
+    try:
+        validate_config_for_backend(config, backend="memwing")
+    except BenchmarkError as exc:
+        assert "memwing.base_url is required" in str(exc)
+    else:
+        raise AssertionError("expected BenchmarkError")
+
+
 def test_sanitize_config_for_run_removes_config_local_private_values(tmp_path: Path) -> None:
     config_path = tmp_path / "config.local.json"
     config_path.write_text(
