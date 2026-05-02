@@ -43,7 +43,13 @@ def main(
         return
     if action in {"replace", "cleanup"} and not yes:
         raise typer.BadParameter("cleanup actions require --yes")
-    _run_psql(sql, database_url=database_url)
+    run_pg_seed(
+        config=config,
+        target_cases=target_cases,
+        cleanup_cases=cleanup_cases,
+        action=action,
+        database_url=database_url,
+    )
     target_ids = ", ".join(case.case_id for case in target_cases)
     typer.echo(f"{action} completed for {target_ids}")
 
@@ -65,6 +71,33 @@ def build_pg_seed_sql(
             statements.extend(_memory_item_sql(config, case))
     statements.append("COMMIT;")
     return "\n\n".join(statements)
+
+
+def run_pg_seed(
+    *,
+    config: BenchmarkConfig,
+    target_cases: list[BenchmarkCase],
+    cleanup_cases: list[BenchmarkCase],
+    action: Action,
+    database_url: str | None = None,
+) -> dict[str, object]:
+    sql = build_pg_seed_sql(
+        config=config,
+        target_cases=target_cases,
+        cleanup_cases=cleanup_cases,
+        action=action,
+    )
+    _run_psql(sql, database_url=database_url)
+    return {
+        "action": action,
+        "target_case_ids": [case.case_id for case in target_cases],
+        "cleanup_case_ids": [case.case_id for case in cleanup_cases],
+        "target_source_event_count": sum(len(case.seed_messages) for case in target_cases),
+        "target_memory_item_count": sum(len(case.expected_memory_items) for case in target_cases),
+        "cleanup_source_event_count": sum(len(case.seed_messages) for case in cleanup_cases),
+        "cleanup_memory_item_count": sum(len(case.expected_memory_items) for case in cleanup_cases),
+        "runner": "database_url" if database_url else "docker_compose_postgres",
+    }
 
 
 def _cleanup_sql(cases: list[BenchmarkCase]) -> list[str]:
@@ -233,7 +266,7 @@ def _case_memory_ids(cases: Iterable[BenchmarkCase]) -> list[str]:
 
 def _run_psql(sql: str, *, database_url: str | None) -> None:
     if database_url:
-        command = ["psql", database_url, "-v", "ON_ERROR_STOP=1"]
+        command = ["psql", database_url, "-X", "-q", "-v", "ON_ERROR_STOP=1"]
         cwd = None
     else:
         command = [
@@ -247,6 +280,8 @@ def _run_psql(sql: str, *, database_url: str | None) -> None:
             "memwing",
             "-d",
             "memwing",
+            "-X",
+            "-q",
             "-v",
             "ON_ERROR_STOP=1",
         ]

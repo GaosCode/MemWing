@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha1
 import time
@@ -17,6 +18,41 @@ from memwing_benchmark.schema import BenchmarkCase, SeedMessage
 INGEST_EVENT_ENDPOINT = "/v1/openclaw/events/ingest"
 SEARCH_MEMORY_ENDPOINT = "/v1/memwing/tools/search-memory"
 HEALTH_ENDPOINT = "/healthz"
+CLEANUP_BENCHMARK_SCOPE_ENDPOINT = "/v1/memwing/admin/benchmark/cleanup-scope"
+DRAIN_BENCHMARK_PIPELINE_ENDPOINT = "/v1/memwing/admin/benchmark/drain"
+BENCHMARK_READINESS_ENDPOINT = "/v1/memwing/admin/benchmark/readiness"
+
+
+@dataclass(frozen=True)
+class MemWingCaseScope:
+    project_memory_space_id: str
+    group_id: str
+    thread_id: str
+    shared_group_id: str | None = None
+
+    def payload(self) -> dict[str, str]:
+        scope = {
+            "project_memory_space_id": self.project_memory_space_id,
+            "group_id": self.group_id,
+            "thread_id": self.thread_id,
+        }
+        if self.shared_group_id:
+            scope["shared_group_id"] = self.shared_group_id
+        return scope
+
+
+def memwing_case_scope(
+    *,
+    config: MemWingConfig,
+    run_id: str,
+    case_id: str,
+) -> MemWingCaseScope:
+    return MemWingCaseScope(
+        project_memory_space_id=f"benchmark:{run_id}:{case_id}",
+        group_id=f"benchmark:{case_id}",
+        thread_id=f"benchmark:{case_id}",
+        shared_group_id=config.shared_group_id or None,
+    )
 
 
 class MemWingAdapter:
@@ -93,6 +129,7 @@ class MemWingAdapter:
         *,
         limit: int | None = None,
         max_results: int | None = None,
+        scope: MemWingCaseScope | None = None,
     ) -> MemorySearchDetails:
         requested_limit = limit if limit is not None else max_results
         if requested_limit is None:
@@ -103,7 +140,7 @@ class MemWingAdapter:
         endpoint = SEARCH_MEMORY_ENDPOINT
         body, latency_ms = self._post_json(
             endpoint=endpoint,
-            payload=self._search_payload(query=query, limit=requested_limit),
+            payload=self._search_payload(query=query, limit=requested_limit, scope=scope),
             timeout_seconds=self.config.search_timeout_seconds,
             request_fields=[
                 "agent_id",
@@ -138,6 +175,7 @@ class MemWingAdapter:
         *,
         case: BenchmarkCase,
         run_id: str,
+        scope: MemWingCaseScope | None = None,
     ) -> list[dict[str, Any]]:
         ingest_records: list[dict[str, Any]] = []
         for sequence, message in enumerate(case.seed_messages):
@@ -150,6 +188,7 @@ class MemWingAdapter:
                     message=message,
                     run_id=run_id,
                     sequence=sequence,
+                    scope=scope,
                 ),
                 timeout_seconds=self.config.ingest_timeout_seconds,
                 request_fields=[
@@ -157,6 +196,8 @@ class MemWingAdapter:
                     "workspace_id",
                     "session_id",
                     "run_id",
+                    "benchmark_case_id",
+                    "seed_message_id",
                     "message_id",
                     "hook_name",
                     "sequence",
@@ -179,14 +220,81 @@ class MemWingAdapter:
             )
         return ingest_records
 
-    def _search_payload(self, *, query: str, limit: int) -> dict[str, Any]:
-        scope = {
-            "project_memory_space_id": self.config.project_memory_space_id,
-            "group_id": self.config.group_id,
-            "thread_id": self.config.thread_id,
-        }
-        if self.config.shared_group_id:
-            scope["shared_group_id"] = self.config.shared_group_id
+    def cleanup_benchmark_scope(self, scope: MemWingCaseScope) -> dict[str, Any]:
+        body, _latency_ms = self._post_json(
+            endpoint=CLEANUP_BENCHMARK_SCOPE_ENDPOINT,
+            payload={"scope": scope.payload()},
+            timeout_seconds=self.config.ingest_timeout_seconds,
+            request_fields=["scope"],
+        )
+        return body
+
+    def drain_benchmark_pipeline(self, scope: MemWingCaseScope) -> dict[str, Any]:
+        body, _latency_ms = self._post_json(
+            endpoint=DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
+            payload={"scope": scope.payload()},
+            timeout_seconds=self.config.ingest_timeout_seconds,
+            request_fields=["scope"],
+        )
+        return body
+
+    def benchmark_readiness(
+        self,
+        *,
+        scope: MemWingCaseScope,
+        expected_source_event_ids: list[str],
+    ) -> dict[str, Any]:
+        body, _latency_ms = self._post_json(
+            endpoint=BENCHMARK_READINESS_ENDPOINT,
+            payload={
+                "scope": scope.payload(),
+                "expected_source_event_ids": expected_source_event_ids,
+            },
+            timeout_seconds=self.config.search_timeout_seconds,
+            request_fields=["scope", "expected_source_event_ids"],
+        )
+        return body
+
+    def wait_benchmark_readiness(
+        self,
+        *,
+        case: BenchmarkCase,
+        scope: MemWingCaseScope,
+        expected_source_event_ids: list[str],
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + self.config.poll_timeout_seconds
+        attempts: list[dict[str, Any]] = []
+        while True:
+            readiness = self.benchmark_readiness(
+                scope=scope,
+                expected_source_event_ids=expected_source_event_ids,
+            )
+            attempts.append(readiness)
+            if readiness.get("ready") is True:
+                return {
+                    "case_id": case.case_id,
+                    "ready": True,
+                    "attempts": attempts,
+                    "final": readiness,
+                }
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {
+                    "case_id": case.case_id,
+                    "ready": False,
+                    "attempts": attempts,
+                    "final": readiness,
+                    "timeout": True,
+                }
+            time.sleep(min(self.config.poll_interval_seconds, remaining))
+
+    def _search_payload(
+        self,
+        *,
+        query: str,
+        limit: int,
+        scope: MemWingCaseScope | None,
+    ) -> dict[str, Any]:
         return {
             "agent_id": self.config.agent_id,
             "workspace_id": self.config.workspace_id,
@@ -194,7 +302,7 @@ class MemWingAdapter:
             "query": query,
             "mode": "current",
             "limit": limit,
-            "scope": scope,
+            "scope": self._scope_payload(scope),
         }
 
     def _ingest_payload(
@@ -204,6 +312,7 @@ class MemWingAdapter:
         message: SeedMessage,
         run_id: str,
         sequence: int,
+        scope: MemWingCaseScope | None,
     ) -> dict[str, Any]:
         idempotency_key = _idempotency_key(
             run_id=run_id,
@@ -215,15 +324,19 @@ class MemWingAdapter:
             "workspace_id": self.config.workspace_id,
             "session_id": self.config.session_id,
             "run_id": run_id,
+            "benchmark_case_id": case.case_id,
+            "seed_message_id": message.id,
             "message_id": message.id,
             "hook_name": "ingest",
             "sequence": sequence,
             "idempotency_key": idempotency_key,
-            "scope": self._scope_payload(),
+            "scope": self._scope_payload(scope),
             "content": message.content,
             "payload": {
                 "benchmark_case_id": case.case_id,
                 "seed_message_id": message.id,
+                "run_id": run_id,
+                "idempotency_key": idempotency_key,
                 "sender": message.sender,
                 "message_type": message.message_type,
                 "source": message.source,
@@ -231,7 +344,9 @@ class MemWingAdapter:
             "event_time": message.time or case.case_time or datetime.now(timezone.utc).isoformat(),
         }
 
-    def _scope_payload(self) -> dict[str, str]:
+    def _scope_payload(self, scope: MemWingCaseScope | None = None) -> dict[str, str]:
+        if scope is not None:
+            return scope.payload()
         scope = {
             "project_memory_space_id": self.config.project_memory_space_id,
             "group_id": self.config.group_id,
@@ -378,6 +493,12 @@ def _request_kind(endpoint: str) -> str:
         return "ingest"
     if endpoint == HEALTH_ENDPOINT:
         return "health"
+    if endpoint == CLEANUP_BENCHMARK_SCOPE_ENDPOINT:
+        return "benchmark_cleanup"
+    if endpoint == DRAIN_BENCHMARK_PIPELINE_ENDPOINT:
+        return "benchmark_drain"
+    if endpoint == BENCHMARK_READINESS_ENDPOINT:
+        return "benchmark_readiness"
     return "http"
 
 

@@ -169,6 +169,49 @@ class OpenClawNativeAdapter:
     def restart_gateway(self) -> None:
         self._run(["pnpm", "openclaw", "gateway", "restart"])
 
+    def collect_memwing_plugin_evidence(
+        self,
+        *,
+        trajectory_dir: Path | None = None,
+    ) -> list[dict[str, Any]]:
+        evidence: list[dict[str, Any]] = []
+        for index, command in enumerate(self.commands):
+            signal = _memwing_plugin_signal(f"{command.stdout}\n{command.stderr}")
+            if signal is not None:
+                evidence.append(
+                    {
+                        "source": "openclaw_command_output",
+                        "command_index": index,
+                        "signal": signal,
+                        "command": command.command,
+                    }
+                )
+
+        if trajectory_dir is None:
+            return evidence
+
+        path = trajectory_dir.expanduser()
+        if not path.exists():
+            return evidence
+        files = [path] if path.is_file() else sorted(path.rglob("*.jsonl"))
+        for file_path in files:
+            for line_number, line in enumerate(
+                file_path.read_text(encoding="utf-8", errors="replace").splitlines(),
+                start=1,
+            ):
+                signal = _memwing_plugin_signal(line)
+                if signal is None:
+                    continue
+                evidence.append(
+                    {
+                        "source": "openclaw_trajectory",
+                        "path": str(file_path),
+                        "line": line_number,
+                        "signal": signal,
+                    }
+                )
+        return evidence
+
     def preseed_long_term_memories(self, *, cases: list[BenchmarkCase], run_id: str) -> Path | None:
         del run_id
         records = [
@@ -363,6 +406,20 @@ def _parse_stdout_json_value(stdout: str) -> Any:
         except ValueError:
             continue
     raise ValueError("stdout does not contain JSON")
+
+
+_MEMWING_PLUGIN_EVIDENCE_SIGNALS = (
+    "memwing_search_memory",
+    "/v1/memwing/tools/search-memory",
+    "/v1/tools/memwing/search-memory",
+)
+
+
+def _memwing_plugin_signal(text: str) -> str | None:
+    return next(
+        (signal for signal in _MEMWING_PLUGIN_EVIDENCE_SIGNALS if signal in text),
+        None,
+    )
 
 
 def _parse_stdout_json_object(stdout: str) -> dict[str, Any]:

@@ -10,7 +10,7 @@ from typing import Any
 
 import typer
 
-from memwing_benchmark.adapters.memwing import MemWingAdapter
+from memwing_benchmark.adapters.memwing import MemWingAdapter, memwing_case_scope
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
 from memwing_benchmark.channels.feishu_cli import FeishuCli
 from memwing_benchmark.collectors.openclaw_trajectory import parse_trajectory_dir
@@ -84,6 +84,7 @@ def main(
     reply_timeout_seconds: float = typer.Option(120.0, "--reply-timeout-seconds"),
     memory_poll_interval_seconds: float = typer.Option(20.0, "--memory-poll-interval-seconds"),
     memory_timeout_seconds: float = typer.Option(60.0, "--memory-timeout-seconds"),
+    pg_preseed_per_case: bool = typer.Option(False, "--pg-preseed-per-case"),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -109,6 +110,7 @@ def main(
             reply_timeout_seconds=reply_timeout_seconds,
             memory_poll_interval_seconds=memory_poll_interval_seconds,
             memory_timeout_seconds=memory_timeout_seconds,
+            pg_preseed_per_case=pg_preseed_per_case,
         )
     except BenchmarkError as exc:
         typer.secho(str(exc), err=True, fg=typer.colors.RED)
@@ -137,6 +139,7 @@ def run(
     reply_timeout_seconds: float,
     memory_poll_interval_seconds: float,
     memory_timeout_seconds: float,
+    pg_preseed_per_case: bool,
 ) -> Path:
     if backend not in SUPPORTED_BACKENDS:
         raise BenchmarkError(
@@ -159,6 +162,16 @@ def run(
         raise BenchmarkError("--memory-poll-interval-seconds must be greater than 0")
     if memory_timeout_seconds < 0:
         raise BenchmarkError("--memory-timeout-seconds must be greater than or equal to 0")
+    if pg_preseed_per_case and mode != "retrieval":
+        raise BenchmarkError("--pg-preseed-per-case is only supported with --mode retrieval")
+    if pg_preseed_per_case and backend not in {
+        MEMWING_HTTP_BACKEND,
+        MEMWING_OPENCLAW_PLUGIN_BACKEND,
+    }:
+        raise BenchmarkError(
+            "--pg-preseed-per-case is only supported with --backend memwing-http or "
+            "--backend memwing-openclaw-plugin"
+        )
     config = apply_overrides(
         load_config(config_path),
         runs_dir=runs_dir,
@@ -167,6 +180,7 @@ def run(
     )
     validate_config_for_backend(config, backend=backend)
     cases = load_cases(cases_path, case_id=case_id)
+    pg_cleanup_cases = load_cases(cases_path) if pg_preseed_per_case else []
     if not batch and len(cases) != 1:
         raise BenchmarkError("non-batch runs require exactly one case; pass --case-id or --batch")
     run_id = make_run_id()
@@ -182,7 +196,10 @@ def run(
         "memwing_http_health": [],
         "memwing_http_search": [],
         "openclaw_plugin_tool_evidence": [],
+        "pg_preseed": [],
         "memwing_ingest": [],
+        "memwing_pipeline_drains": [],
+        "memwing_readiness": [],
         "memwing_polls": [],
         "openclaw": [],
         "memory_polls": [],
@@ -217,6 +234,9 @@ def run(
                 timeout_seconds=config.memwing.poll_timeout_seconds,
                 yes=yes,
                 ingest_seed_events=False,
+                config=config,
+                pg_preseed_per_case=pg_preseed_per_case,
+                pg_cleanup_cases=pg_cleanup_cases,
             )
         elif phase == "ingest":
             results = _run_memwing_write_ingest_batch(
@@ -257,6 +277,8 @@ def run(
             "seed_chat_id": None,
             "probe_chat_id": None,
             "live": live,
+            "pg_preseed_per_case": pg_preseed_per_case,
+            **_memwing_pipeline_run_config(pg_preseed_per_case=pg_preseed_per_case),
             "config": sanitize_config_for_run(config),
             "side_effects": raw_records["side_effects"],
         }
@@ -298,6 +320,9 @@ def run(
                 timeout_seconds=config.memwing.poll_timeout_seconds,
                 yes=yes,
                 ingest_seed_events=False,
+                config=config,
+                pg_preseed_per_case=pg_preseed_per_case,
+                pg_cleanup_cases=pg_cleanup_cases,
             )
             _record_memwing_http_records(
                 raw_records, memwing_adapter.records, openclaw_plugin=True
@@ -323,6 +348,8 @@ def run(
                 "seed_chat_id": None,
                 "probe_chat_id": None,
                 "live": live,
+                "pg_preseed_per_case": pg_preseed_per_case,
+                **_memwing_pipeline_run_config(pg_preseed_per_case=pg_preseed_per_case),
                 "config": sanitize_config_for_run(config),
                 "side_effects": raw_records["side_effects"],
             }
@@ -568,6 +595,16 @@ def _canonical_backend(backend: str) -> str:
     return backend
 
 
+def _memwing_pipeline_run_config(*, pg_preseed_per_case: bool) -> dict[str, str]:
+    if not pg_preseed_per_case:
+        return {}
+    return {
+        "memory_pipeline": "real_ingest_per_case",
+        "graph_backend": "graphiti",
+        "evidence_backend": "qdrant",
+    }
+
+
 @dataclass(frozen=True)
 class LiveChatIds:
     seed_chat_id: str
@@ -731,9 +768,23 @@ def _record_memwing_http_records(
         record for record in records if record.get("kind") == "search"
     ]
     if openclaw_plugin:
-        raw_records["openclaw_plugin_tool_evidence"] = [
+        existing_evidence = raw_records.get("openclaw_plugin_tool_evidence", [])
+        raw_records["openclaw_plugin_tool_evidence"] = existing_evidence or [
             record for record in records if record.get("kind") == "search"
         ]
+
+
+def _require_openclaw_plugin_tool_evidence(
+    *,
+    config,
+    adapter: OpenClawNativeAdapter,
+    raw_records: dict[str, Any],
+) -> None:
+    trajectory_dir = Path(config.openclaw.trajectory_dir) if config.openclaw.trajectory_dir else None
+    evidence = adapter.collect_memwing_plugin_evidence(trajectory_dir=trajectory_dir)
+    raw_records["openclaw_plugin_tool_evidence"] = evidence
+    if not evidence:
+        raise BenchmarkError("OpenClaw plugin MemWing tool evidence is unavailable")
 
 
 def _preflight_memwing_openclaw_plugin(
@@ -1169,6 +1220,9 @@ def _run_memwing_retrieval_batch(
     timeout_seconds: float,
     yes: bool,
     ingest_seed_events: bool = True,
+    config: Any | None = None,
+    pg_preseed_per_case: bool = False,
+    pg_cleanup_cases: list[BenchmarkCase] | None = None,
 ) -> list[NormalizedResult]:
     if poll_interval_seconds <= 0:
         raise BenchmarkError("memwing.poll_interval_seconds must be greater than 0")
@@ -1176,116 +1230,325 @@ def _run_memwing_retrieval_batch(
         raise BenchmarkError("memwing.poll_timeout_seconds must be greater than or equal to 0")
     if ingest_seed_events and any(case.seed_messages for case in cases):
         _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
+    if pg_preseed_per_case:
+        _confirm_side_effect(
+            "通过 MemWing HTTP/OpenClaw ingest endpoint 写入 benchmark Source Events，"
+            "并按 case scope 执行 cleanup、pipeline drain 和 readiness 等待",
+            yes,
+        )
+        return _run_memwing_real_ingest_retrieval_batch(
+            run_id=run_id,
+            backend=backend,
+            cases=cases,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+        )
 
     results: list[NormalizedResult] = []
     for case in cases:
-        _debug(
-            raw_records,
-            "MemWing retrieval case 开始",
-            case_id=case.case_id,
-            seed_message_count=len(case.seed_messages),
-            probe_count=len(case.probes),
+        _run_memwing_retrieval_case(
+            run_id=run_id,
+            backend=backend,
+            case=case,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=timeout_seconds,
+            ingest_seed_events=ingest_seed_events,
+            results=results,
         )
-        ingest_records = (
-            adapter.ingest_seed_messages(case=case, run_id=run_id)
-            if ingest_seed_events
-            else []
-        )
-        seed_completed_at = utc_now_iso()
-        raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
-        source_event_ids_by_seed = {
-            record["seed_message_id"]: record["source_event_id"]
-            for record in ingest_records
-            if isinstance(record.get("seed_message_id"), str)
-            and isinstance(record.get("source_event_id"), str)
-        }
-
-        for probe in case.probes:
-            expected_source_event_ids = (
-                [
-                    source_event_ids_by_seed[evidence_id]
-                    for evidence_id in probe.gold_evidence_ids
-                    if evidence_id in source_event_ids_by_seed
-                ]
-                or [
-                    source_event_id
-                    for source_event_id in source_event_ids_by_seed.values()
-                    if source_event_id
-                ]
-                or ([] if ingest_seed_events else list(probe.gold_evidence_ids))
-            )
-            poll = _poll_memwing_readiness(
-                adapter=adapter,
-                query=probe.question,
-                expected_source_event_ids=expected_source_event_ids,
-                poll_interval_seconds=poll_interval_seconds,
-                timeout_seconds=timeout_seconds,
-            )
-            raw_records.setdefault("memwing_polls", []).append(
-                {
-                    "case_id": case.case_id,
-                    "probe_id": probe.id,
-                    "query": probe.question,
-                    "expected_source_event_ids": expected_source_event_ids,
-                    "attempts": poll.attempts,
-                    "durable_memory_available": poll.durable_memory_available,
-                    "extraction_timeout": poll.extraction_timeout,
-                    "first_memory_available_at": poll.first_memory_available_at,
-                }
-            )
-            poll_details = _details_from_poll(poll)
-            search_raw = _memory_search_raw(
-                MemorySearchOutcome(details=poll_details, error=poll.search_error)
-            )
-            raw_records.setdefault("memory_searches", []).append(
-                {
-                    "mode": "memwing_retrieval",
-                    "case_id": case.case_id,
-                    "probe_id": probe.id,
-                    "query": probe.question,
-                    **search_raw,
-                }
-            )
-            retrieval_result = _evaluate_retrieval(
-                judge=judge,
-                case=case,
-                probe=probe,
-                retrieved_contexts=poll.retrieved_contexts,
-            )
-            results.append(
-                _result_from_eval(
-                    run_id=run_id,
-                    backend=backend,
-                    case=case,
-                    probe=probe,
-                    chat_id=None,
-                    seed_message_ids=[message.id for message in case.seed_messages],
-                    answer="",
-                    retrieved_contexts=poll.retrieved_contexts,
-                    retrieved_evidence_ids=_source_event_ids_from_results(poll_details.results),
-                    actual_tool_evidence_ids=[],
-                    latency_ms=None,
-                    tokens=TokenUsage(
-                        available=False,
-                        missing_reason="non-live MemWing retrieval run",
-                    ),
-                    memory_recall_latency_ms=None,
-                    retrieval_result=retrieval_result,
-                    answer_result=None,
-                    raw={
-                        "mode": "memwing_retrieval",
-                        "seed_completed_at": seed_completed_at,
-                        "first_memory_available_at": poll.first_memory_available_at,
-                        "durable_memory_available": poll.durable_memory_available,
-                        "extraction_timeout": poll.extraction_timeout,
-                        "memory_poll_attempts": poll.attempts,
-                        "expected_source_event_ids": expected_source_event_ids,
-                        **search_raw,
-                    },
-                )
-            )
     return results
 
+
+def _run_memwing_real_ingest_retrieval_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+) -> list[NormalizedResult]:
+    results: list[NormalizedResult] = []
+    for case in cases:
+        _run_memwing_real_ingest_retrieval_case(
+            run_id=run_id,
+            backend=backend,
+            case=case,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            results=results,
+        )
+    return results
+
+
+def _run_memwing_real_ingest_retrieval_case(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    results: list[NormalizedResult],
+) -> None:
+    scope = memwing_case_scope(config=adapter.config, run_id=run_id, case_id=case.case_id)
+    _debug(
+        raw_records,
+        "MemWing real ingest retrieval case 开始",
+        case_id=case.case_id,
+        project_memory_space_id=scope.project_memory_space_id,
+        seed_message_count=len(case.seed_messages),
+        probe_count=len(case.probes),
+    )
+
+    _debug(raw_records, "MemWing benchmark scope cleanup 开始", case_id=case.case_id)
+    cleanup = adapter.cleanup_benchmark_scope(scope)
+    raw_records.setdefault("memwing_scope_cleanup", []).append(
+        {"case_id": case.case_id, "scope": scope.payload(), "response": cleanup}
+    )
+    _debug(raw_records, "MemWing benchmark scope cleanup 完成", case_id=case.case_id)
+
+    _debug(raw_records, "MemWing benchmark ingest 开始", case_id=case.case_id)
+    ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id, scope=scope)
+    seed_completed_at = utc_now_iso()
+    raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
+    _debug(
+        raw_records,
+        "MemWing benchmark ingest 完成",
+        case_id=case.case_id,
+        accepted_count=sum(1 for record in ingest_records if record.get("accepted") is True),
+    )
+
+    _debug(raw_records, "MemWing benchmark pipeline drain 开始", case_id=case.case_id)
+    drain = adapter.drain_benchmark_pipeline(scope)
+    raw_records.setdefault("memwing_pipeline_drains", []).append(
+        {"case_id": case.case_id, "scope": scope.payload(), "response": drain}
+    )
+    _debug(raw_records, "MemWing benchmark pipeline drain 完成", case_id=case.case_id)
+
+    expected_source_event_ids = _expected_source_event_ids_for_real_ingest(
+        case=case,
+        ingest_records=ingest_records,
+    )
+    _debug(
+        raw_records,
+        "MemWing benchmark readiness poll 开始",
+        case_id=case.case_id,
+        expected_source_event_count=len(expected_source_event_ids),
+    )
+    readiness = adapter.wait_benchmark_readiness(
+        case=case,
+        scope=scope,
+        expected_source_event_ids=expected_source_event_ids,
+    )
+    raw_records.setdefault("memwing_readiness", []).append(
+        {"case_id": case.case_id, "scope": scope.payload(), **readiness}
+    )
+    if readiness.get("ready") is not True:
+        raise BenchmarkError(f"MemWing benchmark readiness timed out: case_id={case.case_id}")
+    _debug(raw_records, "MemWing benchmark readiness poll 完成", case_id=case.case_id)
+
+    for probe in case.probes:
+        _debug(
+            raw_records,
+            "MemWing benchmark search 开始",
+            case_id=case.case_id,
+            probe_id=probe.id,
+        )
+        details = adapter.memory_search_details(probe.question, max_results=5, scope=scope)
+        _debug(
+            raw_records,
+            "MemWing benchmark search 完成",
+            case_id=case.case_id,
+            probe_id=probe.id,
+            result_count=len(details.results),
+            latency_ms=details.latency_ms,
+        )
+        search_raw = _memory_search_raw(MemorySearchOutcome(details=details))
+        raw_records.setdefault("memory_searches", []).append(
+            {
+                "mode": "memwing_real_ingest_retrieval",
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                **search_raw,
+            }
+        )
+        retrieval_result = _evaluate_retrieval(
+            judge=judge,
+            case=case,
+            probe=probe,
+            retrieved_contexts=details.contexts,
+        )
+        results.append(
+            _result_from_eval(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                probe=probe,
+                chat_id=None,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                answer="",
+                retrieved_contexts=details.contexts,
+                retrieved_evidence_ids=_source_event_ids_from_results(details.results),
+                actual_tool_evidence_ids=[],
+                latency_ms=None,
+                tokens=TokenUsage(
+                    available=False,
+                    missing_reason="non-live MemWing retrieval run",
+                ),
+                memory_recall_latency_ms=details.latency_ms,
+                retrieval_result=retrieval_result,
+                answer_result=None,
+                raw={
+                    "mode": "memwing_real_ingest_retrieval",
+                    "seed_completed_at": seed_completed_at,
+                    "expected_source_event_ids": expected_source_event_ids,
+                    "readiness": readiness,
+                    **search_raw,
+                },
+            )
+        )
+
+
+def _expected_source_event_ids_for_real_ingest(
+    *,
+    case: BenchmarkCase,
+    ingest_records: list[dict[str, Any]],
+) -> list[str]:
+    source_event_ids = [
+        source_event_id
+        for record in ingest_records
+        if isinstance(source_event_id := record.get("source_event_id"), str)
+    ]
+    if source_event_ids:
+        return unique_preserve_order(source_event_ids)
+    return [message.id for message in case.seed_messages]
+
+
+def _run_memwing_retrieval_case(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+    ingest_seed_events: bool,
+    results: list[NormalizedResult],
+) -> None:
+    _debug(
+        raw_records,
+        "MemWing retrieval case 开始",
+        case_id=case.case_id,
+        seed_message_count=len(case.seed_messages),
+        probe_count=len(case.probes),
+    )
+    ingest_records = (
+        adapter.ingest_seed_messages(case=case, run_id=run_id) if ingest_seed_events else []
+    )
+    seed_completed_at = utc_now_iso()
+    raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
+    source_event_ids_by_seed = {
+        record["seed_message_id"]: record["source_event_id"]
+        for record in ingest_records
+        if isinstance(record.get("seed_message_id"), str)
+        and isinstance(record.get("source_event_id"), str)
+    }
+
+    for probe in case.probes:
+        expected_source_event_ids = (
+            [
+                source_event_ids_by_seed[evidence_id]
+                for evidence_id in probe.gold_evidence_ids
+                if evidence_id in source_event_ids_by_seed
+            ]
+            or [
+                source_event_id
+                for source_event_id in source_event_ids_by_seed.values()
+                if source_event_id
+            ]
+            or ([] if ingest_seed_events else list(probe.gold_evidence_ids))
+        )
+        poll = _poll_memwing_readiness(
+            adapter=adapter,
+            query=probe.question,
+            expected_source_event_ids=expected_source_event_ids,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=timeout_seconds,
+            raw_records=raw_records,
+            case_id=case.case_id,
+            probe_id=probe.id,
+        )
+        raw_records.setdefault("memwing_polls", []).append(
+            {
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                "expected_source_event_ids": expected_source_event_ids,
+                "attempts": poll.attempts,
+                "durable_memory_available": poll.durable_memory_available,
+                "extraction_timeout": poll.extraction_timeout,
+                "first_memory_available_at": poll.first_memory_available_at,
+            }
+        )
+        poll_details = _details_from_poll(poll)
+        search_raw = _memory_search_raw(
+            MemorySearchOutcome(details=poll_details, error=poll.search_error)
+        )
+        raw_records.setdefault("memory_searches", []).append(
+            {
+                "mode": "memwing_retrieval",
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                **search_raw,
+            }
+        )
+        retrieval_result = _evaluate_retrieval(
+            judge=judge,
+            case=case,
+            probe=probe,
+            retrieved_contexts=poll.retrieved_contexts,
+        )
+        results.append(
+            _result_from_eval(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                probe=probe,
+                chat_id=None,
+                seed_message_ids=[message.id for message in case.seed_messages],
+                answer="",
+                retrieved_contexts=poll.retrieved_contexts,
+                retrieved_evidence_ids=_source_event_ids_from_results(poll_details.results),
+                actual_tool_evidence_ids=[],
+                latency_ms=None,
+                tokens=TokenUsage(
+                    available=False,
+                    missing_reason="non-live MemWing retrieval run",
+                ),
+                memory_recall_latency_ms=None,
+                retrieval_result=retrieval_result,
+                answer_result=None,
+                raw={
+                    "mode": "memwing_retrieval",
+                    "seed_completed_at": seed_completed_at,
+                    "first_memory_available_at": poll.first_memory_available_at,
+                    "durable_memory_available": poll.durable_memory_available,
+                    "extraction_timeout": poll.extraction_timeout,
+                    "memory_poll_attempts": poll.attempts,
+                    "expected_source_event_ids": expected_source_event_ids,
+                    **search_raw,
+                },
+            )
+        )
 
 def _run_memwing_write_ingest_batch(
     *,
@@ -1449,6 +1712,9 @@ def _poll_memwing_readiness(
     expected_source_event_ids: list[str],
     poll_interval_seconds: float,
     timeout_seconds: float,
+    raw_records: dict[str, Any] | None = None,
+    case_id: str | None = None,
+    probe_id: str | None = None,
 ) -> DurablePollResult:
     deadline = time.monotonic() + timeout_seconds
     attempts: list[dict[str, Any]] = []
@@ -1476,6 +1742,21 @@ def _poll_memwing_readiness(
                 "durable_memory_available": hit,
             }
         )
+        if raw_records is not None:
+            _debug(
+                raw_records,
+                "MemWing readiness poll attempt",
+                case_id=case_id,
+                probe_id=probe_id,
+                attempt_count=len(attempts),
+                expected_source_event_count=len(expected_source_event_ids),
+                retrieved_source_event_count=len(retrieved_source_event_ids),
+                matched_source_event_ids=matched_source_event_ids,
+                result_count=len(details.results),
+                latency_ms=details.latency_ms,
+                memory_search_error=search.error,
+                durable_memory_available=hit,
+            )
         last_details = details
         last_error = search.error
         if hit:
@@ -1499,7 +1780,17 @@ def _poll_memwing_readiness(
                 extraction_timeout=True,
                 attempts=attempts,
             )
-        time.sleep(min(poll_interval_seconds, remaining))
+        sleep_seconds = min(poll_interval_seconds, remaining)
+        if raw_records is not None:
+            _debug(
+                raw_records,
+                "等待 MemWing readiness poll",
+                case_id=case_id,
+                probe_id=probe_id,
+                seconds=round(sleep_seconds, 3),
+                remaining_seconds=round(max(remaining, 0), 3),
+            )
+        time.sleep(sleep_seconds)
 
 
 def _details_from_poll(poll: DurablePollResult) -> MemorySearchDetails:
@@ -1747,6 +2038,11 @@ def _run_memwing_openclaw_plugin_write_ingest_batch(
         raw_records=raw_records,
         message_interval_seconds=message_interval_seconds,
     )
+    _require_openclaw_plugin_tool_evidence(
+        config=config,
+        adapter=openclaw_adapter,
+        raw_records=raw_records,
+    )
     for case in cases:
         poll = _poll_memwing_write_readiness(
             adapter=memwing_adapter,
@@ -1820,6 +2116,15 @@ def _poll_memwing_write_readiness(
                 "durable_memory_available": available,
             }
         )
+        _debug(
+            raw_records,
+            "MemWing write readiness poll attempt",
+            case_id=case.case_id,
+            attempt_count=len(attempts),
+            matched_expected_memory_ids=matched_ids,
+            expected_memory_count=len(expected_items),
+            durable_memory_available=available,
+        )
         if available:
             return {
                 "attempts": attempts,
@@ -1835,7 +2140,15 @@ def _poll_memwing_write_readiness(
                 "extraction_timeout": True,
                 "first_memory_available_at": None,
             }
-        time.sleep(min(poll_interval_seconds, remaining))
+        sleep_seconds = min(poll_interval_seconds, remaining)
+        _debug(
+            raw_records,
+            "等待 MemWing write readiness poll",
+            case_id=case.case_id,
+            seconds=round(sleep_seconds, 3),
+            remaining_seconds=round(max(remaining, 0), 3),
+        )
+        time.sleep(sleep_seconds)
 
 
 def _run_write_evaluate_batch(

@@ -26,7 +26,7 @@ from memwing_benchmark.evaluators.llm_judge import (
     WriteJudgeBlock,
 )
 from memwing_benchmark.json_utils import dumps_json, loads_json
-from memwing_benchmark.schema import BenchmarkCase, Probe, SeedMessage
+from memwing_benchmark.schema import BenchmarkCase, ExpectedMemoryItem, Probe, SeedMessage
 
 
 def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
@@ -634,6 +634,16 @@ def test_cli_memwing_openclaw_plugin_live_ingest_uses_feishu_not_http_ingest(
         def get_default_workspace(self):
             return tmp_path / "openclaw-workspace"
 
+        def collect_memwing_plugin_evidence(self, *, trajectory_dir=None):
+            return [
+                {
+                    "source": "openclaw_trajectory",
+                    "path": str(tmp_path / "session.trajectory.jsonl"),
+                    "line": 1,
+                    "signal": "memwing_search_memory",
+                }
+            ]
+
     class FakeFeishu:
         commands = []
 
@@ -739,7 +749,113 @@ def test_cli_memwing_openclaw_plugin_live_ingest_uses_feishu_not_http_ingest(
     assert raw_records["memwing_ingest"] == []
     assert raw_records["memwing_polls"][0]["mode"] == "memwing_openclaw_plugin_write_ingest"
     assert raw_records["memwing_polls"][0]["durable_memory_available"] is True
+    assert raw_records["openclaw_plugin_tool_evidence"][0]["signal"] == "memwing_search_memory"
     assert raw_records["feishu"][0]["kind"] == "write_ingest_seed"
+
+
+def test_cli_memwing_openclaw_plugin_live_ingest_requires_tool_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeOpenClawAdapter:
+        commands = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_config_value(self, path):
+            if path == "plugins.entries.memwing.enabled":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.hooks.allowConversationAccess":
+                return ConfigValue(present=True, value=True)
+            if path == "plugins.entries.memwing.config.memwingBaseUrl":
+                return ConfigValue(present=True, value="http://memwing.test")
+            return ConfigValue(present=False)
+
+        def get_default_workspace(self):
+            return tmp_path / "openclaw-workspace"
+
+        def collect_memwing_plugin_evidence(self, *, trajectory_dir=None):
+            return []
+
+    class FakeFeishu:
+        commands = []
+
+        def __init__(self, _bin):
+            pass
+
+        def ensure_ready(self, *, required_scopes):
+            pass
+
+        def send_text(self, *, chat_id, text, idempotency_key):
+            return {"message_id": "msg_001", "chat_id": chat_id}
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.records = []
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def memory_search_details(self, question, *, max_results):
+            return MemorySearchDetails(
+                contexts=[question],
+                results=[{"rank": 1, "source_event_ids": ["source_event_001"], "snippet": question}],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {
+                    "openclaw_repo_dir": "/tmp/openclaw",
+                    "runs_dir": str(tmp_path / "runs"),
+                },
+                "feishu": {"chat_id": "oc_seed"},
+                "memwing": {
+                    "base_url": "http://memwing.test/",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                    "poll_interval_seconds": 0.01,
+                    "poll_timeout_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-openclaw-plugin",
+            "--mode",
+            "write",
+            "--phase",
+            "ingest",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--message-interval-seconds",
+            "0",
+            "--live",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "OpenClaw plugin MemWing tool evidence is unavailable" in result.output
 
 
 def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
@@ -1024,6 +1140,146 @@ def test_memwing_retrieval_batch_records_readiness_timeout() -> None:
     assert results[0].extraction_timeout is True
     assert raw_records["memwing_polls"][0]["extraction_timeout"] is True
     assert raw_records["memwing_polls"][0]["attempts"][0]["durable_memory_available"] is False
+
+
+def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch) -> None:
+    def fail_pg_seed(**_kwargs):
+        raise AssertionError("run_pg_seed must not be called by real ingest retrieval")
+
+    class FakeAdapter:
+        config = SimpleNamespace(shared_group_id="")
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def cleanup_benchmark_scope(self, scope):
+            self.calls.append(("cleanup", scope.project_memory_space_id))
+            return {"deleted": {"source_events": 0}, "trace_id": "trace_cleanup"}
+
+        def ingest_seed_messages(self, *, case, run_id, scope):
+            self.calls.append(("ingest", case.case_id, run_id, scope.project_memory_space_id))
+            return [
+                {
+                    "case_id": case.case_id,
+                    "seed_message_id": message.id,
+                    "accepted": True,
+                    "source_event_id": f"source_event:{message.id}",
+                    "trace_id": "trace_ingest",
+                    "latency_ms": 3,
+                }
+                for message in case.seed_messages
+            ]
+
+        def drain_benchmark_pipeline(self, scope):
+            self.calls.append(("drain", scope.project_memory_space_id))
+            return {"pending": {"outbox_jobs": 0, "graph_write_jobs": 0}}
+
+        def wait_benchmark_readiness(self, *, case, scope, expected_source_event_ids):
+            self.calls.append(
+                (
+                    "readiness",
+                    case.case_id,
+                    scope.project_memory_space_id,
+                    tuple(expected_source_event_ids),
+                )
+            )
+            return {
+                "case_id": case.case_id,
+                "ready": True,
+                "attempts": [{"ready": True}],
+                "final": {"ready": True},
+            }
+
+        def memory_search_details(self, question, *, max_results, scope):
+            case_id = "bs001" if "云帆" in question else "lt001"
+            source_event_id = f"source_event:{case_id}_s1"
+            self.calls.append(("search", question, scope.project_memory_space_id))
+            return MemorySearchDetails(
+                contexts=[f"context for {source_event_id}"],
+                results=[{"content": "hit", "source_event_ids": [source_event_id]}],
+                latency_ms=5,
+                raw={"results": [{"source_event_ids": [source_event_id]}]},
+            )
+
+    monkeypatch.setattr("memwing_benchmark.seed_pg.run_pg_seed", fail_pg_seed)
+    adapter = FakeAdapter()
+    cases = [
+        BenchmarkCase(
+            case_id="bs001",
+            category="basic",
+            seed_messages=[SeedMessage(id="bs001_s1", content="云帆负责人是沈南。")],
+            probes=[
+                Probe(
+                    id="bs001_p1",
+                    question="云帆负责人是谁？",
+                    gold_answer="沈南",
+                    gold_evidence_ids=["bs001_s1"],
+                )
+            ],
+            expected_memory_items=[ExpectedMemoryItem(id="bs001_m1", fact="云帆负责人是沈南。")],
+        ),
+        BenchmarkCase(
+            case_id="lt001",
+            category="long_term",
+            seed_messages=[SeedMessage(id="lt001_s1", content="青石项目验收人是林澈。")],
+            probes=[
+                Probe(
+                    id="lt001_p1",
+                    question="青石项目验收人是谁？",
+                    gold_answer="林澈",
+                    gold_evidence_ids=["lt001_s1"],
+                )
+            ],
+            expected_memory_items=[ExpectedMemoryItem(id="lt001_m1", fact="青石项目验收人是林澈。")],
+        ),
+    ]
+    raw_records = {
+        "pg_preseed": [],
+        "memwing_ingest": [],
+        "memwing_pipeline_drains": [],
+        "memwing_readiness": [],
+        "memwing_polls": [],
+        "memory_searches": [],
+        "side_effects": [],
+        "debug": [],
+    }
+
+    results = _run_memwing_retrieval_batch(
+        run_id="run1",
+        backend="memwing-openclaw-plugin",
+        cases=cases,
+        adapter=adapter,
+        judge=None,
+        raw_records=raw_records,
+        poll_interval_seconds=0.01,
+        timeout_seconds=0,
+        yes=True,
+        ingest_seed_events=False,
+        config=SimpleNamespace(),
+        pg_preseed_per_case=True,
+        pg_cleanup_cases=cases,
+    )
+
+    assert [result.case_id for result in results] == ["bs001", "lt001"]
+    assert adapter.calls == [
+        ("cleanup", "benchmark:run1:bs001"),
+        ("ingest", "bs001", "run1", "benchmark:run1:bs001"),
+        ("drain", "benchmark:run1:bs001"),
+        ("readiness", "bs001", "benchmark:run1:bs001", ("source_event:bs001_s1",)),
+        ("search", "云帆负责人是谁？", "benchmark:run1:bs001"),
+        ("cleanup", "benchmark:run1:lt001"),
+        ("ingest", "lt001", "run1", "benchmark:run1:lt001"),
+        ("drain", "benchmark:run1:lt001"),
+        ("readiness", "lt001", "benchmark:run1:lt001", ("source_event:lt001_s1",)),
+        ("search", "青石项目验收人是谁？", "benchmark:run1:lt001"),
+    ]
+    assert raw_records["pg_preseed"] == []
+    assert len(raw_records["memwing_ingest"]) == 2
+    assert len(raw_records["memwing_pipeline_drains"]) == 2
+    assert len(raw_records["memwing_readiness"]) == 2
+    debug_messages = [record["message"] for record in raw_records["debug"]]
+    assert "MemWing benchmark scope cleanup 开始" in debug_messages
+    assert "MemWing benchmark pipeline drain 完成" in debug_messages
 
 
 def test_memwing_readiness_records_server_error() -> None:

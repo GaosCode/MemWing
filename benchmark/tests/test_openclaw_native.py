@@ -269,6 +269,49 @@ def test_get_config_value_parses_boolean_with_pnpm_prefix(monkeypatch) -> None:
     assert value.value is True
 
 
+def test_collect_memwing_plugin_evidence_reads_command_output() -> None:
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+    adapter.commands.append(
+        CommandRecord(
+            command=["pnpm", "openclaw", "agent"],
+            cwd="/tmp/openclaw",
+            exit_code=0,
+            stdout='{"tool":"memwing_search_memory"}',
+        )
+    )
+
+    evidence = adapter.collect_memwing_plugin_evidence()
+
+    assert evidence == [
+        {
+            "source": "openclaw_command_output",
+            "command_index": 0,
+            "signal": "memwing_search_memory",
+            "command": ["pnpm", "openclaw", "agent"],
+        }
+    ]
+
+
+def test_collect_memwing_plugin_evidence_reads_trajectory(tmp_path: Path) -> None:
+    trace = tmp_path / "session.trajectory.jsonl"
+    trace.write_text(
+        '{"type":"tool.completed","endpoint":"/v1/memwing/tools/search-memory"}\n',
+        encoding="utf-8",
+    )
+    adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
+
+    evidence = adapter.collect_memwing_plugin_evidence(trajectory_dir=tmp_path)
+
+    assert evidence == [
+        {
+            "source": "openclaw_trajectory",
+            "path": str(trace),
+            "line": 1,
+            "signal": "/v1/memwing/tools/search-memory",
+        }
+    ]
+
+
 def test_set_and_unset_config_value_use_strict_json(monkeypatch) -> None:
     adapter = OpenClawNativeAdapter(Path("/tmp/openclaw"))
     commands = []

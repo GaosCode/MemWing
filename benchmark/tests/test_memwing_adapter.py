@@ -4,10 +4,15 @@ import httpx
 import pytest
 
 from memwing_benchmark.adapters.memwing import (
+    BENCHMARK_READINESS_ENDPOINT,
+    CLEANUP_BENCHMARK_SCOPE_ENDPOINT,
+    DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
     HEALTH_ENDPOINT,
     INGEST_EVENT_ENDPOINT,
     SEARCH_MEMORY_ENDPOINT,
+    MemWingCaseScope,
     MemWingAdapter,
+    memwing_case_scope,
 )
 from memwing_benchmark.config import MemWingConfig
 from memwing_benchmark.errors import BenchmarkError
@@ -87,6 +92,36 @@ def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> N
             "trace_id": "trace_search",
         }
     ]
+
+
+def test_case_scope_overrides_search_scope() -> None:
+    seen_payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "contexts": ["命中"],
+                "results": [{"id": "r1", "text": "命中", "source": "source_event"}],
+                "trace_id": "trace_search",
+            },
+        )
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+    scope = MemWingCaseScope(
+        project_memory_space_id="benchmark:run1:bs001",
+        group_id="benchmark:bs001",
+        thread_id="benchmark:bs001",
+    )
+
+    adapter.memory_search_details("谁负责？", limit=1, scope=scope)
+
+    assert seen_payloads[0]["scope"] == {
+        "project_memory_space_id": "benchmark:run1:bs001",
+        "group_id": "benchmark:bs001",
+        "thread_id": "benchmark:bs001",
+    }
 
 
 def test_health_checks_memwing_server_readiness() -> None:
@@ -181,6 +216,99 @@ def test_ingest_seed_messages_posts_source_events_to_openclaw_ingest_url() -> No
     assert adapter.records[0]["kind"] == "ingest"
     assert adapter.records[0]["status_code"] == 202
     assert adapter.records[0]["trace_id"] == "trace_ingest"
+
+
+def test_ingest_seed_messages_includes_benchmark_metadata_and_case_scope() -> None:
+    seen_payloads = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(json.loads(request.content))
+        return httpx.Response(
+            202,
+            json={
+                "accepted": True,
+                "source_event_id": "source_event_001",
+                "trace_id": "trace_ingest",
+            },
+        )
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+    scope = memwing_case_scope(config=adapter.config, run_id="run1", case_id="bs001")
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="basic",
+        seed_messages=[SeedMessage(id="bs001_s1", content="负责人是沈南。")],
+    )
+
+    adapter.ingest_seed_messages(case=case, run_id="run1", scope=scope)
+
+    payload = seen_payloads[0]
+    assert payload["benchmark_case_id"] == "bs001"
+    assert payload["seed_message_id"] == "bs001_s1"
+    assert payload["run_id"] == "run1"
+    assert payload["idempotency_key"].startswith("mwb:bs001:bs001_s1:")
+    assert payload["scope"] == {
+        "project_memory_space_id": "benchmark:run1:bs001",
+        "group_id": "benchmark:bs001",
+        "thread_id": "benchmark:bs001",
+    }
+    assert payload["payload"]["benchmark_case_id"] == "bs001"
+    assert payload["payload"]["seed_message_id"] == "bs001_s1"
+    assert payload["payload"]["run_id"] == "run1"
+    assert payload["payload"]["idempotency_key"] == payload["idempotency_key"]
+
+
+def test_benchmark_admin_methods_post_scope_payloads() -> None:
+    seen_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"ready": True, "trace_id": "trace_admin"})
+
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(handler))
+    scope = MemWingCaseScope(
+        project_memory_space_id="benchmark:run1:bs001",
+        group_id="benchmark:bs001",
+        thread_id="benchmark:bs001",
+    )
+
+    adapter.cleanup_benchmark_scope(scope)
+    adapter.drain_benchmark_pipeline(scope)
+    adapter.benchmark_readiness(scope=scope, expected_source_event_ids=["source_event_001"])
+
+    assert seen_requests == [
+        (
+            CLEANUP_BENCHMARK_SCOPE_ENDPOINT,
+            {
+                "scope": {
+                    "project_memory_space_id": "benchmark:run1:bs001",
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                }
+            },
+        ),
+        (
+            DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
+            {
+                "scope": {
+                    "project_memory_space_id": "benchmark:run1:bs001",
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                }
+            },
+        ),
+        (
+            BENCHMARK_READINESS_ENDPOINT,
+            {
+                "scope": {
+                    "project_memory_space_id": "benchmark:run1:bs001",
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                },
+                "expected_source_event_ids": ["source_event_001"],
+            },
+        ),
+    ]
 
 
 @pytest.mark.parametrize("status_code", [403, 404, 500])
