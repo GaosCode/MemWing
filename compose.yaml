@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-memwing}
+      POSTGRES_USER: ${POSTGRES_USER:-memwing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memwing_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - memwing_postgres_data:/var/lib/postgresql/data
+      - ./memwing/infrastructure/db/migrations/0001_data_foundation.sql:/docker-entrypoint-initdb.d/0001_data_foundation.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  memwing_postgres_data:
