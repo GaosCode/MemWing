@@ -72,6 +72,18 @@ uv run memwing-benchmark --config config.local.json --mode write --phase ingest 
 
 # Batch write evaluation. Scores the current OpenClaw workspace memory files.
 uv run memwing-benchmark --config config.local.json --mode write --phase evaluate --batch --yes
+
+# MemWing HTTP write ingest. Sends Source Events directly to MemWing.
+uv run memwing-benchmark --config config.local.json --backend memwing-http --mode write --phase ingest --batch --yes
+
+# MemWing HTTP write evaluation. Scores memories through MemWing search APIs.
+uv run memwing-benchmark --config config.local.json --backend memwing-http --mode write --phase evaluate --batch --yes
+
+# MemWing OpenClaw plugin ingest. Sends live messages through OpenClaw first.
+uv run memwing-benchmark --config config.local.json --backend memwing-openclaw-plugin --mode write --phase ingest --batch --live --yes
+
+# MemWing OpenClaw plugin evaluation. Scores plugin-written memory through MemWing search APIs.
+uv run memwing-benchmark --config config.local.json --backend memwing-openclaw-plugin --mode write --phase evaluate --batch --yes
 ```
 
 ## Configuration
@@ -232,7 +244,7 @@ pnpm openclaw memory search \
 | Option | Default | Description |
 |---|---|---|
 | `--config` | `config.example.json` | Config file path. Use `config.local.json` for real runs. |
-| `--backend` | `openclaw-native` | Benchmark backend: `openclaw-native` or `memwing`. MemWing currently supports retrieval mode through the HTTP API. |
+| `--backend` | `openclaw-native` | Benchmark backend: `openclaw-native`, `memwing-http`, or `memwing-openclaw-plugin`. Legacy `memwing` is treated as `memwing-http`. |
 | `--mode` | `retrieval` | Run mode: `retrieval` or `write`. |
 | `--phase` | `full` | Write mode phase: `full`, `ingest`, or `evaluate`. |
 | `--cases` | `datasets` | Case file or directory. |
@@ -256,9 +268,20 @@ Runtime constraints:
 
 - Non-batch runs must load exactly one case. Use `--case-id` or pass one case file.
 - `retrieval --live --batch` is not supported.
-- `write --phase ingest` and `write --phase full` require `--live`.
-- `write --phase evaluate` reads local OpenClaw memory files and must not use
-  `--live`.
+- `openclaw-native write --phase ingest` and `openclaw-native write --phase full`
+  require `--live`.
+- `openclaw-native write --phase evaluate` reads local OpenClaw memory files and
+  must not use `--live`.
+- `memwing-http write --phase ingest` sends Source Events through the HTTP ingest
+  endpoint and must not use `--live`.
+- `memwing-http write --phase evaluate` scores durable memory through MemWing search
+  APIs and reports local file-diff metrics as unavailable.
+- `memwing-openclaw-plugin write --phase ingest` requires `--live`, sends
+  Feishu/Lark messages through OpenClaw, and fails before sending if the
+  OpenClaw MemWing plugin is not enabled or points at a different
+  `memwing.base_url`.
+- `memwing-openclaw-plugin write --phase evaluate` uses MemWing search APIs and
+  must not use `--live`.
 
 ## Retrieval Mode
 
@@ -323,9 +346,14 @@ sanitized local config.
 
 ## Write Mode
 
-Write mode tests whether live collaboration messages become durable memory.
+Write mode tests whether collaboration messages become durable memory. With
+`--backend openclaw-native`, ingest uses live Lark/Feishu messages and evaluate
+reads local OpenClaw memory files. With `--backend memwing-http`, ingest and
+evaluate use MemWing HTTP APIs directly and do not use `--live`. With
+`--backend memwing-openclaw-plugin`, ingest sends live Feishu/Lark messages
+through OpenClaw and evaluate still uses MemWing APIs as the evidence source.
 
-Recommended batch workflow:
+Recommended OpenClaw-native batch workflow:
 
 1. Run `write --phase ingest` to send seed messages.
 2. Wait until OpenClaw logs or memory files show that writing has completed.
@@ -389,6 +417,68 @@ Evaluate behavior:
 If the judge times out or returns unparsable JSON, write metrics for that case
 may be `null`. A `null` score means judge unavailable; it does not prove that
 OpenClaw failed to write memory.
+
+### MemWing HTTP Write
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-http \
+  --mode write \
+  --phase ingest \
+  --batch \
+  --yes
+
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-http \
+  --mode write \
+  --phase evaluate \
+  --batch \
+  --yes
+```
+
+MemWing ingest posts each case `seed_messages` as Source Events to
+`/v1/openclaw/events/ingest`. MemWing evaluate queries each
+`expected_memory_items[].fact` through `/v1/memwing/tools/search-memory`, then
+uses the write judge on the retrieved contexts. Because this path evaluates
+MemWing through HTTP rather than local memory files, `write_changed_file_count`
+is `null` and the report includes a "Write File Metrics Unavailable" section
+instead of treating file-diff metrics as a failed write.
+
+### MemWing OpenClaw Plugin Write
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-openclaw-plugin \
+  --mode write \
+  --phase ingest \
+  --batch \
+  --live \
+  --yes
+
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-openclaw-plugin \
+  --mode write \
+  --phase evaluate \
+  --batch \
+  --yes
+```
+
+Plugin ingest verifies these OpenClaw config values before sending any live
+messages:
+
+```text
+plugins.entries.memwing.enabled == true
+plugins.entries.memwing.hooks.allowConversationAccess == true
+plugins.entries.memwing.config.memwingBaseUrl == memwing.base_url
+```
+
+This path records Feishu sends, OpenClaw plugin preflight evidence, and MemWing
+search readiness evidence. It must not use OpenClaw native memory files as
+MemWing evaluation evidence.
 
 ### Single-Case Full Run
 
@@ -504,8 +594,10 @@ Write metrics:
 
 - `write_recall`: matched expected memory count divided by expected memory count.
 - `write_precision`: judge-estimated share of written facts that are correct.
-- `write_changed_file_count`: number of non-empty memory artifacts considered by
-  the evaluator.
+- `write_changed_file_count`: number of non-empty local memory artifacts
+  considered by OpenClaw-native write evaluation. This is `null` for
+  `--backend memwing-http` and `--backend memwing-openclaw-plugin` because
+  MemWing write evaluation uses HTTP search APIs.
 - `write_written_claim_count`: judge-estimated count of written factual claims.
 - `write_noise_count`, `write_wrong_count`, `write_stale_count`: judge-estimated
   noise, incorrect, and stale fact counts.
@@ -521,8 +613,12 @@ Metric caveats:
 
 ## Known Limitations
 
-- `--backend memwing` currently supports retrieval mode only; MemWing write mode
-  remains a later checkpoint.
+- `--backend memwing-http --mode write --phase full` is not supported. Run
+  `--phase ingest`, wait for indexing, then run `--phase evaluate`.
+- `--backend memwing-openclaw-plugin --mode write --phase full` is not
+  supported.
+- `--backend memwing-http --live` is not supported; direct MemWing benchmark
+  paths use HTTP ingest/search APIs.
 - Live retrieval does not support batch mode.
 - Write ingest does not verify that asynchronous memory writing has completed.
 - Write evaluate reads the current OpenClaw workspace; verify the workspace before
