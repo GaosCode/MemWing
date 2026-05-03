@@ -10,6 +10,7 @@ from memwing_benchmark.cli import (
     _poll_memwing_readiness,
     _restore_live_workspace,
     _run_memwing_retrieval_batch,
+    _run_memwing_write_evaluate_batch,
     _run_offline_batch,
     _run_live,
     _run_write_evaluate_batch,
@@ -27,6 +28,53 @@ from memwing_benchmark.evaluators.llm_judge import (
 )
 from memwing_benchmark.json_utils import dumps_json, loads_json
 from memwing_benchmark.schema import BenchmarkCase, ExpectedMemoryItem, Probe, SeedMessage
+
+
+def _write_memwing_ingest_run(
+    runs_root: Path,
+    *,
+    backend: str,
+    run_id: str = "20260503-000000",
+    case_id: str = "bs001",
+    source_event_ids: list[str] | None = None,
+) -> Path:
+    run_dir = runs_root / "write-ingest" / "20260503" / run_id
+    (run_dir / "raw").mkdir(parents=True)
+    (run_dir / "config.json").write_text(
+        dumps_json(
+            {
+                "backend": backend,
+                "mode": "write",
+                "phase": "ingest",
+                "run_id": run_id,
+                "case_ids": [case_id],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "raw" / "records.json").write_text(
+        dumps_json(
+            {
+                "memory_writes": [
+                    {
+                        "phase": "ingest",
+                        "backend": backend,
+                        "case_id": case_id,
+                        "scope": {
+                            "project_memory_space_id": "project_001",
+                            "group_id": "benchmark_group",
+                            "thread_id": "benchmark_thread",
+                        },
+                        "source_event_ids": source_event_ids or ["source_event_001"],
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return run_dir
 
 
 def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
@@ -443,10 +491,24 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
 ) -> None:
     class FakeMemWingAdapter:
         def __init__(self, _config):
+            self.config = _config
             self.records = []
 
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def pipeline_await(self, *, scope, source_event_ids, profile):
+            assert scope.payload() == {
+                "project_memory_space_id": "project_001",
+                "group_id": "benchmark_group",
+                "thread_id": "benchmark_thread",
+            }
+            assert source_event_ids == ["source_event_001"]
+            assert profile == "write-evaluate"
+            self.records.append(
+                {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
+            )
+            return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
 
         def memory_search_details(self, question, *, max_results):
             assert max_results == 5
@@ -504,6 +566,7 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
         ),
         encoding="utf-8",
     )
+    _write_memwing_ingest_run(tmp_path / "runs", backend="memwing-http")
     monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
     monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
 
@@ -538,7 +601,49 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
     assert normalized["raw"]["changed_file_metrics_available"] is False
     assert "HTTP search APIs" in normalized["raw"]["changed_file_metrics_missing_reason"]
     assert raw_records["memory_writes"][0]["changed_file_metrics_available"] is False
+    assert raw_records["memory_writes"][0]["readiness"]["ready"] is True
+    assert raw_records["memwing_pipeline_awaits"][0]["response"]["ready"] is True
     assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
+
+
+def test_memwing_write_evaluate_requires_prior_ingest_source_event_ids(tmp_path: Path) -> None:
+    class FakeMemWingAdapter:
+        config = SimpleNamespace(
+            project_memory_space_id="project_001",
+            group_id="benchmark_group",
+            thread_id="benchmark_thread",
+            shared_group_id="",
+        )
+
+        def pipeline_await(self, **_kwargs):
+            raise AssertionError("pipeline await requires prior source_event_ids")
+
+        def memory_search_details(self, *_args, **_kwargs):
+            raise AssertionError("search must not run before pipeline await")
+
+    raw_records = {"memwing_pipeline_awaits": [], "debug": []}
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="long_term_preseed",
+        expected_memory_items=[{"id": "bs001_m1", "fact": "负责人是沈南。"}],
+    )
+
+    try:
+        _run_memwing_write_evaluate_batch(
+            run_id="run1",
+            backend="memwing-http",
+            cases=[case],
+            adapter=FakeMemWingAdapter(),
+            judge=None,
+            raw_records=raw_records,
+            runs_root=tmp_path / "runs",
+        )
+    except BenchmarkError as exc:
+        assert "requires source_event_ids from a prior write-ingest run" in str(exc)
+    else:
+        raise AssertionError("expected BenchmarkError")
+
+    assert raw_records["memwing_pipeline_awaits"][0]["reason"] == "source_event_ids_required"
 
 
 def test_cli_memwing_openclaw_plugin_preflight_fails_before_feishu(
@@ -881,10 +986,19 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
 
     class FakeMemWingAdapter:
         def __init__(self, _config):
+            self.config = _config
             self.records = []
 
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def pipeline_await(self, *, scope, source_event_ids, profile):
+            assert source_event_ids == ["source_event_001"]
+            assert profile == "write-evaluate"
+            self.records.append(
+                {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
+            )
+            return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
 
         def memory_search_details(self, question, *, max_results):
             assert max_results == 5
@@ -942,6 +1056,7 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
         ),
         encoding="utf-8",
     )
+    _write_memwing_ingest_run(tmp_path / "runs", backend="memwing-openclaw-plugin")
     monkeypatch.setattr("memwing_benchmark.cli.OpenClawNativeAdapter", FakeOpenClawAdapter)
     monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
     monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
@@ -973,6 +1088,7 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
     assert normalized["backend"] == "memwing-openclaw-plugin"
     assert normalized["write_recall"] == 1.0
     assert normalized["write_changed_file_count"] is None
+    assert raw_records["memory_writes"][0]["readiness"]["ready"] is True
     assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
 
 

@@ -12,6 +12,7 @@ import typer
 
 from memwing_benchmark.adapters.memwing import (
     MemWingAdapter,
+    MemWingCaseScope,
     memwing_case_scope,
 )
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
@@ -25,6 +26,7 @@ from memwing_benchmark.config import (
 )
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.evaluators.llm_judge import JudgeResult, LlmJudge
+from memwing_benchmark.json_utils import loads_json
 from memwing_benchmark.metrics.retrieval import recall_at_k, unique_preserve_order
 from memwing_benchmark.models.volcengine_ark import VolcengineArkChatModel
 from memwing_benchmark.report import write_run_outputs
@@ -258,6 +260,7 @@ def run(
                 adapter=adapter,
                 judge=judge,
                 raw_records=raw_records,
+                runs_root=Path(config.paths.runs_dir).expanduser(),
             )
         else:
             raise BenchmarkError("--backend memwing-http write currently supports --phase ingest or evaluate")
@@ -382,6 +385,7 @@ def run(
                 adapter=memwing_adapter,
                 judge=judge,
                 raw_records=raw_records,
+                runs_root=Path(config.paths.runs_dir).expanduser(),
             )
             _record_memwing_http_records(
                 raw_records, memwing_adapter.records, openclaw_plugin=True
@@ -637,6 +641,15 @@ class DurablePollResult:
 class MemorySearchOutcome:
     details: MemorySearchDetails
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class MemWingWriteIngestRecord:
+    case_id: str
+    run_id: str
+    run_dir: Path
+    scope: MemWingCaseScope
+    source_event_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -1564,6 +1577,7 @@ def _run_memwing_write_ingest_batch(
         _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
 
     results: list[NormalizedResult] = []
+    scope = _memwing_default_scope(adapter)
     for case in cases:
         _debug(
             raw_records,
@@ -1581,6 +1595,7 @@ def _run_memwing_write_ingest_batch(
                 "case_id": case.case_id,
                 "seed_message_count": len(case.seed_messages),
                 "accepted_count": sum(1 for record in ingest_records if record.get("accepted") is True),
+                "scope": scope.payload(),
                 "source_event_ids": [
                     record["source_event_id"]
                     for record in ingest_records
@@ -1617,13 +1632,21 @@ def _run_memwing_write_evaluate_batch(
     adapter: MemWingAdapter,
     judge: LlmJudge | None,
     raw_records: dict[str, Any],
+    runs_root: Path,
 ) -> list[NormalizedResult]:
     results: list[NormalizedResult] = []
     total_cases = len(cases)
+    ingest_records = _load_latest_memwing_write_ingest_records(
+        runs_root=runs_root,
+        backend=backend,
+        adapter=adapter,
+        case_ids=[case.case_id for case in cases],
+    )
     for index, case in enumerate(cases, start=1):
         expected_memories = _expected_memories(case)
         noise_memories = _noise_memories(case)
         allowed_other_memories = _expected_memories_for_other_cases(cases, case.case_id)
+        ingest_record = ingest_records.get(case.case_id)
         _debug(
             raw_records,
             "MemWing write evaluate case 开始",
@@ -1633,19 +1656,14 @@ def _run_memwing_write_evaluate_batch(
             expected_memory_count=len(expected_memories),
             noise_memory_count=len(noise_memories),
             allowed_other_memory_count=len(allowed_other_memories),
+            source_event_count=len(ingest_record.source_event_ids) if ingest_record is not None else 0,
         )
-        readiness_unavailable = {
-            "profile": "write-evaluate",
-            "available": False,
-            "reason": "source_event_ids_required",
-        }
-        raw_records.setdefault("memwing_pipeline_awaits", []).append(
-            {
-                "case_id": case.case_id,
-                "profile": "write-evaluate",
-                "available": False,
-                "reason": "source_event_ids_required",
-            }
+        readiness_summary = _await_memwing_write_evaluate_readiness(
+            adapter=adapter,
+            case=case,
+            ingest_record=ingest_record,
+            raw_records=raw_records,
+            runs_root=runs_root,
         )
         searches: list[dict[str, Any]] = []
         written_contexts: list[str] = []
@@ -1700,7 +1718,7 @@ def _run_memwing_write_evaluate_batch(
                 "written_context_count": len(written_contexts),
                 "changed_file_metrics_available": False,
                 "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
-                "readiness_unavailable": readiness_unavailable,
+                "readiness": readiness_summary,
                 "write_judge": write_result.model_dump(mode="json") if write_result else None,
             }
         )
@@ -1715,10 +1733,157 @@ def _run_memwing_write_evaluate_batch(
                 search_errors=search_errors,
                 write_result=write_result,
                 searches=searches,
-                readiness_summary=readiness_unavailable,
+                readiness_summary=readiness_summary,
             )
         )
     return results
+
+
+def _await_memwing_write_evaluate_readiness(
+    *,
+    adapter: MemWingAdapter,
+    case: BenchmarkCase,
+    ingest_record: MemWingWriteIngestRecord | None,
+    raw_records: dict[str, Any],
+    runs_root: Path,
+) -> dict[str, Any]:
+    if ingest_record is None or not ingest_record.source_event_ids:
+        raw_records.setdefault("memwing_pipeline_awaits", []).append(
+            {
+                "case_id": case.case_id,
+                "profile": "write-evaluate",
+                "available": False,
+                "reason": "source_event_ids_required",
+                "runs_root": str(runs_root),
+            }
+        )
+        raise BenchmarkError(
+            "MemWing write evaluate requires source_event_ids from a prior write-ingest run: "
+            f"case_id={case.case_id} runs_root={runs_root}"
+        )
+
+    _debug(
+        raw_records,
+        "MemWing write evaluate pipeline await 开始",
+        case_id=case.case_id,
+        source_event_count=len(ingest_record.source_event_ids),
+        ingest_run_id=ingest_record.run_id,
+    )
+    readiness = adapter.pipeline_await(
+        scope=ingest_record.scope,
+        source_event_ids=ingest_record.source_event_ids,
+        profile="write-evaluate",
+    )
+    raw_records.setdefault("memwing_pipeline_awaits", []).append(
+        {
+            "case_id": case.case_id,
+            "scope": ingest_record.scope.payload(),
+            "source_event_ids": ingest_record.source_event_ids,
+            "profile": "write-evaluate",
+            "ingest_run_id": ingest_record.run_id,
+            "ingest_run_dir": str(ingest_record.run_dir),
+            "response": readiness,
+        }
+    )
+    if readiness.get("ready") is not True:
+        raise BenchmarkError(f"MemWing write-evaluate pipeline await did not become ready: case_id={case.case_id}")
+    _debug(raw_records, "MemWing write evaluate pipeline await 完成", case_id=case.case_id)
+    return readiness
+
+
+def _load_latest_memwing_write_ingest_records(
+    *,
+    runs_root: Path,
+    backend: str,
+    adapter: MemWingAdapter,
+    case_ids: list[str],
+) -> dict[str, MemWingWriteIngestRecord]:
+    missing = set(case_ids)
+    records: dict[str, MemWingWriteIngestRecord] = {}
+    ingest_root = runs_root / "write-ingest"
+    if not ingest_root.exists():
+        return records
+
+    raw_paths = sorted(
+        ingest_root.glob("*/*/raw/records.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for raw_path in raw_paths:
+        if not missing:
+            break
+        run_dir = raw_path.parent.parent
+        config_path = run_dir / "config.json"
+        if not config_path.exists():
+            continue
+        run_config = _read_json_object(config_path)
+        if (
+            run_config.get("backend") != backend
+            or run_config.get("mode") != "write"
+            or run_config.get("phase") != "ingest"
+        ):
+            continue
+        run_id = run_config.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        raw_records = _read_json_object(raw_path)
+        for write_record in raw_records.get("memory_writes", ()):
+            if not isinstance(write_record, dict) or write_record.get("phase") != "ingest":
+                continue
+            case_id = write_record.get("case_id")
+            if not isinstance(case_id, str) or case_id not in missing:
+                continue
+            source_event_ids = [
+                source_event_id
+                for source_event_id in write_record.get("source_event_ids", ())
+                if isinstance(source_event_id, str) and source_event_id
+            ]
+            if not source_event_ids:
+                continue
+            records[case_id] = MemWingWriteIngestRecord(
+                case_id=case_id,
+                run_id=run_id,
+                run_dir=run_dir,
+                scope=_memwing_scope_from_raw(write_record.get("scope"), default_scope=_memwing_default_scope(adapter)),
+                source_event_ids=unique_preserve_order(source_event_ids),
+            )
+            missing.remove(case_id)
+    return records
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    parsed = loads_json(path.read_bytes())
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _memwing_default_scope(adapter: MemWingAdapter) -> MemWingCaseScope:
+    return MemWingCaseScope(
+        project_memory_space_id=adapter.config.project_memory_space_id,
+        group_id=adapter.config.group_id,
+        thread_id=adapter.config.thread_id,
+        shared_group_id=adapter.config.shared_group_id or None,
+    )
+
+
+def _memwing_scope_from_raw(value: Any, *, default_scope: MemWingCaseScope) -> MemWingCaseScope:
+    if not isinstance(value, dict):
+        return default_scope
+    project_memory_space_id = value.get("project_memory_space_id")
+    group_id = value.get("group_id")
+    thread_id = value.get("thread_id")
+    shared_group_id = value.get("shared_group_id")
+    if not isinstance(project_memory_space_id, str) or not project_memory_space_id:
+        return default_scope
+    if not isinstance(group_id, str) or not group_id:
+        return default_scope
+    if not isinstance(thread_id, str) or not thread_id:
+        return default_scope
+    return MemWingCaseScope(
+        project_memory_space_id=project_memory_space_id,
+        group_id=group_id,
+        thread_id=thread_id,
+        shared_group_id=shared_group_id if isinstance(shared_group_id, str) and shared_group_id else None,
+    )
 
 
 def _poll_memwing_readiness(
@@ -3071,7 +3236,7 @@ def _result_from_memwing_write(
             "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
             "memory_searches": searches,
             "memory_search_errors": search_errors,
-            "readiness_unavailable": readiness_summary,
+            "readiness": readiness_summary,
             "write_judge": write_result.model_dump(mode="json") if write_result else None,
         },
     )
