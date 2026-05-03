@@ -606,6 +606,114 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
     assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
 
 
+def test_cli_memwing_write_evaluate_can_select_explicit_ingest_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.config = _config
+            self.records = []
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def pipeline_await(self, *, scope, source_event_ids, profile):
+            assert source_event_ids == ["source_event_old"]
+            assert profile == "write-evaluate"
+            self.records.append(
+                {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
+            )
+            return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
+
+        def memory_search_details(self, question, *, max_results):
+            assert max_results == 5
+            return MemorySearchDetails(
+                contexts=[f"MemWing memory: {question}"],
+                results=[{"rank": 1, "source_event_ids": ["source_event_old"], "snippet": question}],
+                latency_ms=7,
+                raw={"trace_id": "trace_search", "results": []},
+            )
+
+    class FakeJudge:
+        def evaluate_write(self, **kwargs):
+            return JudgeResult(
+                judge_type="memory_write",
+                case_id=kwargs["case_id"],
+                probe_id="bs001_write",
+                write=WriteJudgeBlock(
+                    write_recall=1.0,
+                    write_precision=1.0,
+                    written_claim_count=1,
+                    matched_expected_memory_ids=["bs001_m1"],
+                    missing_expected_memory_ids=[],
+                ),
+            )
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_memwing_ingest_run(
+        tmp_path / "runs",
+        backend="memwing-http",
+        run_id="20260503-000000",
+        source_event_ids=["source_event_old"],
+    )
+    _write_memwing_ingest_run(
+        tmp_path / "runs",
+        backend="memwing-http",
+        run_id="20260503-000001",
+        source_event_ids=["source_event_latest"],
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-http",
+            "--mode",
+            "write",
+            "--phase",
+            "evaluate",
+            "--ingest-run-id",
+            "20260503-000000",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    run_config = loads_json((run_dir / "config.json").read_bytes())
+    raw_records = loads_json((run_dir / "raw" / "records.json").read_bytes())
+    await_record = raw_records["memwing_pipeline_awaits"][0]
+    assert run_config["requested_ingest_run_id"] == "20260503-000000"
+    assert await_record["ingest_run_id"] == "20260503-000000"
+    assert await_record["ingest_selection"] == "explicit"
+    assert await_record["source_event_ids"] == ["source_event_old"]
+    assert raw_records["memory_writes"][0]["selected_ingest_run_id"] == "20260503-000000"
+
+
 def test_memwing_write_evaluate_requires_prior_ingest_source_event_ids(tmp_path: Path) -> None:
     class FakeMemWingAdapter:
         config = SimpleNamespace(

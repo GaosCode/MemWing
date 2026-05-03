@@ -73,6 +73,7 @@ def main(
     backend: str = typer.Option("openclaw-native", "--backend"),
     mode: str = typer.Option("retrieval", "--mode"),
     phase: str = typer.Option("full", "--phase"),
+    ingest_run_id: str | None = typer.Option(None, "--ingest-run-id"),
     cases_path: Path = typer.Option(Path("datasets"), "--cases"),
     case_id: str | None = typer.Option(None, "--case-id"),
     live: bool = typer.Option(False, "--live"),
@@ -99,6 +100,7 @@ def main(
             backend=backend,
             mode=mode,
             phase=phase,
+            ingest_run_id=ingest_run_id,
             cases_path=cases_path,
             case_id=case_id,
             live=live,
@@ -128,6 +130,7 @@ def run(
     backend: str,
     mode: str,
     phase: str,
+    ingest_run_id: str | None,
     cases_path: Path,
     case_id: str | None,
     live: bool,
@@ -157,6 +160,14 @@ def run(
         raise BenchmarkError("--phase must be one of: full, ingest, evaluate")
     if mode != "write" and phase != "full":
         raise BenchmarkError("--phase is only supported with --mode write")
+    if ingest_run_id is not None:
+        ingest_run_id = ingest_run_id.strip()
+        if not ingest_run_id:
+            raise BenchmarkError("--ingest-run-id must not be empty")
+    if ingest_run_id and not (mode == "write" and phase == "evaluate"):
+        raise BenchmarkError("--ingest-run-id is only supported with --mode write --phase evaluate")
+    if ingest_run_id and backend not in {MEMWING_HTTP_BACKEND, MEMWING_OPENCLAW_PLUGIN_BACKEND}:
+        raise BenchmarkError("--ingest-run-id is only supported with MemWing write evaluate backends")
     if mode == "retrieval" and live and batch:
         raise BenchmarkError("--mode retrieval --live currently supports a single case only")
     if backend == OPENCLAW_NATIVE_BACKEND and mode == "write" and phase in {"full", "ingest"} and not live:
@@ -261,6 +272,7 @@ def run(
                 judge=judge,
                 raw_records=raw_records,
                 runs_root=Path(config.paths.runs_dir).expanduser(),
+                ingest_run_id=ingest_run_id,
             )
         else:
             raise BenchmarkError("--backend memwing-http write currently supports --phase ingest or evaluate")
@@ -284,6 +296,7 @@ def run(
             "probe_chat_id": None,
             "live": live,
             "pg_preseed_per_case": pg_preseed_per_case,
+            "requested_ingest_run_id": ingest_run_id,
             **_memwing_pipeline_run_config(pg_preseed_per_case=pg_preseed_per_case),
             "config": sanitize_config_for_run(config),
             "side_effects": raw_records["side_effects"],
@@ -386,6 +399,7 @@ def run(
                 judge=judge,
                 raw_records=raw_records,
                 runs_root=Path(config.paths.runs_dir).expanduser(),
+                ingest_run_id=ingest_run_id,
             )
             _record_memwing_http_records(
                 raw_records, memwing_adapter.records, openclaw_plugin=True
@@ -411,6 +425,7 @@ def run(
                 "seed_chat_id": None,
                 "probe_chat_id": None,
                 "live": live,
+                "requested_ingest_run_id": ingest_run_id,
                 "config": sanitize_config_for_run(config),
                 "side_effects": raw_records["side_effects"],
             }
@@ -650,6 +665,7 @@ class MemWingWriteIngestRecord:
     run_dir: Path
     scope: MemWingCaseScope
     source_event_ids: list[str]
+    selection: str
 
 
 @dataclass(frozen=True)
@@ -1633,14 +1649,16 @@ def _run_memwing_write_evaluate_batch(
     judge: LlmJudge | None,
     raw_records: dict[str, Any],
     runs_root: Path,
+    ingest_run_id: str | None = None,
 ) -> list[NormalizedResult]:
     results: list[NormalizedResult] = []
     total_cases = len(cases)
-    ingest_records = _load_latest_memwing_write_ingest_records(
+    ingest_records = _load_memwing_write_ingest_records(
         runs_root=runs_root,
         backend=backend,
         adapter=adapter,
         case_ids=[case.case_id for case in cases],
+        ingest_run_id=ingest_run_id,
     )
     for index, case in enumerate(cases, start=1):
         expected_memories = _expected_memories(case)
@@ -1657,6 +1675,8 @@ def _run_memwing_write_evaluate_batch(
             noise_memory_count=len(noise_memories),
             allowed_other_memory_count=len(allowed_other_memories),
             source_event_count=len(ingest_record.source_event_ids) if ingest_record is not None else 0,
+            requested_ingest_run_id=ingest_run_id,
+            selected_ingest_run_id=ingest_record.run_id if ingest_record is not None else None,
         )
         readiness_summary = _await_memwing_write_evaluate_readiness(
             adapter=adapter,
@@ -1664,6 +1684,7 @@ def _run_memwing_write_evaluate_batch(
             ingest_record=ingest_record,
             raw_records=raw_records,
             runs_root=runs_root,
+            requested_ingest_run_id=ingest_run_id,
         )
         searches: list[dict[str, Any]] = []
         written_contexts: list[str] = []
@@ -1719,6 +1740,9 @@ def _run_memwing_write_evaluate_batch(
                 "changed_file_metrics_available": False,
                 "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
                 "readiness": readiness_summary,
+                "selected_ingest_run_id": ingest_record.run_id if ingest_record is not None else None,
+                "selected_ingest_run_dir": str(ingest_record.run_dir) if ingest_record is not None else None,
+                "source_event_ids": ingest_record.source_event_ids if ingest_record is not None else [],
                 "write_judge": write_result.model_dump(mode="json") if write_result else None,
             }
         )
@@ -1746,6 +1770,7 @@ def _await_memwing_write_evaluate_readiness(
     ingest_record: MemWingWriteIngestRecord | None,
     raw_records: dict[str, Any],
     runs_root: Path,
+    requested_ingest_run_id: str | None,
 ) -> dict[str, Any]:
     if ingest_record is None or not ingest_record.source_event_ids:
         raw_records.setdefault("memwing_pipeline_awaits", []).append(
@@ -1755,11 +1780,12 @@ def _await_memwing_write_evaluate_readiness(
                 "available": False,
                 "reason": "source_event_ids_required",
                 "runs_root": str(runs_root),
+                "requested_ingest_run_id": requested_ingest_run_id,
             }
         )
         raise BenchmarkError(
             "MemWing write evaluate requires source_event_ids from a prior write-ingest run: "
-            f"case_id={case.case_id} runs_root={runs_root}"
+            f"case_id={case.case_id} runs_root={runs_root} ingest_run_id={requested_ingest_run_id or 'latest'}"
         )
 
     _debug(
@@ -1768,6 +1794,7 @@ def _await_memwing_write_evaluate_readiness(
         case_id=case.case_id,
         source_event_count=len(ingest_record.source_event_ids),
         ingest_run_id=ingest_record.run_id,
+        ingest_selection=ingest_record.selection,
     )
     readiness = adapter.pipeline_await(
         scope=ingest_record.scope,
@@ -1782,6 +1809,7 @@ def _await_memwing_write_evaluate_readiness(
             "profile": "write-evaluate",
             "ingest_run_id": ingest_record.run_id,
             "ingest_run_dir": str(ingest_record.run_dir),
+            "ingest_selection": ingest_record.selection,
             "response": readiness,
         }
     )
@@ -1791,12 +1819,13 @@ def _await_memwing_write_evaluate_readiness(
     return readiness
 
 
-def _load_latest_memwing_write_ingest_records(
+def _load_memwing_write_ingest_records(
     *,
     runs_root: Path,
     backend: str,
     adapter: MemWingAdapter,
     case_ids: list[str],
+    ingest_run_id: str | None,
 ) -> dict[str, MemWingWriteIngestRecord]:
     missing = set(case_ids)
     records: dict[str, MemWingWriteIngestRecord] = {}
@@ -1826,6 +1855,8 @@ def _load_latest_memwing_write_ingest_records(
         run_id = run_config.get("run_id")
         if not isinstance(run_id, str) or not run_id:
             continue
+        if ingest_run_id is not None and run_id != ingest_run_id:
+            continue
         raw_records = _read_json_object(raw_path)
         for write_record in raw_records.get("memory_writes", ()):
             if not isinstance(write_record, dict) or write_record.get("phase") != "ingest":
@@ -1846,6 +1877,7 @@ def _load_latest_memwing_write_ingest_records(
                 run_dir=run_dir,
                 scope=_memwing_scope_from_raw(write_record.get("scope"), default_scope=_memwing_default_scope(adapter)),
                 source_event_ids=unique_preserve_order(source_event_ids),
+                selection="explicit" if ingest_run_id is not None else "latest-compatible",
             )
             missing.remove(case_id)
     return records
