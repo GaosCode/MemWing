@@ -27,6 +27,9 @@ class BenchmarkDrainResult:
     graph_succeeded: int
     graph_retried: int
     graph_dead_lettered: int
+    evidence_indexed_source_events: int
+    pending_outbox_jobs: int
+    pending_graph_write_jobs: int
     iterations: int
     drained: bool
 
@@ -56,11 +59,18 @@ class BenchmarkDrainWorker:
         max_iterations: int = 20,
         batch_size: int = 10,
     ) -> BenchmarkDrainResult:
+        evidence_indexed_source_events = 0
+
+        async def index_source_event(job: OutboxJob) -> None:
+            nonlocal evidence_indexed_source_events
+            await self._index_source_event(job)
+            evidence_indexed_source_events += 1
+
         outbox_worker = OutboxWorker(
             self._unit_of_work,
             worker_id=self._worker_id,
             handlers={
-                "evidence.index_source_event": self._index_source_event,
+                "evidence.index_source_event": index_source_event,
                 "working_memory.append": self._append_working_memory,
                 "page_memory.maybe_rebuild": self._maybe_rebuild_page_memory,
                 "long_term_filter.classify": lambda job: self._classify_long_term(job, scope),
@@ -90,7 +100,13 @@ class BenchmarkDrainWorker:
         else:
             totals.iterations = max_iterations
 
-        return totals.result(drained=drained)
+        pending = await self._pending_counts(scope.project_memory_space_id)
+        return totals.result(
+            drained=drained,
+            evidence_indexed_source_events=evidence_indexed_source_events,
+            pending_outbox_jobs=pending["outbox_jobs"],
+            pending_graph_write_jobs=pending["graph_write_jobs"],
+        )
 
     async def _index_source_event(self, job: OutboxJob) -> None:
         if self._evidence_index is None:
@@ -158,6 +174,23 @@ class BenchmarkDrainWorker:
             raise RuntimeError("source event for outbox job was not found")
         return source_event
 
+    async def _pending_counts(self, project_memory_space_id: str) -> dict[str, int]:
+        async with self._unit_of_work.transaction() as tx:
+            outbox_jobs = await tx.outbox_jobs.list_for_project(
+                project_memory_space_id=project_memory_space_id,
+                limit=10000,
+            )
+            graph_jobs = await tx.graph_write_jobs.list_for_project(
+                project_memory_space_id=project_memory_space_id,
+                limit=10000,
+            )
+        return {
+            "outbox_jobs": sum(1 for job in outbox_jobs if job.status in ("pending", "processing")),
+            "graph_write_jobs": sum(
+                1 for job in graph_jobs if job.status in ("pending", "processing")
+            ),
+        }
+
 
 @dataclass(slots=True)
 class _DrainTotals:
@@ -183,7 +216,14 @@ class _DrainTotals:
         self.graph_retried += result.retried
         self.graph_dead_lettered += result.dead_lettered
 
-    def result(self, *, drained: bool) -> BenchmarkDrainResult:
+    def result(
+        self,
+        *,
+        drained: bool,
+        evidence_indexed_source_events: int,
+        pending_outbox_jobs: int,
+        pending_graph_write_jobs: int,
+    ) -> BenchmarkDrainResult:
         return BenchmarkDrainResult(
             outbox_claimed=self.outbox_claimed,
             outbox_succeeded=self.outbox_succeeded,
@@ -193,6 +233,9 @@ class _DrainTotals:
             graph_succeeded=self.graph_succeeded,
             graph_retried=self.graph_retried,
             graph_dead_lettered=self.graph_dead_lettered,
+            evidence_indexed_source_events=evidence_indexed_source_events,
+            pending_outbox_jobs=pending_outbox_jobs,
+            pending_graph_write_jobs=pending_graph_write_jobs,
             iterations=self.iterations,
             drained=drained,
         )
@@ -211,4 +254,3 @@ def _scope_from_source_event(source_event: SourceEvent) -> EffectiveScope:
 
 def _uuid(*parts: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, ":".join(parts)))
-

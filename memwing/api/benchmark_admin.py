@@ -11,6 +11,7 @@ from memwing.application.benchmark_admin_service import BenchmarkAdminService
 from memwing.application.failure_semantics import classify_failure
 from memwing.core.errors import ConfigurationFailure, ValidationFailure
 from memwing.ports.benchmark_admin import BenchmarkRuntimeBinding, BenchmarkScope
+from memwing.workers.benchmark_drain import BenchmarkDrainResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,26 +35,52 @@ async def handle_benchmark_admin_request(
 
     try:
         if path == "/v1/memwing/admin/benchmark/cleanup-scope":
-            result = await service.cleanup_scope(
-                scope=_scope(payload),
-                runtime_binding=_runtime_binding(payload),
+            _reject_unexpected_payload_fields(
+                payload,
+                {"scope", "agent_id", "workspace_id", "session_id"},
             )
-            return BenchmarkAdminHttpResponse(status_code=200, body=_json_object(result))
+            scope = _scope(payload)
+            result = await service.cleanup_scope(
+                scope=scope,
+                runtime_binding=_runtime_binding(payload, scope),
+            )
+            return BenchmarkAdminHttpResponse(
+                status_code=200,
+                body={
+                    "deleted": _cleanup_deleted(result.deleted_counts),
+                    "trace_id": f"benchmark_cleanup:{scope.project_memory_space_id}",
+                },
+            )
         if path == "/v1/memwing/admin/benchmark/drain":
+            _reject_unexpected_payload_fields(payload, {"scope", "max_rounds", "batch_size"})
+            scope = _scope(payload)
             result = await service.drain_scope(
-                scope=_scope(payload),
-                max_iterations=_positive_int(payload, "max_iterations", default=20),
+                scope=scope,
+                max_iterations=_positive_int(payload, "max_rounds", default=20),
                 batch_size=_positive_int(payload, "batch_size", default=10),
             )
-            status_code = 200 if result.drained and result.outbox_dead_lettered == 0 and result.graph_dead_lettered == 0 else 409
-            return BenchmarkAdminHttpResponse(status_code=status_code, body=_json_object(result))
+            status_code = (
+                200
+                if result.drained
+                and result.outbox_dead_lettered == 0
+                and result.graph_dead_lettered == 0
+                else 409
+            )
+            return BenchmarkAdminHttpResponse(
+                status_code=status_code,
+                body=_drain_body(result, scope),
+            )
         if path == "/v1/memwing/admin/benchmark/readiness":
+            _reject_unexpected_payload_fields(payload, {"scope", "expected_source_event_ids", "queries"})
+            scope = _scope(payload)
             result = await service.readiness(
-                scope=_scope(payload),
+                scope=scope,
                 expected_source_event_ids=tuple(_text_list(payload, "expected_source_event_ids")),
                 queries=tuple(_text_list(payload, "queries")),
             )
-            return BenchmarkAdminHttpResponse(status_code=200, body=_json_object(result))
+            body = _json_object(result)
+            body["trace_id"] = f"benchmark_readiness:{scope.project_memory_space_id}"
+            return BenchmarkAdminHttpResponse(status_code=200, body=body)
     except SchemaValidationError as exc:
         failure = classify_failure(
             ValidationFailure("schema_invalid", str(exc)),
@@ -93,18 +120,24 @@ def _scope(payload: Mapping[str, object]) -> BenchmarkScope:
     )
 
 
-def _runtime_binding(payload: Mapping[str, object]) -> BenchmarkRuntimeBinding:
+def _runtime_binding(payload: Mapping[str, object], scope: BenchmarkScope) -> BenchmarkRuntimeBinding:
     return BenchmarkRuntimeBinding(
         runtime="openclaw",
-        agent_id=require_text(payload.get("agent_id"), "agent_id"),
+        agent_id=_optional_text(payload.get("agent_id"), "agent_id") or "main",
         workspace_id=_optional_text(payload.get("workspace_id"), "workspace_id"),
-        session_id=_optional_text(payload.get("session_id"), "session_id"),
+        session_id=_optional_text(payload.get("session_id"), "session_id") or scope.thread_id,
     )
 
 
 def _positive_int(payload: Mapping[str, object], field_name: str, *, default: int) -> int:
     value = payload.get(field_name, default)
     return require_positive_int(value, field_name)
+
+
+def _reject_unexpected_payload_fields(payload: Mapping[str, object], allowed: set[str]) -> None:
+    unexpected = set(payload) - allowed
+    if unexpected:
+        raise SchemaValidationError(f"{sorted(unexpected)[0]} is not supported")
 
 
 def _text_list(payload: Mapping[str, object], field_name: str) -> list[str]:
@@ -147,3 +180,38 @@ def _json_value(value: object) -> JsonValue:
     if isinstance(value, tuple | list):
         return [_json_value(item) for item in value]
     return str(value)
+
+
+def _cleanup_deleted(deleted_counts: Mapping[str, int]) -> JsonObject:
+    return {
+        "source_events": deleted_counts.get("source_events", 0),
+        "memory_items": deleted_counts.get("memory_items", 0),
+        "outbox_jobs": deleted_counts.get("outbox_jobs", 0),
+        "graph_write_jobs": deleted_counts.get("graph_write_jobs", 0),
+        "page_memory": deleted_counts.get("memory_pages", 0),
+        "working_memory": deleted_counts.get("working_memory_entries", 0),
+        "memory_recall_events": deleted_counts.get("memory_recall_events", 0),
+    }
+
+
+def _drain_body(result: BenchmarkDrainResult, scope: BenchmarkScope) -> JsonObject:
+    return {
+        "outbox": {
+            "claimed": result.outbox_claimed,
+            "succeeded": result.outbox_succeeded,
+            "retried": result.outbox_retried,
+            "dead_lettered": result.outbox_dead_lettered,
+        },
+        "graph_write": {
+            "claimed": result.graph_claimed,
+            "succeeded": result.graph_succeeded,
+            "retried": result.graph_retried,
+            "dead_lettered": result.graph_dead_lettered,
+        },
+        "evidence_indexed": {"source_events": result.evidence_indexed_source_events},
+        "pending": {
+            "outbox_jobs": result.pending_outbox_jobs,
+            "graph_write_jobs": result.pending_graph_write_jobs,
+        },
+        "trace_id": f"benchmark_drain:{scope.project_memory_space_id}",
+    }

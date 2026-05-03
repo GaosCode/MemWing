@@ -57,6 +57,8 @@ def test_readiness_distinguishes_unavailable_backend_from_empty_results() -> Non
         assert result.ready is False
         assert result.backends["unavailable"] == {"evidence_index": 1}
         assert result.queries[0]["result_count"] == 0
+        assert result.evidence["ready"] is False
+        assert result.warnings[0]["branch"] == "evidence_index"
 
     asyncio.run(run())
 
@@ -94,9 +96,18 @@ def test_drain_indexes_evidence_and_marks_outbox_succeeded() -> None:
 
         assert drain.drained is True
         assert drain.outbox_succeeded == 1
+        assert drain.evidence_indexed_source_events == 1
+        assert drain.pending_outbox_jobs == 0
+        assert drain.pending_graph_write_jobs == 0
         assert evidence.indexed_source_event_ids == ["source_001"]
         assert readiness.ready is True
+        assert readiness.postgres["source_events"] == 1
+        assert readiness.evidence["ready"] is True
+        assert readiness.evidence["matched_source_event_ids"] == ("source_001",)
+        assert readiness.page_memory == {"ready": False, "count": 0}
+        assert readiness.memory_items == {"count": 0}
         assert readiness.queries[0]["source_mix"] == {"evidence_index": 1}
+        assert readiness.queries[0]["evidence"]["ready"] is True
 
     asyncio.run(run())
 
@@ -200,4 +211,3 @@ class _NoopLongTermFilter:
         request: LongTermFilterRequest,
     ) -> tuple[LongTermFilterItem, ...]:
         return ()
-

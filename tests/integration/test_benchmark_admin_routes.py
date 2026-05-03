@@ -69,7 +69,14 @@ def test_benchmark_admin_cleanup_ingest_drain_readiness_route(monkeypatch) -> No
                 "event_time": "2026-05-02T00:00:00+00:00",
             },
         )
-        drain = client.post("/v1/memwing/admin/benchmark/drain", json={"scope": scope})
+        drain = client.post(
+            "/v1/memwing/admin/benchmark/drain",
+            json={"scope": scope, "max_rounds": 3},
+        )
+        legacy_drain = client.post(
+            "/v1/memwing/admin/benchmark/drain",
+            json={"scope": scope, "max_iterations": 3},
+        )
         source_event_id = ingest.json()["source_event_id"]
         readiness = client.post(
             "/v1/memwing/admin/benchmark/readiness",
@@ -93,11 +100,25 @@ def test_benchmark_admin_cleanup_ingest_drain_readiness_route(monkeypatch) -> No
         )
 
     assert cleanup.status_code == 200
+    assert cleanup.json()["deleted"]["source_events"] == 0
+    assert cleanup.json()["trace_id"].startswith("benchmark_cleanup:")
     assert ingest.status_code == 202
     assert drain.status_code == 200
+    assert drain.json()["outbox"]["succeeded"] == 4
+    assert drain.json()["evidence_indexed"]["source_events"] == 1
+    assert drain.json()["pending"] == {"outbox_jobs": 0, "graph_write_jobs": 0}
+    assert drain.json()["trace_id"].startswith("benchmark_drain:")
+    assert legacy_drain.status_code == 400
     assert readiness.status_code == 200
     assert readiness.json()["ready"] is True
+    assert readiness.json()["postgres"]["source_events"] == 1
+    assert readiness.json()["evidence"]["ready"] is True
+    assert readiness.json()["evidence"]["matched_source_event_ids"] == [source_event_id]
+    assert readiness.json()["page_memory"]["ready"] is False
+    assert readiness.json()["memory_items"]["count"] == 0
+    assert readiness.json()["trace_id"].startswith("benchmark_readiness:")
     assert readiness.json()["queries"][0]["source_mix"] == {"evidence_index": 1}
+    assert readiness.json()["queries"][0]["evidence"]["ready"] is True
     assert search.status_code == 200
     assert search.json()["results"][0]["source"] == "evidence_index"
 

@@ -20,6 +20,12 @@ from memwing.workers.benchmark_drain import BenchmarkDrainResult, BenchmarkDrain
 @dataclass(frozen=True, slots=True)
 class BenchmarkReadinessResult:
     ready: bool
+    postgres: dict[str, object]
+    graph: dict[str, object]
+    evidence: dict[str, object]
+    page_memory: dict[str, object]
+    memory_items: dict[str, object]
+    warnings: tuple[dict[str, str], ...]
     source_events: dict[str, object]
     jobs: dict[str, object]
     backends: dict[str, object]
@@ -81,6 +87,7 @@ class BenchmarkAdminService:
             expected_source_event_ids=expected_source_event_ids,
             scope=effective_scope,
         )
+        postgres_summary = await self._postgres_summary(effective_scope)
         job_summary = await self._job_summary(scope.project_memory_space_id)
         query_summaries = tuple(
             [
@@ -88,6 +95,7 @@ class BenchmarkAdminService:
                     query_text=query,
                     scope=effective_scope,
                     limit=5,
+                    postgres_summary=postgres_summary,
                 )
                 for query in queries
             ]
@@ -106,8 +114,31 @@ class BenchmarkAdminService:
             and backend_summary["enabled_count"] > 0
             and all(summary["result_count"] > 0 for summary in query_summaries)
         )
+        warnings = tuple(
+            warning
+            for query in query_summaries
+            for warning in query["warnings"]
+            if isinstance(warning, dict)
+        )
         return BenchmarkReadinessResult(
             ready=ready,
+            postgres=postgres_summary,
+            graph=_aggregate_backend_readiness(
+                branch="graph",
+                enabled=self._graph_backend is not None,
+                queries=query_summaries,
+            ),
+            evidence=_aggregate_backend_readiness(
+                branch="evidence",
+                enabled=self._evidence_index is not None,
+                queries=query_summaries,
+            ),
+            page_memory={
+                "ready": postgres_summary["page_memory"] > 0,
+                "count": postgres_summary["page_memory"],
+            },
+            memory_items={"count": postgres_summary["memory_items"]},
+            warnings=warnings,
             source_events=source_summary,
             jobs=job_summary,
             backends=backend_summary,
@@ -139,6 +170,17 @@ class BenchmarkAdminService:
             "available_count": len(loaded),
             "missing_count": len(missing),
             "missing_source_event_ids": missing,
+        }
+
+    async def _postgres_summary(self, scope: EffectiveScope) -> dict[str, object]:
+        async with self._unit_of_work.transaction() as tx:
+            source_events = await tx.source_events.list_for_scope(scope=scope, limit=10000)
+            memory_items = await tx.memory_items.list_for_scope(scope=scope, limit=10000)
+            pages = await tx.memory_pages.list_for_scope(scope=scope, limit=10000)
+        return {
+            "source_events": len(source_events),
+            "memory_items": len(memory_items),
+            "page_memory": len(pages),
         }
 
     async def _job_summary(self, project_memory_space_id: str) -> dict[str, object]:
@@ -176,6 +218,7 @@ class BenchmarkAdminService:
         query_text: str,
         scope: EffectiveScope,
         limit: int,
+        postgres_summary: dict[str, object],
     ) -> dict[str, object]:
         search_query = MemorySearchQuery(
             query=query_text,
@@ -187,7 +230,8 @@ class BenchmarkAdminService:
             min_score=0.0,
             trace_id=f"benchmark_readiness:{scope.project_memory_space_id}",
         )
-        results: list[dict[str, object]] = []
+        graph_results: list[dict[str, object]] = []
+        evidence_results: list[dict[str, object]] = []
         warnings: list[dict[str, str]] = []
         if self._graph_backend is not None:
             try:
@@ -195,20 +239,38 @@ class BenchmarkAdminService:
             except Exception as exc:
                 warnings.append(_warning("graph_backend", exc))
             else:
-                results.extend(_result_refs(graph_result.results))
+                graph_results.extend(_result_refs(graph_result.results))
         if self._evidence_index is not None:
             try:
                 evidence_result = await self._evidence_index.search(search_query)
             except Exception as exc:
                 warnings.append(_warning("evidence_index", exc))
             else:
-                results.extend(_result_refs(evidence_result.results))
+                evidence_results.extend(_result_refs(evidence_result.results))
 
+        results = [*graph_results, *evidence_results]
         source_mix = dict(Counter(str(result["source"]) for result in results))
         return {
             "query": query_text,
             "result_count": len(results),
             "source_mix": source_mix,
+            "graph": _branch_readiness(
+                enabled=self._graph_backend is not None,
+                results=graph_results,
+                warnings=warnings,
+                warning_branch="graph_backend",
+            ),
+            "evidence": _branch_readiness(
+                enabled=self._evidence_index is not None,
+                results=evidence_results,
+                warnings=warnings,
+                warning_branch="evidence_index",
+            ),
+            "page_memory": {
+                "ready": postgres_summary["page_memory"] > 0,
+                "count": postgres_summary["page_memory"],
+            },
+            "memory_items": {"count": postgres_summary["memory_items"]},
             "warnings": tuple(warnings),
         }
 
@@ -245,9 +307,68 @@ def _result_refs(results: tuple[object, ...]) -> list[dict[str, object]]:
             {
                 "id": getattr(result, "id"),
                 "source": getattr(result, "source"),
+                "source_event_ids": tuple(getattr(result, "source_event_ids")),
             }
         )
     return refs
+
+
+def _branch_readiness(
+    *,
+    enabled: bool,
+    results: list[dict[str, object]],
+    warnings: list[dict[str, str]],
+    warning_branch: str,
+) -> dict[str, object]:
+    branch_warnings = tuple(warning for warning in warnings if warning["branch"] == warning_branch)
+    return {
+        "enabled": enabled,
+        "ready": enabled and not branch_warnings and bool(results),
+        "result_count": len(results),
+        "matched_source_event_ids": _matched_source_event_ids(results),
+        "warnings": branch_warnings,
+    }
+
+
+def _aggregate_backend_readiness(
+    *,
+    branch: str,
+    enabled: bool,
+    queries: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    branch_summaries = [
+        query[branch]
+        for query in queries
+        if isinstance(query.get(branch), dict)
+    ]
+    matched = tuple(
+        source_event_id
+        for summary in branch_summaries
+        for source_event_id in summary["matched_source_event_ids"]
+        if isinstance(source_event_id, str)
+    )
+    warnings = tuple(
+        warning
+        for summary in branch_summaries
+        for warning in summary["warnings"]
+        if isinstance(warning, dict)
+    )
+    return {
+        "enabled": enabled,
+        "ready": enabled and not warnings and bool(matched),
+        "matched_source_event_ids": tuple(dict.fromkeys(matched)),
+        "warnings": warnings,
+    }
+
+
+def _matched_source_event_ids(results: list[dict[str, object]]) -> tuple[str, ...]:
+    matched: list[str] = []
+    for result in results:
+        source_event_ids = result.get("source_event_ids")
+        if not isinstance(source_event_ids, tuple):
+            continue
+        matched.extend(source_event_id for source_event_id in source_event_ids if source_event_id)
+    return tuple(dict.fromkeys(matched))
 
 
 def _warning(branch: str, exc: Exception) -> dict[str, str]:
@@ -272,4 +393,3 @@ def _effective_scope(scope: BenchmarkScope) -> EffectiveScope:
         safe_mode_enabled=scope.group_id is not None,
         cross_group_allowed=scope.group_id is None,
     )
-
