@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import re
 
 import pytest
 
@@ -200,6 +201,33 @@ def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     assert result.results[0].id == "edge_002"
     assert result.results[0].source == "graph_backend"
     assert result.results[0].metadata["backend"] == "graphiti"
+
+
+def test_graphiti_adapter_maps_invalid_project_id_to_safe_group_id() -> None:
+    graphiti = FakeGraphiti()
+    adapter = GraphitiAdapter(graphiti)
+    query = MemorySearchQuery(
+        query="roadmap",
+        scope=EffectiveScope(
+            project_memory_space_id="benchmark:20260503-024019:bs001",
+            group_ids=("benchmark:bs001",),
+            thread_id=None,
+            shared_group_id=None,
+            safe_mode_enabled=False,
+            cross_group_allowed=True,
+        ),
+        limit=3,
+    )
+
+    async def scenario():
+        return await adapter.search_current(query)
+
+    asyncio.run(scenario())
+
+    mapped_group_id = graphiti.search_calls[0]["group_ids"][0]
+    assert mapped_group_id.startswith("mw_benchmark_20260503-024019_bs001_")
+    assert ":" not in mapped_group_id
+    assert re.fullmatch(r"[a-zA-Z0-9_-]+", mapped_group_id)
 
 
 def test_graphiti_adapter_source_redaction_marker_is_explicitly_unsupported() -> None:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha1
 from pathlib import Path
+import re
 import sys
 from typing import Protocol
 
@@ -86,7 +88,7 @@ class GraphitiAdapter:
             episode_body=request.memory_item.content,
             source_description="MemWing graph write job",
             reference_time=reference_time,
-            group_id=request.job.project_memory_space_id,
+            group_id=_graphiti_group_id(request.job.project_memory_space_id),
         )
         episode_refs = _episode_refs(result)
         edges = _edges(result)
@@ -110,7 +112,7 @@ class GraphitiAdapter:
     ) -> MemorySearchResult:
         edges = await self._graphiti.search(
             query.query,
-            group_ids=[query.scope.project_memory_space_id],
+            group_ids=[_graphiti_group_id(query.scope.project_memory_space_id)],
             num_results=query.limit,
         )
         items = tuple(_edge_to_result_item(edge) for edge in edges)
@@ -198,6 +200,16 @@ def _optional_datetime_attr(value: object, attr: str) -> datetime | None:
     if isinstance(raw, datetime):
         return raw
     return None
+
+
+def _graphiti_group_id(project_memory_space_id: str) -> str:
+    if re.fullmatch(r"[a-zA-Z0-9_-]+", project_memory_space_id):
+        return project_memory_space_id
+    readable = re.sub(r"[^a-zA-Z0-9_-]+", "_", project_memory_space_id).strip("_")
+    if not readable:
+        readable = "project"
+    digest = sha1(project_memory_space_id.encode("utf-8")).hexdigest()[:12]
+    return f"mw_{readable[:80]}_{digest}"
 
 
 def _load_graphiti_factory() -> GraphitiFactory:
