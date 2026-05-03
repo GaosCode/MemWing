@@ -78,6 +78,9 @@ def test_write_evaluate_requires_page_memory_and_memory_items() -> None:
 
         assert result.ready is True
         assert result.derived["page_memory"].ready is True
+        assert result.derived["page_memory"].matched_source_event_ids == ("source_001",)
+        assert result.derived["page_memory"].unmatched_source_event_ids == ()
+        assert result.derived["page_memory"].page_ids == ("page_001",)
         assert result.derived["memory_items"].ready is True
 
     asyncio.run(run())
@@ -117,6 +120,80 @@ def test_write_evaluate_counts_only_current_active_memory_items() -> None:
         assert result.derived["memory_items"].ready is False
         assert result.derived["memory_items"].count == 0
         assert result.derived["memory_items"].reason == "memory_items_empty"
+
+    asyncio.run(run())
+
+
+def test_write_evaluate_page_memory_requires_current_source_reference() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        source = _source_event("source_001")
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source)
+            for job_type in (
+                "page_memory.maybe_rebuild",
+                "long_term_filter.classify",
+            ):
+                await tx.outbox_jobs.enqueue(
+                    replace(outbox_job(source_event=source, job_type=job_type, now=NOW), status="succeeded")
+                )
+            await tx.memory_pages.upsert(_page(source_event_ids=("old_source",)))
+            await tx.memory_items.upsert(_memory_item())
+
+        result = await PipelineReadinessService(
+            store,
+            evidence_enabled=False,
+            graph_enabled=False,
+        ).check(
+            PipelineReadinessCommand(
+                source_event_ids=("source_001",),
+                scope=_scope(),
+                profile=PipelineReadinessProfile.WRITE_EVALUATE,
+            )
+        )
+
+        assert result.ready is False
+        assert result.derived["page_memory"].ready is False
+        assert result.derived["page_memory"].count == 0
+        assert result.derived["page_memory"].reason == "page_memory_empty"
+        assert result.derived["page_memory"].matched_source_event_ids == ()
+        assert result.derived["page_memory"].unmatched_source_event_ids == ("source_001",)
+        assert result.derived["page_memory"].page_ids == ()
+
+    asyncio.run(run())
+
+
+def test_write_evaluate_ignores_page_memory_that_still_needs_rebuild() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        source = _source_event("source_001")
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source)
+            for job_type in (
+                "page_memory.maybe_rebuild",
+                "long_term_filter.classify",
+            ):
+                await tx.outbox_jobs.enqueue(
+                    replace(outbox_job(source_event=source, job_type=job_type, now=NOW), status="succeeded")
+                )
+            await tx.memory_pages.upsert(_page(needs_rebuild=True))
+            await tx.memory_items.upsert(_memory_item())
+
+        result = await PipelineReadinessService(
+            store,
+            evidence_enabled=False,
+            graph_enabled=False,
+        ).check(
+            PipelineReadinessCommand(
+                source_event_ids=("source_001",),
+                scope=_scope(),
+                profile=PipelineReadinessProfile.WRITE_EVALUATE,
+            )
+        )
+
+        assert result.ready is False
+        assert result.derived["page_memory"].ready is False
+        assert result.derived["page_memory"].unmatched_source_event_ids == ("source_001",)
 
     asyncio.run(run())
 
@@ -230,7 +307,11 @@ def _scope() -> EffectiveScope:
     )
 
 
-def _page() -> PageMemory:
+def _page(
+    *,
+    source_event_ids: tuple[str, ...] = ("source_001",),
+    needs_rebuild: bool = False,
+) -> PageMemory:
     return PageMemory(
         id="page_001",
         project_memory_space_id="project_001",
@@ -245,16 +326,16 @@ def _page() -> PageMemory:
             PageMemoryTopic(
                 title="Topic",
                 summary="Summary",
-                source_event_ids=("source_001",),
+                source_event_ids=source_event_ids[:1],
                 linked_memory_item_ids=(),
             ),
         ),
         open_questions=(),
         next_steps=(),
-        source_event_ids=("source_001",),
+        source_event_ids=source_event_ids,
         linked_memory_item_ids=(),
         version=1,
-        needs_rebuild=False,
+        needs_rebuild=needs_rebuild,
         created_at=NOW,
         updated_at=NOW,
     )

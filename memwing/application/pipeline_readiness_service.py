@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import uuid
 
@@ -19,7 +19,7 @@ from memwing.application.page_memory_trigger import page_memory_trigger_key_for_
 from memwing.application.remember_event_records import (
     long_term_filter_trigger_key_for_scope,
 )
-from memwing.core.models import MemoryItem, OutboxJob, SourceEvent
+from memwing.core.models import MemoryItem, OutboxJob, PageMemory, SourceEvent
 from memwing.core.pipeline_readiness import (
     PipelineReadinessCommand,
     PipelineReadinessResult,
@@ -90,7 +90,10 @@ class PipelineReadinessService:
                 if source_events
                 else 0
             )
-            pages = await tx.memory_pages.list_for_scope(scope=command.scope, limit=20)
+            page_coverage = _page_memory_coverage(
+                await tx.memory_pages.list_for_scope(scope=command.scope, limit=20),
+                source_event_ids=tuple(source_events),
+            )
             memory_items = await _memory_items_for_source_events(
                 tx.memory_items,
                 source_event_ids=tuple(source_events),
@@ -113,7 +116,10 @@ class PipelineReadinessService:
             graph_enabled=self._graph_enabled,
             evidence_count=evidence_count,
             working_count=working_count,
-            page_count=len(pages),
+            page_count=len(page_coverage.pages),
+            page_ids=tuple(page.id for page in page_coverage.pages),
+            page_matched_source_event_ids=page_coverage.matched_source_event_ids,
+            page_unmatched_source_event_ids=page_coverage.unmatched_source_event_ids,
             memory_item_count=len(memory_items),
             graph_status=graph_status,
         )
@@ -232,6 +238,45 @@ async def _memory_items_for_source_events(
             ):
                 by_id[item.id] = item
     return tuple(by_id.values())
+
+
+@dataclass(frozen=True, slots=True)
+class _PageMemoryCoverage:
+    pages: tuple[PageMemory, ...]
+    matched_source_event_ids: tuple[str, ...]
+    unmatched_source_event_ids: tuple[str, ...]
+
+
+def _page_memory_coverage(
+    pages: tuple[PageMemory, ...],
+    *,
+    source_event_ids: tuple[str, ...],
+) -> _PageMemoryCoverage:
+    expected = tuple(dict.fromkeys(source_event_ids))
+    if not expected:
+        return _PageMemoryCoverage(
+            pages=(),
+            matched_source_event_ids=(),
+            unmatched_source_event_ids=(),
+        )
+    expected_set = set(expected)
+    matched_ids: list[str] = []
+    matched_pages: list[PageMemory] = []
+    for page in pages:
+        if page.needs_rebuild:
+            continue
+        page_matches = tuple(source_event_id for source_event_id in page.source_event_ids if source_event_id in expected_set)
+        if not page_matches:
+            continue
+        matched_pages.append(page)
+        matched_ids.extend(page_matches)
+    matched = tuple(dict.fromkeys(matched_ids))
+    matched_set = set(matched)
+    return _PageMemoryCoverage(
+        pages=tuple(matched_pages),
+        matched_source_event_ids=matched,
+        unmatched_source_event_ids=tuple(source_event_id for source_event_id in expected if source_event_id not in matched_set),
+    )
 
 
 def _trace_id(command: PipelineReadinessCommand) -> str:

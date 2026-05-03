@@ -96,6 +96,9 @@ class DerivedLayerReadiness:
     count: int = 0
     pending: int = 0
     reason: str | None = None
+    matched_source_event_ids: tuple[str, ...] = ()
+    unmatched_source_event_ids: tuple[str, ...] = ()
+    page_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

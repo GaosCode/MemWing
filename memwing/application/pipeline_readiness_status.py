@@ -24,6 +24,9 @@ def build_derived_readiness(
     evidence_count: int,
     working_count: int,
     page_count: int,
+    page_ids: tuple[str, ...],
+    page_matched_source_event_ids: tuple[str, ...],
+    page_unmatched_source_event_ids: tuple[str, ...],
     memory_item_count: int,
     graph_status: JobStatusCount,
 ) -> dict[str, DerivedLayerReadiness]:
@@ -54,6 +57,9 @@ def build_derived_readiness(
             count=page_count,
             job_status=outbox_by_type.get(PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE),
             empty_reason="page_memory_empty",
+            matched_source_event_ids=page_matched_source_event_ids,
+            unmatched_source_event_ids=page_unmatched_source_event_ids,
+            page_ids=page_ids,
         ),
         PipelineLane.MEMORY_ITEMS.value: _scope_layer(
             count=memory_item_count,
@@ -165,6 +171,9 @@ def _scope_layer(
     count: int,
     job_status: JobStatusCount | None,
     empty_reason: str,
+    matched_source_event_ids: tuple[str, ...] = (),
+    unmatched_source_event_ids: tuple[str, ...] = (),
+    page_ids: tuple[str, ...] = (),
 ) -> DerivedLayerReadiness:
     return _layer(
         ready=count > 0 and (job_status is not None and job_status.ready),
@@ -174,6 +183,9 @@ def _scope_layer(
             job_status=job_status,
             empty_reason=empty_reason,
         ),
+        matched_source_event_ids=matched_source_event_ids,
+        unmatched_source_event_ids=unmatched_source_event_ids,
+        page_ids=page_ids,
     )
 
 
@@ -202,12 +214,18 @@ def _layer(
     count: int,
     pending: int = 0,
     reason: str | None = None,
+    matched_source_event_ids: tuple[str, ...] = (),
+    unmatched_source_event_ids: tuple[str, ...] = (),
+    page_ids: tuple[str, ...] = (),
 ) -> DerivedLayerReadiness:
     return DerivedLayerReadiness(
         ready=ready,
         count=count,
         pending=pending,
         reason=None if ready else reason,
+        matched_source_event_ids=matched_source_event_ids,
+        unmatched_source_event_ids=unmatched_source_event_ids,
+        page_ids=page_ids,
     )
 
 
