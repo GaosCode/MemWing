@@ -8,9 +8,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from memwing.api.benchmark_admin import handle_benchmark_admin_request
+from memwing.api.env import load_app_env
 from memwing.api.openclaw_http import handle_openclaw_http_request
+from memwing.api.pipeline import (
+    handle_pipeline_await_request,
+    handle_pipeline_readiness_request,
+)
 from memwing.api.runtime_config import benchmark_admin_enabled_from_env
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.pipeline_readiness_service import PipelineReadinessService
 from memwing.bootstrap import MemWingApiRuntimeContext, postgres_runtime_context
 from memwing.ports.agent_runtime import AgentRuntimePort
 
@@ -18,11 +24,14 @@ from memwing.ports.agent_runtime import AgentRuntimePort
 RuntimeContextFactory = Callable[[], AsyncContextManager[AgentRuntimePort | MemWingApiRuntimeContext]]
 
 
+load_app_env()
+
+
 def create_app(
     *,
     runtime_context_factory: RuntimeContextFactory = postgres_runtime_context,
 ) -> FastAPI:
-    state: dict[str, AgentRuntimePort | BenchmarkAdminService | None] = {}
+    state: dict[str, AgentRuntimePort | BenchmarkAdminService | PipelineReadinessService | None] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -30,6 +39,7 @@ def create_app(
             runtime_context = _api_runtime_context(context)
             state["runtime"] = runtime_context.runtime
             state["benchmark_admin"] = runtime_context.benchmark_admin
+            state["pipeline_readiness"] = runtime_context.pipeline_readiness
             yield
             state.clear()
 
@@ -50,6 +60,24 @@ def create_app(
                 service=_benchmark_admin_service(state.get("benchmark_admin")),
             )
             return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/memwing/pipeline/readiness")
+    async def pipeline_readiness_route(request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_pipeline_readiness_request(
+            payload=payload,
+            service=_pipeline_readiness_service(state.get("pipeline_readiness")),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/memwing/pipeline/await")
+    async def pipeline_await_route(request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_pipeline_await_request(
+            payload=payload,
+            service=_pipeline_readiness_service(state.get("pipeline_readiness")),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
 
     @app.post("/{path:path}")
     async def post_route(path: str, request: Request) -> JSONResponse:
@@ -92,6 +120,12 @@ def _benchmark_admin_service(value: object) -> BenchmarkAdminService | None:
     if value is None or isinstance(value, BenchmarkAdminService):
         return value
     raise TypeError("benchmark admin service has invalid type")
+
+
+def _pipeline_readiness_service(value: object) -> PipelineReadinessService:
+    if isinstance(value, PipelineReadinessService):
+        return value
+    raise TypeError("pipeline readiness service is not configured")
 
 
 app = create_app()

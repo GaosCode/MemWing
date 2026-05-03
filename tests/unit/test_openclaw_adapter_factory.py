@@ -4,7 +4,13 @@ from memwing.infrastructure.agents.openclaw_adapter_factory import (
     OpenClawRuntimeHandle,
     create_openclaw_adapter_from_store,
 )
+from memwing.infrastructure.agents import openclaw_adapter_factory
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.infrastructure.llm.openclaw_runtime import (
+    OpenClawRuntimeEmbeddingClient,
+    OpenClawRuntimeLLMClient,
+)
+from memwing.infrastructure.llm.model_config import MemWingModelConfigResolver
 
 
 def test_factory_passes_graph_and_evidence_ports_to_memory_access() -> None:
@@ -38,6 +44,33 @@ def test_runtime_handle_closes_external_clients_before_postgres() -> None:
         assert calls == ["evidence", "graph", "postgres"]
 
     asyncio.run(run())
+
+
+def test_openclaw_model_clients_use_configured_cli_environment(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_CLI", "pnpm")
+    monkeypatch.setenv("OPENCLAW_CLI_ARGS", "openclaw --profile dev")
+    monkeypatch.setenv("OPENCLAW_CLI_CWD", "/repo/openclaw")
+    resolver = MemWingModelConfigResolver.from_env(
+        {
+            "MEMWING_MODEL_RUNTIME": "openclaw",
+            "MEMWING_MODEL_TRANSPORT": "local",
+        }
+    )
+
+    llm_client = openclaw_adapter_factory._llm_client_for_role(resolver, "long_term_filter")
+    embedding_client = openclaw_adapter_factory._embedding_client_for_role(
+        resolver,
+        "evidence_embedding",
+    )
+
+    assert isinstance(llm_client, OpenClawRuntimeLLMClient)
+    assert llm_client._config.command == "pnpm"
+    assert llm_client._config.command_args == ("openclaw", "--profile", "dev")
+    assert llm_client._config.cwd == "/repo/openclaw"
+    assert isinstance(embedding_client, OpenClawRuntimeEmbeddingClient)
+    assert embedding_client._config.command == "pnpm"
+    assert embedding_client._config.command_args == ("openclaw", "--profile", "dev")
+    assert embedding_client._config.cwd == "/repo/openclaw"
 
 
 class FakeClosable:

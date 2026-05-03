@@ -1,8 +1,10 @@
 import pytest
 
+from memwing.api.env import load_app_env
 from memwing.api.runtime_config import (
     OpenClawRuntimeUnavailableError,
     benchmark_admin_enabled_from_env,
+    database_url_from_env,
     evidence_backend_from_env,
     evidence_vector_size_from_env,
     graph_backend_from_env,
@@ -53,3 +55,14 @@ def test_benchmark_admin_enabled_requires_literal_true() -> None:
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "true"}) is True
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "1"}) is False
     assert benchmark_admin_enabled_from_env({}) is False
+
+
+def test_load_app_env_reads_dotenv_from_current_working_tree(tmp_path, monkeypatch) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("DATABASE_URL=postgresql://memwing@localhost/memwing\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    load_app_env()
+
+    assert database_url_from_env() == "postgresql://memwing@localhost/memwing"

@@ -103,22 +103,42 @@ class QdrantEvidenceIndex:
         )
 
     async def index_source_event(self, source_event: SourceEvent, scope: EffectiveScope) -> None:
+        await self.index_source_events((source_event,), scope)
+
+    async def index_source_events(
+        self,
+        source_events: tuple[SourceEvent, ...],
+        scope: EffectiveScope,
+    ) -> None:
         await self._ensure_collection()
-        chunk_text = source_event.content.strip()
-        if not chunk_text:
+        indexable = tuple(
+            (source_event, source_event.content.strip())
+            for source_event in source_events
+            if source_event.content.strip()
+        )
+        if not indexable:
             return
-        vector = await self._embedding_client.embed(chunk_text)
-        _validate_vector_size(vector, expected_size=self._vector_size)
-        payload = _source_event_payload(source_event=source_event, scope=scope, chunk_text=chunk_text)
-        await self._client.upsert(
-            collection_name=self._collection,
-            points=[
+        vectors = await self._embedding_client.embed_batch(tuple(text for _, text in indexable))
+        if len(vectors) != len(indexable):
+            raise ValueError("embedding batch result count does not match source event count")
+        points: list[models.PointStruct] = []
+        for (source_event, chunk_text), vector in zip(indexable, vectors, strict=True):
+            _validate_vector_size(vector, expected_size=self._vector_size)
+            payload = _source_event_payload(
+                source_event=source_event,
+                scope=scope,
+                chunk_text=chunk_text,
+            )
+            points.append(
                 models.PointStruct(
                     id=_point_id(source_event.id, chunk_index=0),
                     vector=list(vector),
                     payload=payload,
                 )
-            ],
+            )
+        await self._client.upsert(
+            collection_name=self._collection,
+            points=points,
             wait=True,
         )
 

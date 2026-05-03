@@ -83,6 +83,14 @@ def test_remember_event_commits_source_audit_and_generic_outbox_atomically() -> 
         "page_memory.maybe_rebuild",
         "long_term_filter.classify",
     }
+    assert {
+        job.job_type: job.aggregate_key
+        for job in store.outbox_jobs
+        if job.job_type in ("page_memory.maybe_rebuild", "long_term_filter.classify")
+    } == {
+        "page_memory.maybe_rebuild": "page_memory:project_001:thread:thread_001",
+        "long_term_filter.classify": "long_term_filter:project_001:group_001:thread_001:",
+    }
     assert all("graph" not in job.job_type for job in store.outbox_jobs)
     assert store.source_events[0].metadata["source_ref"] == {
         "kind": "platform",

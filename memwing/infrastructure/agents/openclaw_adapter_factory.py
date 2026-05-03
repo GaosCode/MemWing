@@ -21,6 +21,7 @@ from memwing.application.benchmark_admin_service import BenchmarkAdminService
 from memwing.application.gateway_service import MemoryGateway
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.page_memory_service import PageMemoryService
+from memwing.application.pipeline_readiness_service import PipelineReadinessService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.infrastructure.db.postgres import PostgresDataStore
@@ -34,6 +35,7 @@ from memwing.infrastructure.graph.graphiti_reranker import GraphitiNoProviderRer
 from memwing.infrastructure.llm.model_config import MemWingModelConfigResolver
 from memwing.infrastructure.llm.long_term_filter import MemWingLongTermFilterAdapter
 from memwing.infrastructure.llm.openclaw_runtime import (
+    OpenClawRuntimeConfig,
     OpenClawRuntimeEmbeddingClient,
     OpenClawRuntimeLLMClient,
 )
@@ -43,8 +45,10 @@ from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import GraphBackendPort
 from memwing.ports.model_runtime import EmbeddingModelClient, LLMModelClient, MemWingModelRole
 from memwing.workers.benchmark_drain import BenchmarkDrainWorker
+from memwing.workers.derived_outbox_worker import DerivedOutboxWorker
 from memwing.workers.graph_write_worker import GraphWriteWorker
 from memwing.workers.page_memory_worker import PageMemoryWorker
+from memwing.workers.runner import MemWingWorkerRunner
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +58,20 @@ class OpenClawRuntimeHandle:
     graph_backend: GraphBackendPort | None = None
     evidence_index: EvidenceIndexPort | None = None
     benchmark_admin: BenchmarkAdminService | None = None
+    pipeline_readiness: PipelineReadinessService | None = None
+
+    async def close(self) -> None:
+        await _close_optional(self.evidence_index)
+        await _close_optional(self.graph_backend)
+        await self.connection.close()
+
+
+@dataclass(frozen=True, slots=True)
+class MemWingWorkerRuntimeHandle:
+    runner: MemWingWorkerRunner
+    connection: PooledPostgresConnection
+    graph_backend: GraphBackendPort | None = None
+    evidence_index: EvidenceIndexPort | None = None
 
     async def close(self) -> None:
         await _close_optional(self.evidence_index)
@@ -112,6 +130,11 @@ async def create_openclaw_adapter_from_postgres(
             if benchmark_admin_enabled
             else None
         )
+        pipeline_readiness = PipelineReadinessService(
+            store,
+            evidence_enabled=evidence_index is not None,
+            graph_enabled=graph_backend is not None,
+        )
     except Exception:
         await connection.close()
         raise
@@ -121,6 +144,7 @@ async def create_openclaw_adapter_from_postgres(
         graph_backend=graph_backend,
         evidence_index=evidence_index,
         benchmark_admin=benchmark_admin,
+        pipeline_readiness=pipeline_readiness,
     )
 
 
@@ -157,6 +181,68 @@ async def create_openclaw_adapter_with_benchmark_admin_from_env(
         evidence_index=evidence_index,
         benchmark_admin_enabled=True,
         model_env=env,
+    )
+
+
+async def create_worker_runner_from_env(
+    env: Mapping[str, str] | None = None,
+    *,
+    min_size: int = 1,
+    max_size: int = 10,
+    worker_id: str = "memwing_worker",
+) -> MemWingWorkerRuntimeHandle:
+    graph_backend = _graph_backend_from_env(env)
+    evidence_index = _evidence_index_from_env(env)
+    connection = await PooledPostgresConnection.connect(
+        database_url_from_env(env),
+        min_size=min_size,
+        max_size=max_size,
+    )
+    try:
+        store = PostgresDataStore(connection)
+        resolver = MemWingModelConfigResolver.from_env(env)
+        scope_resolver = ScopeResolver(store)
+        long_term_filter = LongTermFilterService(
+            store,
+            MemWingLongTermFilterAdapter(_llm_client_for_role(resolver, "long_term_filter")),
+        )
+        page_memory_worker = PageMemoryWorker(
+            store,
+            PageMemoryService(
+                store,
+                MemWingPageMemorySynthesisAdapter(_llm_client_for_role(resolver, "page_memory")),
+            ),
+            scope_resolver=scope_resolver,
+        )
+        graph_write_worker = (
+            GraphWriteWorker(
+                store,
+                graph_backend=graph_backend,
+                worker_id=f"{worker_id}:graph",
+            )
+            if graph_backend is not None
+            else None
+        )
+        derived_outbox_worker = DerivedOutboxWorker(
+            store,
+            evidence_index=evidence_index,
+            long_term_filter=long_term_filter,
+            page_memory_worker=page_memory_worker,
+            worker_id=f"{worker_id}:outbox",
+        )
+    except Exception:
+        await _close_optional(evidence_index)
+        await _close_optional(graph_backend)
+        await connection.close()
+        raise
+    return MemWingWorkerRuntimeHandle(
+        runner=MemWingWorkerRunner(
+            derived_outbox_worker=derived_outbox_worker,
+            graph_write_worker=graph_write_worker,
+        ),
+        connection=connection,
+        graph_backend=graph_backend,
+        evidence_index=evidence_index,
     )
 
 
@@ -248,7 +334,7 @@ def _llm_client_for_role(
 ) -> LLMModelClient:
     selection = resolver.selection_for(role)
     if selection.runtime == "openclaw":
-        return OpenClawRuntimeLLMClient.from_model_selection(selection)
+        return OpenClawRuntimeLLMClient(OpenClawRuntimeConfig.from_env_model_selection(selection))
     raise ValueError(f"{role} requires openclaw model runtime")
 
 
@@ -258,7 +344,7 @@ def _embedding_client_for_role(
 ) -> EmbeddingModelClient:
     selection = resolver.selection_for(role)
     if selection.runtime == "openclaw":
-        return OpenClawRuntimeEmbeddingClient.from_model_selection(selection)
+        return OpenClawRuntimeEmbeddingClient(OpenClawRuntimeConfig.from_env_model_selection(selection))
     raise ValueError(f"{role} requires openclaw embedding runtime")
 
 
@@ -272,9 +358,11 @@ async def _close_optional(value: object) -> None:
 
 
 __all__ = (
+    "MemWingWorkerRuntimeHandle",
     "OpenClawRuntimeHandle",
     "create_openclaw_adapter_from_env",
     "create_openclaw_adapter_with_benchmark_admin_from_env",
     "create_openclaw_adapter_from_postgres",
     "create_openclaw_adapter_from_store",
+    "create_worker_runner_from_env",
 )

@@ -9,6 +9,7 @@ import uuid
 from memwing.application.remember_event_command import RememberEventCommand
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
 from memwing.application.scope_resolver import ResolvedScope
+from memwing.core.scope import EffectiveScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +170,7 @@ def outbox_job(*, source_event: SourceEvent, job_type: str, now: datetime) -> Ou
         payload_json={"source_event_id": source_event.id},
         status="pending",
         idempotency_key=idempotency_key,
-        aggregate_key=source_event.id,
+        aggregate_key=outbox_aggregate_key(source_event=source_event, job_type=job_type),
         attempts=0,
         max_attempts=3,
         priority=100,
@@ -204,3 +205,75 @@ def _uuid(*parts: str) -> str:
 
 def _content_preview(content: str) -> str:
     return content[:240]
+
+
+def outbox_aggregate_key(*, source_event: SourceEvent, job_type: str) -> str:
+    if job_type == "long_term_filter.classify":
+        return long_term_filter_trigger_key(
+            project_memory_space_id=source_event.project_memory_space_id,
+            group_id=source_event.group_id,
+            thread_id=source_event.thread_id,
+            shared_group_id=source_event.shared_group_id,
+        )
+    if job_type == "page_memory.maybe_rebuild":
+        return page_memory_trigger_key(
+            source_event.project_memory_space_id,
+            group_id=source_event.group_id,
+            thread_id=source_event.thread_id,
+        )
+    return source_event.id
+
+
+def long_term_filter_trigger_key(
+    *,
+    project_memory_space_id: str,
+    group_id: str | None,
+    thread_id: str | None,
+    shared_group_id: str | None,
+) -> str:
+    return ":".join(
+        (
+            "long_term_filter",
+            project_memory_space_id,
+            group_id or "",
+            thread_id or "",
+            shared_group_id or "",
+        )
+    )
+
+
+def page_memory_trigger_key(
+    project_memory_space_id: str,
+    *,
+    group_id: str | None,
+    thread_id: str | None,
+) -> str:
+    if thread_id is not None:
+        scope_type = "thread"
+        scope_id = thread_id
+    elif group_id is not None:
+        scope_type = "group"
+        scope_id = group_id
+    else:
+        scope_type = "project"
+        scope_id = project_memory_space_id
+    return ":".join(("page_memory", project_memory_space_id, scope_type, scope_id))
+
+
+def long_term_filter_trigger_key_for_scope(scope: EffectiveScope) -> str:
+    group_id = scope.group_ids[0] if scope.group_ids and len(scope.group_ids) == 1 else None
+    return long_term_filter_trigger_key(
+        project_memory_space_id=scope.project_memory_space_id,
+        group_id=group_id,
+        thread_id=scope.thread_id,
+        shared_group_id=scope.shared_group_id,
+    )
+
+
+def page_memory_trigger_key_for_scope(scope: EffectiveScope) -> str:
+    group_id = scope.group_ids[0] if scope.group_ids and len(scope.group_ids) == 1 else None
+    return page_memory_trigger_key(
+        scope.project_memory_space_id,
+        group_id=group_id,
+        thread_id=scope.thread_id,
+    )

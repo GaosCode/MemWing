@@ -51,6 +51,12 @@ from memwing.api.platform import (
     PlatformSourceType,
     PushCandidate,
 )
+from memwing.api.pipeline import (
+    PipelineAwaitRequest,
+    PipelineHttpResponse,
+    PipelineReadinessRequest,
+    PipelineScopeRequest,
+)
 from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError
 
@@ -102,6 +108,10 @@ __all__ = [
     "PlatformRef",
     "PlatformSendResult",
     "PlatformSourceType",
+    "PipelineHttpResponse",
+    "PipelineAwaitRequest",
+    "PipelineReadinessRequest",
+    "PipelineScopeRequest",
     "PushCandidate",
     "RememberEventResult",
     "SchemaValidationError",
