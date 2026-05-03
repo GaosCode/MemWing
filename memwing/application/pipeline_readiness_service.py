@@ -14,6 +14,7 @@ from memwing.application.pipeline_readiness_status import (
     profile_ready,
     warnings_for_readiness,
 )
+from memwing.application.current_truth import is_current_recallable_memory_item
 from memwing.application.page_memory_trigger import page_memory_trigger_key_for_scope
 from memwing.application.remember_event_records import (
     long_term_filter_trigger_key_for_scope,
@@ -221,6 +222,7 @@ async def _memory_items_for_source_events(
         for item in await repository.list_by_source_event(source_event_id):
             if (
                 item.project_memory_space_id == scope.project_memory_space_id
+                and is_current_recallable_memory_item(item)
                 and effective_scope_matches(
                     group_id=item.group_id,
                     thread_id=item.thread_id,

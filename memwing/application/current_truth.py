@@ -295,7 +295,7 @@ def _rank_memory_items(
 ) -> list[tuple[MemoryItem, float]]:
     ranked: list[tuple[MemoryItem, float]] = []
     for item in items:
-        if not _is_current_recallable(item):
+        if not is_current_recallable_memory_item(item):
             continue
         score = _memory_item_score(item, now=now)
         if score < min_score:
@@ -306,7 +306,7 @@ def _rank_memory_items(
     return sorted(ranked, key=lambda pair: (pair[1], pair[0].updated_at, pair[0].id), reverse=True)
 
 
-def _is_current_recallable(item: MemoryItem) -> bool:
+def is_current_recallable_memory_item(item: MemoryItem) -> bool:
     return (
         item.status in _CURRENT_RECALL_STATUSES
         and item.removed_at is None
