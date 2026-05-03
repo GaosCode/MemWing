@@ -1170,17 +1170,27 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
                 for message in case.seed_messages
             ]
 
-        def drain_benchmark_pipeline(self, scope):
-            self.calls.append(("drain", scope.project_memory_space_id))
+        def drain_benchmark_pipeline(self, scope, *, outbox_job_types=None):
+            self.calls.append(
+                ("drain", scope.project_memory_space_id, tuple(outbox_job_types or ()))
+            )
             return {"pending": {"outbox_jobs": 0, "graph_write_jobs": 0}}
 
-        def wait_benchmark_readiness(self, *, case, scope, expected_source_event_ids):
+        def wait_benchmark_readiness(
+            self,
+            *,
+            case,
+            scope,
+            expected_source_event_ids,
+            ignored_outbox_job_types=None,
+        ):
             self.calls.append(
                 (
                     "readiness",
                     case.case_id,
                     scope.project_memory_space_id,
                     tuple(expected_source_event_ids),
+                    tuple(ignored_outbox_job_types or ()),
                 )
             )
             return {
@@ -1264,13 +1274,33 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
     assert adapter.calls == [
         ("cleanup", "benchmark:run1:bs001"),
         ("ingest", "bs001", "run1", "benchmark:run1:bs001"),
-        ("drain", "benchmark:run1:bs001"),
-        ("readiness", "bs001", "benchmark:run1:bs001", ("source_event:bs001_s1",)),
+        (
+            "drain",
+            "benchmark:run1:bs001",
+            ("evidence.index_source_event", "working_memory.append", "page_memory.maybe_rebuild"),
+        ),
+        (
+            "readiness",
+            "bs001",
+            "benchmark:run1:bs001",
+            ("source_event:bs001_s1",),
+            ("long_term_filter.classify",),
+        ),
         ("search", "云帆负责人是谁？", "benchmark:run1:bs001"),
         ("cleanup", "benchmark:run1:lt001"),
         ("ingest", "lt001", "run1", "benchmark:run1:lt001"),
-        ("drain", "benchmark:run1:lt001"),
-        ("readiness", "lt001", "benchmark:run1:lt001", ("source_event:lt001_s1",)),
+        (
+            "drain",
+            "benchmark:run1:lt001",
+            ("evidence.index_source_event", "working_memory.append", "page_memory.maybe_rebuild"),
+        ),
+        (
+            "readiness",
+            "lt001",
+            "benchmark:run1:lt001",
+            ("source_event:lt001_s1",),
+            ("long_term_filter.classify",),
+        ),
         ("search", "青石项目验收人是谁？", "benchmark:run1:lt001"),
     ]
     assert raw_records["pg_preseed"] == []

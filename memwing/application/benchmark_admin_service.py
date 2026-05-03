@@ -66,12 +66,14 @@ class BenchmarkAdminService:
         scope: BenchmarkScope,
         max_iterations: int,
         batch_size: int,
+        outbox_job_types: tuple[str, ...] | None = None,
     ) -> BenchmarkDrainResult:
         _require_benchmark_scope(scope)
         return await self._drain_worker.drain_scope(
             scope=_effective_scope(scope),
             max_iterations=max_iterations,
             batch_size=batch_size,
+            outbox_job_types=outbox_job_types,
         )
 
     async def readiness(
@@ -80,6 +82,7 @@ class BenchmarkAdminService:
         scope: BenchmarkScope,
         expected_source_event_ids: tuple[str, ...],
         queries: tuple[str, ...],
+        ignored_outbox_job_types: tuple[str, ...] = (),
     ) -> BenchmarkReadinessResult:
         _require_benchmark_scope(scope)
         effective_scope = _effective_scope(scope)
@@ -88,7 +91,10 @@ class BenchmarkAdminService:
             scope=effective_scope,
         )
         postgres_summary = await self._postgres_summary(effective_scope)
-        job_summary = await self._job_summary(scope.project_memory_space_id)
+        job_summary = await self._job_summary(
+            scope.project_memory_space_id,
+            ignored_outbox_job_types=ignored_outbox_job_types,
+        )
         query_summaries = tuple(
             [
                 await self._query_summary(
@@ -183,7 +189,12 @@ class BenchmarkAdminService:
             "page_memory": len(pages),
         }
 
-    async def _job_summary(self, project_memory_space_id: str) -> dict[str, object]:
+    async def _job_summary(
+        self,
+        project_memory_space_id: str,
+        *,
+        ignored_outbox_job_types: tuple[str, ...] = (),
+    ) -> dict[str, object]:
         async with self._unit_of_work.transaction() as tx:
             outbox_jobs = await tx.outbox_jobs.list_for_project(
                 project_memory_space_id=project_memory_space_id,
@@ -194,19 +205,26 @@ class BenchmarkAdminService:
                 limit=10000,
             )
         outbox_counts = Counter(job.status for job in outbox_jobs)
+        ignored_types = set(ignored_outbox_job_types)
+        effective_outbox_counts = Counter(
+            job.status
+            for job in outbox_jobs
+            if job.job_type not in ignored_types
+        )
         graph_counts = Counter(job.status for job in graph_jobs)
         pending_count = (
-            outbox_counts["pending"]
+            effective_outbox_counts["pending"]
             + graph_counts["pending"]
         )
         processing_count = (
-            outbox_counts["processing"]
+            effective_outbox_counts["processing"]
             + graph_counts["processing"]
         )
-        dead_letter_count = outbox_counts["dead_letter"] + graph_counts["dead_letter"]
+        dead_letter_count = effective_outbox_counts["dead_letter"] + graph_counts["dead_letter"]
         return {
             "outbox": dict(outbox_counts),
             "graph_write": dict(graph_counts),
+            "ignored_outbox_job_types": tuple(sorted(ignored_types)),
             "pending_count": pending_count,
             "processing_count": processing_count,
             "dead_letter_count": dead_letter_count,

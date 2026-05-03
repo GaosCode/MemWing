@@ -7,14 +7,16 @@ import pytest
 
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
 from memwing.application.long_term_filter_service import LongTermFilterService
+from memwing.application.remember_event_records import outbox_job
 from memwing.core.memory_search import MemorySearchResult, MemorySearchResultItem
-from memwing.core.models import LongTermFilterItem, SourceEvent
+from memwing.core.models import LongTermFilterItem, OutboxJob, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.db.in_memory_benchmark_admin import InMemoryBenchmarkAdminStore
 from memwing.ports.benchmark_admin import BenchmarkRuntimeBinding, BenchmarkScope
 from memwing.ports.llm_filter import LongTermFilterRequest
 from memwing.workers.benchmark_drain import BenchmarkDrainWorker
+from memwing.workers.derived_outbox_worker import DerivedOutboxWorker
 
 
 def test_cleanup_scope_refuses_non_benchmark_project() -> None:
@@ -77,7 +79,6 @@ def test_drain_indexes_evidence_and_marks_outbox_succeeded() -> None:
         await service.cleanup_scope(scope=scope, runtime_binding=_runtime_binding())
         async with store.transaction() as tx:
             source, _ = await tx.source_events.insert_if_absent(_source_event(scope))
-            from memwing.application.remember_event_records import outbox_job
 
             await tx.outbox_jobs.enqueue(
                 outbox_job(
@@ -112,6 +113,139 @@ def test_drain_indexes_evidence_and_marks_outbox_succeeded() -> None:
     asyncio.run(run())
 
 
+def test_drain_coalesces_scope_level_outbox_handlers() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        long_term_filter = _RecordingLongTermFilter()
+        page_memory_worker = _RecordingPageMemoryWorker()
+        benchmark_scope = BenchmarkScope(
+            project_memory_space_id="benchmark:run:case",
+            group_id="benchmark:case",
+            thread_id="benchmark:case",
+            shared_group_id=None,
+        )
+        effective_scope = _effective_scope(benchmark_scope)
+        source_events = (
+            _source_event(
+                benchmark_scope,
+                event_id="source_001",
+                content="云帆看板负责人是沈南。",
+                raw_payload_hash="hash_001",
+                runtime_key="runtime_001",
+            ),
+            _source_event(
+                benchmark_scope,
+                event_id="source_002",
+                content="云帆看板截止日期是五月十五日。",
+                raw_payload_hash="hash_002",
+                runtime_key="runtime_002",
+            ),
+        )
+        async with store.transaction() as tx:
+            for source_event in source_events:
+                source, _ = await tx.source_events.insert_if_absent(source_event)
+                for job_type in ("page_memory.maybe_rebuild", "long_term_filter.classify"):
+                    await tx.outbox_jobs.enqueue(
+                        outbox_job(
+                            source_event=source,
+                            job_type=job_type,
+                            now=source.created_at,
+                        )
+                    )
+
+        drain_worker = BenchmarkDrainWorker(
+            store,
+            evidence_index=None,
+            long_term_filter=LongTermFilterService(store, long_term_filter),
+            page_memory_worker=page_memory_worker,
+            graph_write_worker=None,
+        )
+
+        result = await drain_worker.drain_scope(
+            scope=effective_scope,
+            max_iterations=3,
+            batch_size=10,
+        )
+
+        assert result.drained is True
+        assert result.outbox_succeeded == 4
+        assert result.pending_outbox_jobs == 0
+        assert len(page_memory_worker.jobs) == 1
+        assert len(long_term_filter.requests) == 1
+        assert tuple(event.id for event in long_term_filter.requests[0].source_events) == (
+            "source_001",
+            "source_002",
+        )
+
+    asyncio.run(run())
+
+
+def test_derived_outbox_scope_handlers_only_claim_matching_aggregate_key() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        long_term_filter = _RecordingLongTermFilter()
+        benchmark_scope = BenchmarkScope(
+            project_memory_space_id="benchmark:run:case",
+            group_id="benchmark:case",
+            thread_id="thread_001",
+            shared_group_id=None,
+        )
+        other_scope = BenchmarkScope(
+            project_memory_space_id="benchmark:run:case",
+            group_id="benchmark:case",
+            thread_id="thread_002",
+            shared_group_id=None,
+        )
+        async with store.transaction() as tx:
+            for source_event in (
+                _source_event(
+                    benchmark_scope,
+                    event_id="source_001",
+                    raw_payload_hash="hash_001",
+                    runtime_key="runtime_001",
+                    thread_id="thread_001",
+                ),
+                _source_event(
+                    other_scope,
+                    event_id="source_002",
+                    raw_payload_hash="hash_002",
+                    runtime_key="runtime_002",
+                    thread_id="thread_002",
+                ),
+            ):
+                source, _ = await tx.source_events.insert_if_absent(source_event)
+                await tx.outbox_jobs.enqueue(
+                    outbox_job(
+                        source_event=source,
+                        job_type="long_term_filter.classify",
+                        now=source.created_at,
+                    )
+                )
+
+        worker = DerivedOutboxWorker(
+            store,
+            evidence_index=None,
+            long_term_filter=LongTermFilterService(store, long_term_filter),
+            page_memory_worker=None,
+            worker_id="derived_outbox",
+        )
+
+        result = await worker.run_once(scope=_effective_scope(benchmark_scope))
+
+        assert result.claimed == 1
+        assert result.succeeded == 1
+        assert len(long_term_filter.requests) == 1
+        assert tuple(event.id for event in long_term_filter.requests[0].source_events) == (
+            "source_001",
+        )
+        assert {job.source_event_id: job.status for job in store.outbox_jobs} == {
+            "source_001": "succeeded",
+            "source_002": "pending",
+        }
+
+    asyncio.run(run())
+
+
 def _service(store: InMemoryDataStore, evidence) -> BenchmarkAdminService:
     return BenchmarkAdminService(
         unit_of_work=store,
@@ -137,22 +271,41 @@ def _runtime_binding() -> BenchmarkRuntimeBinding:
     )
 
 
-def _source_event(scope: BenchmarkScope) -> SourceEvent:
+def _effective_scope(scope: BenchmarkScope) -> EffectiveScope:
+    return EffectiveScope(
+        project_memory_space_id=scope.project_memory_space_id,
+        group_ids=(scope.group_id,) if scope.group_id is not None else None,
+        thread_id=scope.thread_id,
+        shared_group_id=scope.shared_group_id,
+        safe_mode_enabled=scope.group_id is not None,
+        cross_group_allowed=scope.group_id is None,
+    )
+
+
+def _source_event(
+    scope: BenchmarkScope,
+    *,
+    event_id: str = "source_001",
+    content: str = "云帆看板负责人是沈南。",
+    raw_payload_hash: str = "hash_001",
+    runtime_key: str = "runtime_001",
+    thread_id: str | None = None,
+) -> SourceEvent:
     now = datetime(2026, 5, 2, tzinfo=UTC)
     return SourceEvent(
-        id="source_001",
+        id=event_id,
         project_memory_space_id=scope.project_memory_space_id,
         group_id=scope.group_id,
-        thread_id=scope.thread_id,
+        thread_id=thread_id or scope.thread_id,
         shared_group_id=scope.shared_group_id,
         author_id=None,
         author_name=None,
         source_type="agent_runtime.message_ingested",
-        content="云帆看板负责人是沈南。",
-        content_preview="云帆看板负责人是沈南。",
+        content=content,
+        content_preview=content,
         source_url=None,
         event_time=now,
-        raw_payload_hash="hash_001",
+        raw_payload_hash=raw_payload_hash,
         metadata={},
         purged_at=None,
         purged_by=None,
@@ -160,7 +313,7 @@ def _source_event(scope: BenchmarkScope) -> SourceEvent:
         purge_level="none",
         graph_backend_raw_retained=False,
         created_at=now,
-        runtime_event_idempotency_key="runtime_001",
+        runtime_event_idempotency_key=runtime_key,
     )
 
 
@@ -211,3 +364,23 @@ class _NoopLongTermFilter:
         request: LongTermFilterRequest,
     ) -> tuple[LongTermFilterItem, ...]:
         return ()
+
+
+class _RecordingLongTermFilter(_NoopLongTermFilter):
+    def __init__(self) -> None:
+        self.requests: list[LongTermFilterRequest] = []
+
+    async def filter_events(
+        self,
+        request: LongTermFilterRequest,
+    ) -> tuple[LongTermFilterItem, ...]:
+        self.requests.append(request)
+        return ()
+
+
+class _RecordingPageMemoryWorker:
+    def __init__(self) -> None:
+        self.jobs: list[str] = []
+
+    async def maybe_rebuild(self, job: OutboxJob) -> None:
+        self.jobs.append(job.id)

@@ -131,17 +131,31 @@ class RecordingAdapter:
             for message in case.seed_messages
         ]
 
-    def drain_benchmark_pipeline(self, scope):
-        self.calls.append(("drain_benchmark_pipeline", scope.project_memory_space_id))
+    def drain_benchmark_pipeline(self, scope, *, outbox_job_types=None):
+        self.calls.append(
+            (
+                "drain_benchmark_pipeline",
+                scope.project_memory_space_id,
+                tuple(outbox_job_types or ()),
+            )
+        )
         return {"pending": {"outbox_jobs": 0, "graph_write_jobs": 0}}
 
-    def wait_benchmark_readiness(self, *, case, scope, expected_source_event_ids):
+    def wait_benchmark_readiness(
+        self,
+        *,
+        case,
+        scope,
+        expected_source_event_ids,
+        ignored_outbox_job_types=None,
+    ):
         self.calls.append(
             (
                 "wait_benchmark_readiness",
                 case.case_id,
                 scope.project_memory_space_id,
                 tuple(expected_source_event_ids),
+                tuple(ignored_outbox_job_types or ()),
             )
         )
         return {

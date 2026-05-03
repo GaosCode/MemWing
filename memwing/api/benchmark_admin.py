@@ -52,12 +52,16 @@ async def handle_benchmark_admin_request(
                 },
             )
         if path == "/v1/memwing/admin/benchmark/drain":
-            _reject_unexpected_payload_fields(payload, {"scope", "max_rounds", "batch_size"})
+            _reject_unexpected_payload_fields(
+                payload,
+                {"scope", "max_rounds", "batch_size", "outbox_job_types"},
+            )
             scope = _scope(payload)
             result = await service.drain_scope(
                 scope=scope,
                 max_iterations=_positive_int(payload, "max_rounds", default=20),
                 batch_size=_positive_int(payload, "batch_size", default=10),
+                outbox_job_types=_optional_text_tuple(payload, "outbox_job_types"),
             )
             status_code = (
                 200
@@ -71,12 +75,23 @@ async def handle_benchmark_admin_request(
                 body=_drain_body(result, scope),
             )
         if path == "/v1/memwing/admin/benchmark/readiness":
-            _reject_unexpected_payload_fields(payload, {"scope", "expected_source_event_ids", "queries"})
+            _reject_unexpected_payload_fields(
+                payload,
+                {
+                    "scope",
+                    "expected_source_event_ids",
+                    "queries",
+                    "ignored_outbox_job_types",
+                },
+            )
             scope = _scope(payload)
             result = await service.readiness(
                 scope=scope,
                 expected_source_event_ids=tuple(_text_list(payload, "expected_source_event_ids")),
                 queries=tuple(_text_list(payload, "queries")),
+                ignored_outbox_job_types=tuple(
+                    _text_list(payload, "ignored_outbox_job_types")
+                ),
             )
             body = _json_object(result)
             body["trace_id"] = f"benchmark_readiness:{scope.project_memory_space_id}"
@@ -150,6 +165,15 @@ def _text_list(payload: Mapping[str, object], field_name: str) -> list[str]:
     for index, item in enumerate(value):
         texts.append(require_text(item, f"{field_name}[{index}]"))
     return texts
+
+
+def _optional_text_tuple(
+    payload: Mapping[str, object],
+    field_name: str,
+) -> tuple[str, ...] | None:
+    if payload.get(field_name) is None:
+        return None
+    return tuple(_text_list(payload, field_name))
 
 
 def _optional_text(value: object, field_name: str) -> str | None:

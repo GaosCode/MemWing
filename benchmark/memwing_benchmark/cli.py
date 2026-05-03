@@ -10,7 +10,12 @@ from typing import Any
 
 import typer
 
-from memwing_benchmark.adapters.memwing import MemWingAdapter, memwing_case_scope
+from memwing_benchmark.adapters.memwing import (
+    MemWingAdapter,
+    RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES,
+    RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES,
+    memwing_case_scope,
+)
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
 from memwing_benchmark.channels.feishu_cli import FeishuCli
 from memwing_benchmark.collectors.openclaw_trajectory import parse_trajectory_dir
@@ -1324,7 +1329,10 @@ def _run_memwing_real_ingest_retrieval_case(
     )
 
     _debug(raw_records, "MemWing benchmark pipeline drain 开始", case_id=case.case_id)
-    drain = adapter.drain_benchmark_pipeline(scope)
+    drain = adapter.drain_benchmark_pipeline(
+        scope,
+        outbox_job_types=RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES,
+    )
     raw_records.setdefault("memwing_pipeline_drains", []).append(
         {"case_id": case.case_id, "scope": scope.payload(), "response": drain}
     )
@@ -1344,6 +1352,7 @@ def _run_memwing_real_ingest_retrieval_case(
         case=case,
         scope=scope,
         expected_source_event_ids=expected_source_event_ids,
+        ignored_outbox_job_types=RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES,
     )
     raw_records.setdefault("memwing_readiness", []).append(
         {"case_id": case.case_id, "scope": scope.payload(), **readiness}

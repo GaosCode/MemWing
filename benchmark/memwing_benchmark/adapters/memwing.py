@@ -21,6 +21,12 @@ HEALTH_ENDPOINT = "/healthz"
 CLEANUP_BENCHMARK_SCOPE_ENDPOINT = "/v1/memwing/admin/benchmark/cleanup-scope"
 DRAIN_BENCHMARK_PIPELINE_ENDPOINT = "/v1/memwing/admin/benchmark/drain"
 BENCHMARK_READINESS_ENDPOINT = "/v1/memwing/admin/benchmark/readiness"
+RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES = [
+    "evidence.index_source_event",
+    "working_memory.append",
+    "page_memory.maybe_rebuild",
+]
+RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES = ["long_term_filter.classify"]
 
 
 @dataclass(frozen=True)
@@ -234,12 +240,22 @@ class MemWingAdapter:
         )
         return body
 
-    def drain_benchmark_pipeline(self, scope: MemWingCaseScope) -> dict[str, Any]:
+    def drain_benchmark_pipeline(
+        self,
+        scope: MemWingCaseScope,
+        *,
+        outbox_job_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"scope": scope.payload()}
+        request_fields = ["scope"]
+        if outbox_job_types is not None:
+            payload["outbox_job_types"] = outbox_job_types
+            request_fields.append("outbox_job_types")
         body, _latency_ms = self._post_json(
             endpoint=DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
-            payload={"scope": scope.payload()},
+            payload=payload,
             timeout_seconds=self.config.ingest_timeout_seconds,
-            request_fields=["scope"],
+            request_fields=request_fields,
         )
         return body
 
@@ -249,16 +265,22 @@ class MemWingAdapter:
         scope: MemWingCaseScope,
         expected_source_event_ids: list[str],
         queries: list[str] | None = None,
+        ignored_outbox_job_types: list[str] | None = None,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "scope": scope.payload(),
+            "expected_source_event_ids": expected_source_event_ids,
+            "queries": queries or [],
+        }
+        request_fields = ["scope", "expected_source_event_ids", "queries"]
+        if ignored_outbox_job_types is not None:
+            payload["ignored_outbox_job_types"] = ignored_outbox_job_types
+            request_fields.append("ignored_outbox_job_types")
         body, _latency_ms = self._post_json(
             endpoint=BENCHMARK_READINESS_ENDPOINT,
-            payload={
-                "scope": scope.payload(),
-                "expected_source_event_ids": expected_source_event_ids,
-                "queries": queries or [],
-            },
+            payload=payload,
             timeout_seconds=self.config.search_timeout_seconds,
-            request_fields=["scope", "expected_source_event_ids", "queries"],
+            request_fields=request_fields,
         )
         return body
 
@@ -268,6 +290,7 @@ class MemWingAdapter:
         case: BenchmarkCase,
         scope: MemWingCaseScope,
         expected_source_event_ids: list[str],
+        ignored_outbox_job_types: list[str] | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self.config.poll_timeout_seconds
         attempts: list[dict[str, Any]] = []
@@ -276,6 +299,7 @@ class MemWingAdapter:
                 scope=scope,
                 expected_source_event_ids=expected_source_event_ids,
                 queries=[probe.question for probe in case.probes],
+                ignored_outbox_job_types=ignored_outbox_job_types,
             )
             attempts.append(readiness)
             if readiness.get("ready") is True:
