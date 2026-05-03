@@ -1170,34 +1170,26 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
                 for message in case.seed_messages
             ]
 
-        def drain_benchmark_pipeline(self, scope, *, outbox_job_types=None):
-            self.calls.append(
-                ("drain", scope.project_memory_space_id, tuple(outbox_job_types or ()))
-            )
-            return {"pending": {"outbox_jobs": 0, "graph_write_jobs": 0}}
-
-        def wait_benchmark_readiness(
+        def pipeline_await(
             self,
             *,
-            case,
             scope,
-            expected_source_event_ids,
-            ignored_outbox_job_types=None,
+            source_event_ids,
+            profile,
         ):
             self.calls.append(
                 (
-                    "readiness",
-                    case.case_id,
+                    "await",
                     scope.project_memory_space_id,
-                    tuple(expected_source_event_ids),
-                    tuple(ignored_outbox_job_types or ()),
+                    tuple(source_event_ids),
+                    profile,
                 )
             )
             return {
-                "case_id": case.case_id,
                 "ready": True,
-                "attempts": [{"ready": True}],
-                "final": {"ready": True},
+                "profile": profile,
+                "derived": {"evidence": {"ready": True, "count": 1}},
+                "warnings": [],
             }
 
         def memory_search_details(self, question, *, max_results, scope):
@@ -1246,8 +1238,7 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
     raw_records = {
         "pg_preseed": [],
         "memwing_ingest": [],
-        "memwing_pipeline_drains": [],
-        "memwing_readiness": [],
+        "memwing_pipeline_awaits": [],
         "memwing_polls": [],
         "memory_searches": [],
         "side_effects": [],
@@ -1275,41 +1266,28 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
         ("cleanup", "benchmark:run1:bs001"),
         ("ingest", "bs001", "run1", "benchmark:run1:bs001"),
         (
-            "drain",
-            "benchmark:run1:bs001",
-            ("evidence.index_source_event", "working_memory.append", "page_memory.maybe_rebuild"),
-        ),
-        (
-            "readiness",
-            "bs001",
+            "await",
             "benchmark:run1:bs001",
             ("source_event:bs001_s1",),
-            ("long_term_filter.classify",),
+            "retrieval-evaluate",
         ),
         ("search", "云帆负责人是谁？", "benchmark:run1:bs001"),
         ("cleanup", "benchmark:run1:lt001"),
         ("ingest", "lt001", "run1", "benchmark:run1:lt001"),
         (
-            "drain",
-            "benchmark:run1:lt001",
-            ("evidence.index_source_event", "working_memory.append", "page_memory.maybe_rebuild"),
-        ),
-        (
-            "readiness",
-            "lt001",
+            "await",
             "benchmark:run1:lt001",
             ("source_event:lt001_s1",),
-            ("long_term_filter.classify",),
+            "retrieval-evaluate",
         ),
         ("search", "青石项目验收人是谁？", "benchmark:run1:lt001"),
     ]
     assert raw_records["pg_preseed"] == []
     assert len(raw_records["memwing_ingest"]) == 2
-    assert len(raw_records["memwing_pipeline_drains"]) == 2
-    assert len(raw_records["memwing_readiness"]) == 2
+    assert len(raw_records["memwing_pipeline_awaits"]) == 2
     debug_messages = [record["message"] for record in raw_records["debug"]]
     assert "MemWing benchmark scope cleanup 开始" in debug_messages
-    assert "MemWing benchmark pipeline drain 完成" in debug_messages
+    assert "MemWing product pipeline await 完成" in debug_messages
 
 
 def test_memwing_readiness_records_server_error() -> None:

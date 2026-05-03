@@ -4,9 +4,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from memwing.application.page_memory_service import (
+    MANUAL_REBUILD_REASON,
     PageMemoryRebuildCommand,
+    PageMemoryRebuildError,
+    PageMemoryRebuildNoOp,
     PageMemorySynthesisValidationError,
     PageMemoryService,
+    SOURCE_EVENT_TRIGGER_REASON,
+    SOURCE_REDACTION_REASON,
 )
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import (
@@ -152,6 +157,82 @@ def test_synthesis_topic_linked_memory_ids_must_be_covered_by_page_linked_memory
                 )
             )
         )
+
+
+def test_rebuild_rejects_unsupported_reason() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        _source_event("source_001", "Rebuild reasons are canonical contract values."),
+    )
+    service = PageMemoryService(
+        store,
+        _UnexpectedPageMemorySynthesis(),
+        clock=_FixedClock(NOW),
+    )
+
+    with pytest.raises(PageMemoryRebuildError, match="reason is not supported"):
+        asyncio.run(
+            service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=_effective_scope(),
+                    scope_type="thread",
+                    scope_id="thread_001",
+                    actor_id="user_001",
+                    reason="manual edit",
+                    trace_id="trace_unsupported_reason",
+                )
+            )
+        )
+
+
+def test_source_window_changed_noops_for_all_canonical_rebuild_reasons() -> None:
+    for reason in (
+        SOURCE_EVENT_TRIGGER_REASON,
+        "needs_rebuild",
+        MANUAL_REBUILD_REASON,
+        SOURCE_REDACTION_REASON,
+    ):
+        store = InMemoryDataStore()
+        _seed_source_events(
+            store,
+            _source_event("source_001", f"Initial page source for {reason}."),
+        )
+        _seed_pages(
+            store,
+            _page_memory(
+                "page_001",
+                needs_rebuild=reason == "needs_rebuild",
+            ),
+        )
+        service = PageMemoryService(
+            store,
+            _ConcurrentSourceWindowChangeSynthesis(store),
+            clock=_FixedClock(NOW + timedelta(minutes=2)),
+        )
+
+        result = asyncio.run(
+            service.rebuild(
+                PageMemoryRebuildCommand(
+                    scope=_effective_scope(),
+                    scope_type="thread",
+                    scope_id="thread_001",
+                    actor_id="user_001",
+                    reason=reason,
+                    trace_id=f"trace_{reason}",
+                )
+            )
+        )
+
+        assert isinstance(result, PageMemoryRebuildNoOp)
+        assert result.reason == "source_window_changed"
+        assert result.page.version == 1
+        async def version_count() -> int:
+            async with store.transaction() as tx:
+                return len(tx.state.memory_page_versions)
+
+        assert asyncio.run(version_count()) == 0
+        assert store.audit_events == ()
 
 
 def _seed_source_events(
@@ -402,3 +483,36 @@ class _StaticPageMemoryRebuildScopeResolver:
             thread_id=self._scope.thread_id,
             shared_group_id=self._scope.shared_group_id,
         )
+
+
+class _ConcurrentSourceWindowChangeSynthesis:
+    def __init__(self, store: InMemoryDataStore) -> None:
+        self._store = store
+
+    async def synthesize(
+        self,
+        request: PageMemorySynthesisRequest,
+    ) -> PageMemorySynthesis:
+        async with self._store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                _source_event(
+                    "source_002",
+                    "A concurrent source event changes the rebuild window.",
+                    event_time=NOW + timedelta(minutes=1),
+                )
+            )
+        return _synthesis(
+            title="Stale synthesis",
+            brief="This synthesis should not be committed.",
+            topic_title="Stale",
+            topic_summary="The source window changed after planning.",
+            source_event_ids=tuple(event.id for event in request.source_events),
+        )
+
+
+class _UnexpectedPageMemorySynthesis:
+    async def synthesize(
+        self,
+        request: PageMemorySynthesisRequest,
+    ) -> PageMemorySynthesis:
+        raise AssertionError("synthesis should not be called")

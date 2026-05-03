@@ -105,6 +105,39 @@ def test_derived_outbox_global_run_coalesces_scope_triggers_by_aggregate() -> No
     asyncio.run(run())
 
 
+def test_page_memory_job_retries_when_worker_is_not_configured() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        source_event = _source_event("source_001", thread_id="thread_001", raw_payload_hash="hash_001")
+        async with store.transaction() as tx:
+            source, _ = await tx.source_events.insert_if_absent(source_event)
+            await tx.outbox_jobs.enqueue(
+                outbox_job(
+                    source_event=source,
+                    job_type="page_memory.maybe_rebuild",
+                    now=source.created_at,
+                )
+            )
+
+        worker = DerivedOutboxWorker(
+            store,
+            evidence_index=None,
+            long_term_filter=LongTermFilterService(store, _RecordingLongTermFilter()),
+            page_memory_worker=None,
+            worker_id="derived_outbox",
+        )
+
+        result = await worker.run_global_once(limit=10, job_types=("page_memory.maybe_rebuild",))
+
+        assert result.claimed == 1
+        assert result.succeeded == 0
+        assert result.retried == 1
+        assert store.outbox_jobs[0].status == "pending"
+        assert store.outbox_jobs[0].last_error == "RuntimeError"
+
+    asyncio.run(run())
+
+
 def _source_event(source_event_id: str, *, thread_id: str, raw_payload_hash: str) -> SourceEvent:
     now = datetime(2026, 5, 2, tzinfo=UTC)
     return SourceEvent(

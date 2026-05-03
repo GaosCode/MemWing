@@ -273,7 +273,7 @@ class DerivedOutboxWorker:
 
     async def _maybe_rebuild_page_memory(self, job: OutboxJob) -> None:
         if self._page_memory_worker is None:
-            return
+            raise RuntimeError("page memory worker is not configured")
         await self._page_memory_worker.maybe_rebuild(job)
 
     async def _classify_long_term(self, job: OutboxJob, scope: EffectiveScope) -> None:

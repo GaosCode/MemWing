@@ -12,8 +12,6 @@ import typer
 
 from memwing_benchmark.adapters.memwing import (
     MemWingAdapter,
-    RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES,
-    RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES,
     memwing_case_scope,
 )
 from memwing_benchmark.adapters.openclaw_native import MemorySearchDetails, OpenClawNativeAdapter
@@ -1238,7 +1236,7 @@ def _run_memwing_retrieval_batch(
     if pg_preseed_per_case:
         _confirm_side_effect(
             "通过 MemWing HTTP/OpenClaw ingest endpoint 写入 benchmark Source Events，"
-            "并按 case scope 执行 cleanup、pipeline drain 和 readiness 等待",
+            "并按 case scope 执行 cleanup 和 product pipeline await",
             yes,
         )
         return _run_memwing_real_ingest_retrieval_batch(
@@ -1328,38 +1326,32 @@ def _run_memwing_real_ingest_retrieval_case(
         accepted_count=sum(1 for record in ingest_records if record.get("accepted") is True),
     )
 
-    _debug(raw_records, "MemWing benchmark pipeline drain 开始", case_id=case.case_id)
-    drain = adapter.drain_benchmark_pipeline(
-        scope,
-        outbox_job_types=RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES,
-    )
-    raw_records.setdefault("memwing_pipeline_drains", []).append(
-        {"case_id": case.case_id, "scope": scope.payload(), "response": drain}
-    )
-    _debug(raw_records, "MemWing benchmark pipeline drain 完成", case_id=case.case_id)
-
     expected_source_event_ids = _expected_source_event_ids_for_real_ingest(
         case=case,
         ingest_records=ingest_records,
     )
     _debug(
         raw_records,
-        "MemWing benchmark readiness poll 开始",
+        "MemWing product pipeline await 开始",
         case_id=case.case_id,
         expected_source_event_count=len(expected_source_event_ids),
     )
-    readiness = adapter.wait_benchmark_readiness(
-        case=case,
+    readiness = adapter.pipeline_await(
         scope=scope,
-        expected_source_event_ids=expected_source_event_ids,
-        ignored_outbox_job_types=RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES,
+        source_event_ids=expected_source_event_ids,
+        profile="retrieval-evaluate",
     )
-    raw_records.setdefault("memwing_readiness", []).append(
-        {"case_id": case.case_id, "scope": scope.payload(), **readiness}
+    raw_records.setdefault("memwing_pipeline_awaits", []).append(
+        {
+            "case_id": case.case_id,
+            "scope": scope.payload(),
+            "profile": "retrieval-evaluate",
+            "response": readiness,
+        }
     )
     if readiness.get("ready") is not True:
-        raise BenchmarkError(f"MemWing benchmark readiness timed out: case_id={case.case_id}")
-    _debug(raw_records, "MemWing benchmark readiness poll 完成", case_id=case.case_id)
+        raise BenchmarkError(f"MemWing pipeline await did not become ready: case_id={case.case_id}")
+    _debug(raw_records, "MemWing product pipeline await 完成", case_id=case.case_id)
 
     for probe in case.probes:
         _debug(
@@ -1642,6 +1634,19 @@ def _run_memwing_write_evaluate_batch(
             noise_memory_count=len(noise_memories),
             allowed_other_memory_count=len(allowed_other_memories),
         )
+        readiness_unavailable = {
+            "profile": "write-evaluate",
+            "available": False,
+            "reason": "source_event_ids_required",
+        }
+        raw_records.setdefault("memwing_pipeline_awaits", []).append(
+            {
+                "case_id": case.case_id,
+                "profile": "write-evaluate",
+                "available": False,
+                "reason": "source_event_ids_required",
+            }
+        )
         searches: list[dict[str, Any]] = []
         written_contexts: list[str] = []
         search_latencies: list[int] = []
@@ -1695,6 +1700,7 @@ def _run_memwing_write_evaluate_batch(
                 "written_context_count": len(written_contexts),
                 "changed_file_metrics_available": False,
                 "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
+                "readiness_unavailable": readiness_unavailable,
                 "write_judge": write_result.model_dump(mode="json") if write_result else None,
             }
         )
@@ -1709,6 +1715,7 @@ def _run_memwing_write_evaluate_batch(
                 search_errors=search_errors,
                 write_result=write_result,
                 searches=searches,
+                readiness_summary=readiness_unavailable,
             )
         )
     return results
@@ -3003,6 +3010,7 @@ def _result_from_memwing_write(
     search_errors: list[str],
     write_result: JudgeResult | None,
     searches: list[dict[str, Any]],
+    readiness_summary: dict[str, Any] | None = None,
 ) -> NormalizedResult:
     expected_count = len(case.expected_memory_items)
     write = write_result.write if write_result else None
@@ -3051,6 +3059,7 @@ def _result_from_memwing_write(
                 MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
             ],
         ),
+        readiness_summary=readiness_summary or {},
         raw={
             "mode": "memory_write",
             "phase": "evaluate",
@@ -3062,6 +3071,7 @@ def _result_from_memwing_write(
             "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
             "memory_searches": searches,
             "memory_search_errors": search_errors,
+            "readiness_unavailable": readiness_summary,
             "write_judge": write_result.model_dump(mode="json") if write_result else None,
         },
     )

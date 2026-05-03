@@ -21,12 +21,7 @@ HEALTH_ENDPOINT = "/healthz"
 CLEANUP_BENCHMARK_SCOPE_ENDPOINT = "/v1/memwing/admin/benchmark/cleanup-scope"
 DRAIN_BENCHMARK_PIPELINE_ENDPOINT = "/v1/memwing/admin/benchmark/drain"
 BENCHMARK_READINESS_ENDPOINT = "/v1/memwing/admin/benchmark/readiness"
-RETRIEVAL_REQUIRED_OUTBOX_JOB_TYPES = [
-    "evidence.index_source_event",
-    "working_memory.append",
-    "page_memory.maybe_rebuild",
-]
-RETRIEVAL_IGNORED_OUTBOX_JOB_TYPES = ["long_term_filter.classify"]
+PIPELINE_AWAIT_ENDPOINT = "/v1/memwing/pipeline/await"
 
 
 @dataclass(frozen=True)
@@ -320,6 +315,26 @@ class MemWingAdapter:
                 }
             time.sleep(min(self.config.poll_interval_seconds, remaining))
 
+    def pipeline_await(
+        self,
+        *,
+        scope: MemWingCaseScope,
+        source_event_ids: list[str],
+        profile: str,
+    ) -> dict[str, Any]:
+        body, _latency_ms = self._post_json(
+            endpoint=PIPELINE_AWAIT_ENDPOINT,
+            payload={
+                "scope": scope.payload(),
+                "source_event_ids": source_event_ids,
+                "profile": profile,
+                "timeout_seconds": self.config.poll_timeout_seconds,
+            },
+            timeout_seconds=self.config.poll_timeout_seconds + self.config.search_timeout_seconds,
+            request_fields=["scope", "source_event_ids", "profile", "timeout_seconds"],
+        )
+        return body
+
     def _search_payload(
         self,
         *,
@@ -536,6 +551,8 @@ def _request_kind(endpoint: str) -> str:
         return "benchmark_drain"
     if endpoint == BENCHMARK_READINESS_ENDPOINT:
         return "benchmark_readiness"
+    if endpoint == PIPELINE_AWAIT_ENDPOINT:
+        return "pipeline_await"
     return "http"
 
 

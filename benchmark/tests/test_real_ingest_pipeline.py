@@ -17,8 +17,7 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
     raw_records = {
         "pg_preseed": [],
         "memwing_ingest": [],
-        "memwing_pipeline_drains": [],
-        "memwing_readiness": [],
+        "memwing_pipeline_awaits": [],
         "memory_searches": [],
         "debug": [],
         "side_effects": [],
@@ -42,21 +41,19 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
     assert [call[0] for call in adapter.calls] == [
         "cleanup_benchmark_scope",
         "ingest_seed_messages",
-        "drain_benchmark_pipeline",
-        "wait_benchmark_readiness",
+        "pipeline_await",
         "memory_search_details",
     ]
     assert results[0].case_id == "bs001"
     assert raw_records["pg_preseed"] == []
     assert raw_records["memwing_ingest"]
-    assert raw_records["memwing_pipeline_drains"]
-    assert raw_records["memwing_readiness"]
+    assert raw_records["memwing_pipeline_awaits"]
     assert raw_records["memory_searches"][0]["mode"] == "memwing_real_ingest_retrieval"
     assert results[0].retrieval_source_mix == {"evidence_index": 1}
     assert results[0].memory_search_warnings == [
         {"branch": "graph_backend", "reason_code": "timeout"}
     ]
-    assert results[0].readiness_summary["final"]["ready"] is True
+    assert results[0].readiness_summary["ready"] is True
 
 
 def test_real_ingest_run_config_records_backend_semantics() -> None:
@@ -73,14 +70,13 @@ def test_real_ingest_pipeline_fails_when_readiness_times_out() -> None:
     raw_records = {
         "pg_preseed": [],
         "memwing_ingest": [],
-        "memwing_pipeline_drains": [],
-        "memwing_readiness": [],
+        "memwing_pipeline_awaits": [],
         "memory_searches": [],
         "debug": [],
         "side_effects": [],
     }
 
-    with pytest.raises(BenchmarkError, match="readiness timed out"):
+    with pytest.raises(BenchmarkError, match="pipeline await did not become ready"):
         _run_memwing_retrieval_batch(
             run_id="run_001",
             backend="memwing-openclaw-plugin",
@@ -99,8 +95,7 @@ def test_real_ingest_pipeline_fails_when_readiness_times_out() -> None:
     assert [call[0] for call in adapter.calls] == [
         "cleanup_benchmark_scope",
         "ingest_seed_messages",
-        "drain_benchmark_pipeline",
-        "wait_benchmark_readiness",
+        "pipeline_await",
     ]
 
 
@@ -131,38 +126,26 @@ class RecordingAdapter:
             for message in case.seed_messages
         ]
 
-    def drain_benchmark_pipeline(self, scope, *, outbox_job_types=None):
-        self.calls.append(
-            (
-                "drain_benchmark_pipeline",
-                scope.project_memory_space_id,
-                tuple(outbox_job_types or ()),
-            )
-        )
-        return {"pending": {"outbox_jobs": 0, "graph_write_jobs": 0}}
-
-    def wait_benchmark_readiness(
+    def pipeline_await(
         self,
         *,
-        case,
         scope,
-        expected_source_event_ids,
-        ignored_outbox_job_types=None,
+        source_event_ids,
+        profile,
     ):
         self.calls.append(
             (
-                "wait_benchmark_readiness",
-                case.case_id,
+                "pipeline_await",
                 scope.project_memory_space_id,
-                tuple(expected_source_event_ids),
-                tuple(ignored_outbox_job_types or ()),
+                tuple(source_event_ids),
+                profile,
             )
         )
         return {
-            "case_id": case.case_id,
             "ready": self.ready,
-            "attempts": [{"ready": self.ready}],
-            "final": {"ready": self.ready},
+            "profile": profile,
+            "derived": {"evidence": {"ready": self.ready, "count": 1}},
+            "warnings": [],
         }
 
     def memory_search_details(self, query, *, max_results, scope):

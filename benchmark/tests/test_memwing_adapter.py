@@ -9,6 +9,7 @@ from memwing_benchmark.adapters.memwing import (
     DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
     HEALTH_ENDPOINT,
     INGEST_EVENT_ENDPOINT,
+    PIPELINE_AWAIT_ENDPOINT,
     SEARCH_MEMORY_ENDPOINT,
     MemWingCaseScope,
     MemWingAdapter,
@@ -276,6 +277,11 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
     adapter.cleanup_benchmark_scope(scope)
     adapter.drain_benchmark_pipeline(scope)
     adapter.benchmark_readiness(scope=scope, expected_source_event_ids=["source_event_001"])
+    adapter.pipeline_await(
+        scope=scope,
+        source_event_ids=["source_event_001"],
+        profile="retrieval-evaluate",
+    )
 
     assert seen_requests == [
         (
@@ -311,6 +317,19 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
                 },
                 "expected_source_event_ids": ["source_event_001"],
                 "queries": [],
+            },
+        ),
+        (
+            PIPELINE_AWAIT_ENDPOINT,
+            {
+                "scope": {
+                    "project_memory_space_id": "benchmark:run1:bs001",
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                },
+                "source_event_ids": ["source_event_001"],
+                "profile": "retrieval-evaluate",
+                "timeout_seconds": 60,
             },
         ),
     ]

@@ -14,9 +14,9 @@ from memwing.application.pipeline_readiness_status import (
     profile_ready,
     warnings_for_readiness,
 )
+from memwing.application.page_memory_trigger import page_memory_trigger_key_for_scope
 from memwing.application.remember_event_records import (
     long_term_filter_trigger_key_for_scope,
-    page_memory_trigger_key_for_scope,
 )
 from memwing.core.models import MemoryItem, OutboxJob, SourceEvent
 from memwing.core.pipeline_readiness import (

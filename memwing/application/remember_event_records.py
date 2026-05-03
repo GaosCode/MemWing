@@ -7,6 +7,7 @@ import json
 import uuid
 
 from memwing.application.remember_event_command import RememberEventCommand
+from memwing.application.page_memory_trigger import page_memory_target_from_source_event
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.scope import EffectiveScope
@@ -216,11 +217,7 @@ def outbox_aggregate_key(*, source_event: SourceEvent, job_type: str) -> str:
             shared_group_id=source_event.shared_group_id,
         )
     if job_type == "page_memory.maybe_rebuild":
-        return page_memory_trigger_key(
-            source_event.project_memory_space_id,
-            group_id=source_event.group_id,
-            thread_id=source_event.thread_id,
-        )
+        return page_memory_target_from_source_event(source_event).aggregate_key
     return source_event.id
 
 
@@ -242,24 +239,6 @@ def long_term_filter_trigger_key(
     )
 
 
-def page_memory_trigger_key(
-    project_memory_space_id: str,
-    *,
-    group_id: str | None,
-    thread_id: str | None,
-) -> str:
-    if thread_id is not None:
-        scope_type = "thread"
-        scope_id = thread_id
-    elif group_id is not None:
-        scope_type = "group"
-        scope_id = group_id
-    else:
-        scope_type = "project"
-        scope_id = project_memory_space_id
-    return ":".join(("page_memory", project_memory_space_id, scope_type, scope_id))
-
-
 def long_term_filter_trigger_key_for_scope(scope: EffectiveScope) -> str:
     group_id = scope.group_ids[0] if scope.group_ids and len(scope.group_ids) == 1 else None
     return long_term_filter_trigger_key(
@@ -271,9 +250,6 @@ def long_term_filter_trigger_key_for_scope(scope: EffectiveScope) -> str:
 
 
 def page_memory_trigger_key_for_scope(scope: EffectiveScope) -> str:
-    group_id = scope.group_ids[0] if scope.group_ids and len(scope.group_ids) == 1 else None
-    return page_memory_trigger_key(
-        scope.project_memory_space_id,
-        group_id=group_id,
-        thread_id=scope.thread_id,
-    )
+    from memwing.application.page_memory_trigger import page_memory_trigger_key_for_scope as key
+
+    return key(scope)

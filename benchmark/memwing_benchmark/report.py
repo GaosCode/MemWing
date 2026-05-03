@@ -208,8 +208,8 @@ def render_report(
     for result in results:
         lines.append(
             f"| {result.case_id} | {result.probe_id} | {_fmt(_readiness_ready(result))} | "
-            f"{_fmt(_source_mix_text(result.retrieval_source_mix))} | "
-            f"{_fmt(_warnings_text(result.memory_search_warnings))} | "
+            f"{_fmt(_readiness_sources_text(result))} | "
+            f"{_fmt(_pipeline_warnings_text(result))} | "
             f"{_fmt(_readiness_job_count(result, 'pending_count'))} | "
             f"{_fmt(_readiness_job_count(result, 'dead_letter_count'))} |"
         )
@@ -491,9 +491,17 @@ def _readiness_ready(result: NormalizedResult) -> bool | None:
 def _readiness_job_count(result: NormalizedResult, field_name: str) -> int | None:
     readiness = _readiness_final(result)
     jobs = readiness.get("jobs")
-    if not isinstance(jobs, dict):
+    if isinstance(jobs, dict):
+        value = jobs.get(field_name)
+        return value if isinstance(value, int) else None
+    outbox = readiness.get("outbox")
+    if not isinstance(outbox, dict):
         return None
-    value = jobs.get(field_name)
+    outbox_field = {
+        "pending_count": "pending",
+        "dead_letter_count": "dead_letter",
+    }.get(field_name, field_name)
+    value = outbox.get(outbox_field)
     return value if isinstance(value, int) else None
 
 
@@ -502,3 +510,34 @@ def _readiness_final(result: NormalizedResult) -> dict[str, Any]:
     if isinstance(final, dict):
         return final
     return result.readiness_summary
+
+
+def _readiness_sources_text(result: NormalizedResult) -> str | None:
+    readiness = _readiness_final(result)
+    derived = readiness.get("derived")
+    if isinstance(derived, dict):
+        labels: list[str] = []
+        for layer in ("working_memory", "page_memory", "memory_items", "evidence", "graph"):
+            item = derived.get(layer)
+            if not isinstance(item, dict):
+                continue
+            ready = item.get("ready")
+            count = item.get("count")
+            pending = item.get("pending")
+            if isinstance(count, int):
+                labels.append(f"{layer}:{'ready' if ready is True else 'not_ready'}:{count}")
+            elif isinstance(pending, int):
+                labels.append(f"{layer}:{'ready' if ready is True else 'not_ready'}:pending={pending}")
+        if labels:
+            return ", ".join(labels)
+    return _source_mix_text(result.retrieval_source_mix)
+
+
+def _pipeline_warnings_text(result: NormalizedResult) -> str | None:
+    readiness = _readiness_final(result)
+    warnings = readiness.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        labels = [warning for warning in warnings if isinstance(warning, str)]
+        if labels:
+            return ", ".join(labels)
+    return _warnings_text(result.memory_search_warnings)

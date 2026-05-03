@@ -20,7 +20,18 @@ from memwing.ports.page_memory_synthesis import PageMemorySynthesisRequest
 
 DEFAULT_PAGE_MEMORY_SOURCE_EVENT_LIMIT = 200
 DEFAULT_PAGE_MEMORY_LINKED_ITEM_LIMIT = 50
+SOURCE_EVENT_TRIGGER_REASON = "source_event_trigger"
 NEEDS_REBUILD_REASON = "needs_rebuild"
+MANUAL_REBUILD_REASON = "manual_rebuild"
+SOURCE_REDACTION_REASON = "source_redaction"
+PAGE_MEMORY_REBUILD_REASONS = frozenset(
+    {
+        SOURCE_EVENT_TRIGGER_REASON,
+        NEEDS_REBUILD_REASON,
+        MANUAL_REBUILD_REASON,
+        SOURCE_REDACTION_REASON,
+    }
+)
 _PINNED_CURRENT_EXCLUDED_STATUSES = frozenset(
     {
         MemoryStatus.CANDIDATE,
@@ -209,6 +220,8 @@ def _validate_command(command: PageMemoryRebuildCommand) -> None:
         raise PageMemoryRebuildError("page memory rebuild requires scope_id")
     if not command.reason.strip():
         raise PageMemoryRebuildError("page memory rebuild requires reason")
+    if command.reason not in PAGE_MEMORY_REBUILD_REASONS:
+        raise PageMemoryRebuildError("page memory rebuild reason is not supported")
     if not command.trace_id.strip():
         raise PageMemoryRebuildError("page memory rebuild requires trace_id")
     if command.scope_type not in ("project", "group", "thread", "meeting"):

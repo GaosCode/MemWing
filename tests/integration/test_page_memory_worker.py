@@ -221,6 +221,17 @@ def test_needs_rebuild_scanner_rebuilds_flagged_pages_and_clears_flag() -> None:
 
 def test_page_memory_maybe_rebuild_noops_when_no_page_needs_rebuild() -> None:
     store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        *(
+            _source_event(
+                f"source_{index:03d}",
+                f"Short event {index}.",
+                event_time=NOW + timedelta(minutes=index),
+            )
+            for index in range(1, 8)
+        ),
+    )
     service = PageMemoryService(
         store,
         _UnexpectedPageMemorySynthesis(),
@@ -234,9 +245,58 @@ def test_page_memory_maybe_rebuild_noops_when_no_page_needs_rebuild() -> None:
 
     result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
 
-    assert result.scanned == 0
+    assert result.scanned == 1
     assert result.rebuilt == 0
     assert store.audit_events == ()
+
+
+def test_page_memory_maybe_rebuild_bootstraps_first_page_from_source_event_scope() -> None:
+    store = InMemoryDataStore()
+    _seed_source_events(
+        store,
+        *(
+            _source_event(
+                f"source_{index:03d}",
+                f"Bootstrap event {index} keeps the thread mainline current.",
+                event_time=NOW + timedelta(minutes=index),
+            )
+            for index in range(1, 9)
+        ),
+    )
+    synthesis = _EchoPageMemorySynthesis()
+    service = PageMemoryService(store, synthesis, clock=_FixedClock(NOW + timedelta(minutes=10)))
+    worker = PageMemoryWorker(
+        store,
+        service,
+        scope_resolver=_StaticPageMemoryRebuildScopeResolver(_effective_scope()),
+    )
+
+    result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001", "project_001")))
+
+    assert result.scanned == 1
+    assert result.rebuilt == 1
+    assert len(synthesis.requests) == 1
+    assert synthesis.requests[0].scope == _effective_scope()
+    assert tuple(event.id for event in synthesis.requests[0].source_events) == tuple(
+        f"source_{index:03d}" for index in range(1, 9)
+    )
+
+    async def persisted() -> PageMemory:
+        async with store.transaction() as tx:
+            page = await tx.memory_pages.get_by_scope(
+                project_memory_space_id="project_001",
+                scope_type="thread",
+                scope_id="thread_001",
+            )
+            if page is None:
+                raise AssertionError("page should exist")
+            return page
+
+    page = asyncio.run(persisted())
+    assert page.version == 1
+    assert page.needs_rebuild is False
+    assert page.source_event_ids == tuple(f"source_{index:03d}" for index in range(1, 9))
+    assert store.audit_events[-1].reason_code == "source_event_trigger"
 
 
 def _seed_source_events(
@@ -431,6 +491,25 @@ class _FakePageMemorySynthesis:
         return self._synthesis
 
 
+class _EchoPageMemorySynthesis:
+    def __init__(self) -> None:
+        self.requests: list[PageMemorySynthesisRequest] = []
+
+    async def synthesize(
+        self,
+        request: PageMemorySynthesisRequest,
+    ) -> PageMemorySynthesis:
+        self.requests.append(request)
+        source_event_ids = tuple(event.id for event in request.source_events)
+        return _synthesis(
+            title="Bootstrapped page",
+            brief="The page was bootstrapped from source event triggers.",
+            topic_title="Bootstrap",
+            topic_summary="Policy allowed the first Page Memory for this thread.",
+            source_event_ids=source_event_ids,
+        )
+
+
 class _StaticPageMemoryRebuildScopeResolver:
     def __init__(self, scope: EffectiveScope) -> None:
         self._scope = scope
@@ -451,4 +530,4 @@ class _UnexpectedPageMemorySynthesis:
         self,
         request: PageMemorySynthesisRequest,
     ) -> PageMemorySynthesis:
-        raise AssertionError("synthesis should not be called when no page needs rebuild")
+        raise AssertionError("synthesis should not be called when policy skips rebuild")

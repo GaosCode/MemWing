@@ -18,7 +18,7 @@ from memwing.application.control_service_support import (
     _scope_values_match,
     _uuid,
 )
-from memwing.application.page_memory_rebuild import PageMemoryRebuildCommand
+from memwing.application.page_memory_rebuild import MANUAL_REBUILD_REASON, PageMemoryRebuildCommand
 from memwing.application.page_memory_service import PageMemoryService
 from memwing.core.errors import ConfigurationFailure
 from memwing.core.models import MemoryPageVersion, PageMemory, SourceEvent
@@ -249,7 +249,7 @@ class ControlPageServiceMixin:
                     scope_type=scope_type,
                     scope_id=scope_id,
                     actor_id=actor_id,
-                    reason=reason,
+                    reason=MANUAL_REBUILD_REASON,
                     trace_id=trace_id,
                 )
             )

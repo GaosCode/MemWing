@@ -22,7 +22,7 @@ from memwing.workers.page_memory_worker import PageMemoryWorker
 NOW = datetime(2026, 4, 28, 12, tzinfo=UTC)
 
 
-def test_worker_rebuild_uses_scope_resolver_as_authority() -> None:
+def test_worker_rebuild_uses_source_event_scope_as_authority() -> None:
     store = InMemoryDataStore()
     authority_scope = EffectiveScope(
         project_memory_space_id="project_001",
@@ -56,7 +56,6 @@ def test_worker_rebuild_uses_scope_resolver_as_authority() -> None:
     result = asyncio.run(worker.maybe_rebuild(_outbox_job("job_001")))
 
     assert result.rebuilt == 1
-    assert resolver.pages == ("page_001",)
     assert synthesis.requests[0].scope == authority_scope
     assert tuple(event.id for event in synthesis.requests[0].source_events) == (
         "source_authority",

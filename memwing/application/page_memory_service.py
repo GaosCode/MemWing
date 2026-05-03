@@ -6,6 +6,7 @@ from memwing.application.page_memory_rebuild import (
     DEFAULT_PAGE_MEMORY_LINKED_ITEM_LIMIT,
     DEFAULT_PAGE_MEMORY_SOURCE_EVENT_LIMIT,
     NEEDS_REBUILD_REASON,
+    MANUAL_REBUILD_REASON as MANUAL_REBUILD_REASON,
     PageMemoryCommit,
     PageMemoryRebuildCommand,
     PageMemoryRebuildError as PageMemoryRebuildError,
@@ -15,6 +16,8 @@ from memwing.application.page_memory_rebuild import (
     PageMemoryRebuildResult,
     PageMemorySynthesisGuard,
     PageMemorySynthesisValidationError as PageMemorySynthesisValidationError,
+    SOURCE_EVENT_TRIGGER_REASON as SOURCE_EVENT_TRIGGER_REASON,
+    SOURCE_REDACTION_REASON as SOURCE_REDACTION_REASON,
     current_source_window_changed,
 )
 from memwing.ports.clock import ClockPort
@@ -67,21 +70,20 @@ class PageMemoryService:
                 scope_type=command.scope_type,
                 scope_id=command.scope_id,
             )
-            if command.reason == NEEDS_REBUILD_REASON and current_page is not None:
-                if not current_page.needs_rebuild:
-                    return PageMemoryRebuildNoOp(
-                        page=current_page,
-                        reason="already_rebuilt",
-                    )
+            if current_page is not None and plan.existing_page is None:
+                return PageMemoryRebuildNoOp(
+                    page=current_page,
+                    reason="already_rebuilt",
+                )
+            if current_page is not None:
+                if command.reason == NEEDS_REBUILD_REASON and not current_page.needs_rebuild:
+                    return PageMemoryRebuildNoOp(page=current_page, reason="already_rebuilt")
                 current_source_events = await tx.source_events.list_recent_for_scope(
                     scope=command.scope,
                     limit=self._source_event_limit,
                 )
                 if current_source_window_changed(current_source_events, plan):
-                    return PageMemoryRebuildNoOp(
-                        page=current_page,
-                        reason="source_window_changed",
-                    )
+                    return PageMemoryRebuildNoOp(page=current_page, reason="source_window_changed")
             now = self._clock.now()
             return await self._commit.commit(
                 tx,
