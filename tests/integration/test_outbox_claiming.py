@@ -11,6 +11,8 @@ from memwing.ports.event_store import OutboxLockOwnershipError
 def _job(
     job_id: str,
     *,
+    job_type: str = "evidence.index_source_event",
+    aggregate_key: str = "source_001",
     status: str = "pending",
     locked_by: str | None = None,
     lock_expires_at: datetime | None = None,
@@ -20,11 +22,11 @@ def _job(
         id=job_id,
         project_memory_space_id="project_001",
         source_event_id="source_001",
-        job_type="evidence.index_source_event",
+        job_type=job_type,
         payload_json={"source_event_id": "source_001"},
         status=status,
         idempotency_key=f"outbox:{job_id}",
-        aggregate_key="source_001",
+        aggregate_key=aggregate_key,
         attempts=0,
         max_attempts=3,
         priority=10,
@@ -89,5 +91,71 @@ def test_expired_processing_job_can_be_reclaimed_by_another_worker() -> None:
         assert claimed[0].locked_by == "worker_b"
         assert store.outbox_jobs[0].locked_by == "worker_b"
         assert store.outbox_jobs[0].status == "processing"
+
+    asyncio.run(scenario())
+
+
+def test_claim_pending_for_project_and_type_only_claims_matching_job_type() -> None:
+    store = InMemoryDataStore()
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    store.add_outbox_job(_job("job_001", job_type="evidence.index_source_event"))
+    store.add_outbox_job(_job("job_002", job_type="long_term_filter.classify"))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.outbox_jobs.claim_pending_for_project_and_type(
+                project_memory_space_id="project_001",
+                job_type="long_term_filter.classify",
+                now=now,
+                worker_id="worker_ltf",
+                lock_duration=timedelta(minutes=5),
+                limit=10,
+            )
+
+        assert tuple(job.id for job in claimed) == ("job_002",)
+        assert {job.id: job.status for job in store.outbox_jobs} == {
+            "job_001": "pending",
+            "job_002": "processing",
+        }
+        assert store.outbox_jobs[1].locked_by == "worker_ltf"
+
+    asyncio.run(scenario())
+
+
+def test_claim_pending_for_project_type_and_aggregate_only_claims_matching_scope() -> None:
+    store = InMemoryDataStore()
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    store.add_outbox_job(
+        _job(
+            "job_001",
+            job_type="long_term_filter.classify",
+            aggregate_key="long_term_filter:project_001:group_001:thread_001:",
+        )
+    )
+    store.add_outbox_job(
+        _job(
+            "job_002",
+            job_type="long_term_filter.classify",
+            aggregate_key="long_term_filter:project_001:group_001:thread_002:",
+        )
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.outbox_jobs.claim_pending_for_project_type_and_aggregate(
+                project_memory_space_id="project_001",
+                job_type="long_term_filter.classify",
+                aggregate_key="long_term_filter:project_001:group_001:thread_001:",
+                now=now,
+                worker_id="worker_ltf",
+                lock_duration=timedelta(minutes=5),
+                limit=10,
+            )
+
+        assert tuple(job.id for job in claimed) == ("job_001",)
+        assert {job.id: job.status for job in store.outbox_jobs} == {
+            "job_001": "processing",
+            "job_002": "pending",
+        }
 
     asyncio.run(scenario())

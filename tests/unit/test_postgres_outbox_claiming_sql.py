@@ -54,6 +54,85 @@ def test_postgres_claim_pending_uses_atomic_skip_locked_update() -> None:
     assert params["limit"] == 3
 
 
+def test_postgres_claim_pending_for_project_and_type_filters_job_type() -> None:
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    claimed_job = replace(
+        outbox_job(source_event()),
+        job_type="long_term_filter.classify",
+        status="processing",
+        locked_at=now,
+        locked_by="worker_ltf",
+        lock_expires_at=now + timedelta(minutes=5),
+    )
+    connection = FakePostgresConnection(fetch_results=((outbox_job_row(claimed_job),),))
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            claimed = await tx.outbox_jobs.claim_pending_for_project_and_type(
+                project_memory_space_id="project_001",
+                job_type="long_term_filter.classify",
+                now=now,
+                worker_id="worker_ltf",
+                lock_duration=timedelta(minutes=5),
+                limit=40,
+            )
+
+        assert claimed == (claimed_job,)
+
+    asyncio.run(scenario())
+
+    method, sql, params = connection.calls[0]
+    assert method == "fetch"
+    assert "WITH claim AS" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "project_memory_space_id = %(project_memory_space_id)s" in sql
+    assert "job_type = %(job_type)s" in sql
+    assert params["project_memory_space_id"] == "project_001"
+    assert params["job_type"] == "long_term_filter.classify"
+    assert params["worker_id"] == "worker_ltf"
+    assert params["limit"] == 40
+
+
+def test_postgres_claim_pending_for_project_type_and_aggregate_filters_scope() -> None:
+    now = datetime(2026, 4, 28, tzinfo=UTC)
+    aggregate_key = "long_term_filter:project_001:group_001:thread_001:"
+    claimed_job = replace(
+        outbox_job(source_event()),
+        job_type="long_term_filter.classify",
+        aggregate_key=aggregate_key,
+        status="processing",
+        locked_at=now,
+        locked_by="worker_ltf",
+        lock_expires_at=now + timedelta(minutes=5),
+    )
+    connection = FakePostgresConnection(fetch_results=((outbox_job_row(claimed_job),),))
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            claimed = await tx.outbox_jobs.claim_pending_for_project_type_and_aggregate(
+                project_memory_space_id="project_001",
+                job_type="long_term_filter.classify",
+                aggregate_key=aggregate_key,
+                now=now,
+                worker_id="worker_ltf",
+                lock_duration=timedelta(minutes=5),
+                limit=40,
+            )
+
+        assert claimed == (claimed_job,)
+
+    asyncio.run(scenario())
+
+    method, sql, params = connection.calls[0]
+    assert method == "fetch"
+    assert "WITH claim AS" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "project_memory_space_id = %(project_memory_space_id)s" in sql
+    assert "job_type = %(job_type)s" in sql
+    assert "aggregate_key = %(aggregate_key)s" in sql
+    assert params["aggregate_key"] == aggregate_key
+
+
 def test_postgres_complete_and_retry_require_lock_owner() -> None:
     now = datetime(2026, 4, 28, tzinfo=UTC)
     failed_job = replace(

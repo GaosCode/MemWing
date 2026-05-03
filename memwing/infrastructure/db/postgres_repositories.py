@@ -15,12 +15,17 @@ from .postgres_rows import (
 )
 from .postgres_sql import (
     _CLAIM_OUTBOX_JOBS_SQL,
+    _CLAIM_OUTBOX_JOBS_FOR_PROJECT_AND_TYPE_SQL,
     _CLAIM_OUTBOX_JOBS_FOR_PROJECT_SQL,
+    _CLAIM_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATE_SQL,
+    _CLAIM_OUTBOX_JOBS_FOR_TYPES_SQL,
     _INSERT_AUDIT_EVENT_SQL,
     _INSERT_OUTBOX_JOB_SQL,
     _INSERT_SOURCE_EVENT_SQL,
     _LIST_AUDIT_EVENTS_FOR_ENTITY_SQL,
+    _LIST_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATES_SQL,
     _LIST_OUTBOX_JOBS_FOR_PROJECT_SQL,
+    _LIST_OUTBOX_JOBS_FOR_SOURCE_EVENTS_SQL,
     _LIST_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _LIST_RECENT_SOURCE_EVENTS_FOR_SCOPE_SQL,
     _MARK_OUTBOX_FAILED_SQL,
@@ -258,6 +263,42 @@ class PostgresOutboxJobRepository:
         )
         return tuple(outbox_job_from_row(row) for row in rows)
 
+    async def list_for_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> tuple[OutboxJob, ...]:
+        if not source_event_ids:
+            return ()
+        rows = await self._executor.fetch(
+            _LIST_OUTBOX_JOBS_FOR_SOURCE_EVENTS_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "source_event_ids": source_event_ids,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
+    async def list_for_project_type_and_aggregates(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        aggregate_keys: tuple[str, ...],
+    ) -> tuple[OutboxJob, ...]:
+        if not aggregate_keys:
+            return ()
+        rows = await self._executor.fetch(
+            _LIST_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATES_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "job_type": job_type,
+                "aggregate_keys": aggregate_keys,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
     async def claim_pending(
         self,
         *,
@@ -290,6 +331,77 @@ class PostgresOutboxJobRepository:
             _CLAIM_OUTBOX_JOBS_FOR_PROJECT_SQL,
             {
                 "project_memory_space_id": project_memory_space_id,
+                "now": now,
+                "worker_id": worker_id,
+                "lock_expires_at": now + lock_duration,
+                "limit": limit,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
+    async def claim_pending_for_types(
+        self,
+        *,
+        job_types: tuple[str, ...],
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        if not job_types:
+            return ()
+        rows = await self._executor.fetch(
+            _CLAIM_OUTBOX_JOBS_FOR_TYPES_SQL,
+            {
+                "job_types": job_types,
+                "now": now,
+                "worker_id": worker_id,
+                "lock_expires_at": now + lock_duration,
+                "limit": limit,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
+    async def claim_pending_for_project_and_type(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        rows = await self._executor.fetch(
+            _CLAIM_OUTBOX_JOBS_FOR_PROJECT_AND_TYPE_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "job_type": job_type,
+                "now": now,
+                "worker_id": worker_id,
+                "lock_expires_at": now + lock_duration,
+                "limit": limit,
+            },
+        )
+        return tuple(outbox_job_from_row(row) for row in rows)
+
+    async def claim_pending_for_project_type_and_aggregate(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        aggregate_key: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        rows = await self._executor.fetch(
+            _CLAIM_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATE_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "job_type": job_type,
+                "aggregate_key": aggregate_key,
                 "now": now,
                 "worker_id": worker_id,
                 "lock_expires_at": now + lock_duration,

@@ -112,6 +112,23 @@ class OutboxJobRepositoryPort(Protocol):
     ) -> tuple[OutboxJob, ...]:
         ...
 
+    async def list_for_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
+    async def list_for_project_type_and_aggregates(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        aggregate_keys: tuple[str, ...],
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
     async def claim_pending(
         self,
         *,
@@ -126,6 +143,42 @@ class OutboxJobRepositoryPort(Protocol):
         self,
         *,
         project_memory_space_id: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
+    async def claim_pending_for_types(
+        self,
+        *,
+        job_types: tuple[str, ...],
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
+    async def claim_pending_for_project_and_type(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        now: datetime,
+        worker_id: str,
+        lock_duration: timedelta,
+        limit: int,
+    ) -> tuple[OutboxJob, ...]:
+        ...
+
+    async def claim_pending_for_project_type_and_aggregate(
+        self,
+        *,
+        project_memory_space_id: str,
+        job_type: str,
+        aggregate_key: str,
         now: datetime,
         worker_id: str,
         lock_duration: timedelta,
@@ -175,6 +228,14 @@ class EvidenceChunkRepositoryPort(Protocol):
     ) -> int:
         ...
 
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> int:
+        ...
+
 
 class WorkingMemoryRepositoryPort(Protocol):
     async def append(self, entry: WorkingMemoryEntry) -> WorkingMemoryEntry:
@@ -213,6 +274,14 @@ class WorkingMemoryRepositoryPort(Protocol):
         thread_id: str | None,
         through_sequence: int,
         flushed_at: datetime,
+    ) -> int:
+        ...
+
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
     ) -> int:
         ...
 
@@ -361,6 +430,14 @@ class GraphWriteJobRepositoryPort(Protocol):
         project_memory_space_id: str,
         limit: int,
         sort: str | None = None,
+    ) -> tuple[GraphWriteJob, ...]:
+        ...
+
+    async def list_for_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
     ) -> tuple[GraphWriteJob, ...]:
         ...
 

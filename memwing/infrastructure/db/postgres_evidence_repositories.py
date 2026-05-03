@@ -7,6 +7,8 @@ from memwing.core.models import EvidenceChunk, WorkingMemoryEntry
 from .postgres_derived_rows import evidence_chunk_from_row, working_memory_entry_from_row
 from .postgres_derived_sql import (
     _APPEND_WORKING_MEMORY_SQL,
+    _COUNT_EVIDENCE_SOURCE_EVENTS_SQL,
+    _COUNT_WORKING_MEMORY_SOURCE_EVENTS_SQL,
     _LIST_RECENT_WORKING_MEMORY_SQL,
     _MARK_EVIDENCE_SOURCE_REDACTED_SQL,
     _MARK_WORKING_MEMORY_FLUSHED_SQL,
@@ -41,6 +43,23 @@ class PostgresEvidenceChunkRepository:
             },
         )
         return len(rows)
+
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> int:
+        if not source_event_ids:
+            return 0
+        row = await self._executor.fetchrow(
+            _COUNT_EVIDENCE_SOURCE_EVENTS_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "source_event_ids": source_event_ids,
+            },
+        )
+        return _source_event_count(row, "evidence chunk count query did not return an integer")
 
 
 class PostgresWorkingMemoryRepository:
@@ -141,6 +160,32 @@ class PostgresWorkingMemoryRepository:
             },
         )
         return len(rows)
+
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> int:
+        if not source_event_ids:
+            return 0
+        row = await self._executor.fetchrow(
+            _COUNT_WORKING_MEMORY_SOURCE_EVENTS_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "source_event_ids": source_event_ids,
+            },
+        )
+        return _source_event_count(row, "working memory count query did not return an integer")
+
+
+def _source_event_count(row: object, error_message: str) -> int:
+    if row is None:
+        raise RuntimeError(error_message)
+    value = row["source_event_count"]
+    if not isinstance(value, int):
+        raise RuntimeError(error_message)
+    return value
 
 
 def _evidence_chunk_params(chunk: EvidenceChunk) -> dict[str, object]:

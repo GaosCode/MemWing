@@ -172,6 +172,23 @@ ORDER BY {order_by}
 LIMIT %(limit)s
 """
 
+_LIST_OUTBOX_JOBS_FOR_SOURCE_EVENTS_SQL = """
+SELECT *
+FROM outbox_jobs
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND source_event_id = ANY(%(source_event_ids)s::text[])
+ORDER BY created_at ASC, id ASC
+"""
+
+_LIST_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATES_SQL = """
+SELECT *
+FROM outbox_jobs
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND job_type = %(job_type)s
+  AND aggregate_key = ANY(%(aggregate_keys)s::text[])
+ORDER BY created_at ASC, id ASC
+"""
+
 _CLAIM_OUTBOX_JOBS_SQL = """
 WITH claim AS (
     SELECT id
@@ -202,6 +219,93 @@ WITH claim AS (
     SELECT id
     FROM outbox_jobs
     WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND (
+          (status = 'pending' AND next_run_at <= %(now)s)
+       OR (status = 'processing' AND lock_expires_at <= %(now)s)
+      )
+    ORDER BY
+        CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+        next_run_at,
+        priority DESC,
+        created_at
+    LIMIT %(limit)s
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox_jobs AS job
+SET status = 'processing',
+    locked_at = %(now)s,
+    locked_by = %(worker_id)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+FROM claim
+WHERE job.id = claim.id
+RETURNING job.*
+"""
+
+_CLAIM_OUTBOX_JOBS_FOR_TYPES_SQL = """
+WITH claim AS (
+    SELECT id
+    FROM outbox_jobs
+    WHERE job_type = ANY(%(job_types)s::text[])
+      AND (
+          (status = 'pending' AND next_run_at <= %(now)s)
+       OR (status = 'processing' AND lock_expires_at <= %(now)s)
+      )
+    ORDER BY
+        CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+        next_run_at,
+        priority DESC,
+        created_at
+    LIMIT %(limit)s
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox_jobs AS job
+SET status = 'processing',
+    locked_at = %(now)s,
+    locked_by = %(worker_id)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+FROM claim
+WHERE job.id = claim.id
+RETURNING job.*
+"""
+
+_CLAIM_OUTBOX_JOBS_FOR_PROJECT_AND_TYPE_SQL = """
+WITH claim AS (
+    SELECT id
+    FROM outbox_jobs
+    WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND job_type = %(job_type)s
+      AND (
+          (status = 'pending' AND next_run_at <= %(now)s)
+       OR (status = 'processing' AND lock_expires_at <= %(now)s)
+      )
+    ORDER BY
+        CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+        next_run_at,
+        priority DESC,
+        created_at
+    LIMIT %(limit)s
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox_jobs AS job
+SET status = 'processing',
+    locked_at = %(now)s,
+    locked_by = %(worker_id)s,
+    lock_expires_at = %(lock_expires_at)s,
+    updated_at = %(now)s
+FROM claim
+WHERE job.id = claim.id
+RETURNING job.*
+"""
+
+_CLAIM_OUTBOX_JOBS_FOR_PROJECT_TYPE_AND_AGGREGATE_SQL = """
+WITH claim AS (
+    SELECT id
+    FROM outbox_jobs
+    WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND job_type = %(job_type)s
+      AND aggregate_key = %(aggregate_key)s
       AND (
           (status = 'pending' AND next_run_at <= %(now)s)
        OR (status = 'processing' AND lock_expires_at <= %(now)s)

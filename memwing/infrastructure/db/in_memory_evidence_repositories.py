@@ -48,6 +48,23 @@ class InMemoryEvidenceChunkRepository:
                 count += 1
         return count
 
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> int:
+        source_ids = set(source_event_ids)
+        return len(
+            {
+                chunk.source_event_id
+                for chunk in self._tx.state.evidence_chunks.values()
+                if chunk.project_memory_space_id == project_memory_space_id
+                and chunk.source_event_id in source_ids
+                and chunk.invalidated_at is None
+            }
+        )
+
 
 class InMemoryWorkingMemoryRepository:
     def __init__(self, tx: InMemoryTransactionView) -> None:
@@ -132,3 +149,19 @@ class InMemoryWorkingMemoryRepository:
                 )
                 count += 1
         return count
+
+    async def count_by_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> int:
+        source_ids = set(source_event_ids)
+        return len(
+            {
+                entry.source_event_id
+                for entry in self._tx.state.working_memory_entries.values()
+                if entry.project_memory_space_id == project_memory_space_id
+                and entry.source_event_id in source_ids
+            }
+        )

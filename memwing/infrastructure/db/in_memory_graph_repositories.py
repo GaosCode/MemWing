@@ -37,6 +37,22 @@ class InMemoryGraphWriteJobRepository:
         jobs.sort(key=lambda job: (_graph_job_sort_value(job, sort), job.id), reverse=True)
         return tuple(jobs[:limit])
 
+    async def list_for_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> tuple[GraphWriteJob, ...]:
+        source_ids = set(source_event_ids)
+        jobs = [
+            job
+            for job in self._tx.state.graph_write_jobs.values()
+            if job.project_memory_space_id == project_memory_space_id
+            and source_ids.intersection(job.source_event_ids)
+        ]
+        jobs.sort(key=lambda job: (job.created_at, job.id))
+        return tuple(jobs)
+
     async def claim_pending(
         self,
         *,

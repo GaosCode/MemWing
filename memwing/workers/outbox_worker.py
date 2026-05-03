@@ -43,10 +43,59 @@ class OutboxWorker:
         now: datetime | None = None,
         limit: int = 1,
         project_memory_space_id: str | None = None,
+        job_type: str | None = None,
+        job_types: tuple[str, ...] | None = None,
+        aggregate_key: str | None = None,
     ) -> OutboxWorkerResult:
+        if job_type is not None and job_types is not None:
+            raise ValueError("job_type and job_types filters are mutually exclusive")
+        if aggregate_key is not None and job_type is None:
+            raise ValueError("aggregate_key filtering requires job_type")
+        if aggregate_key is not None and project_memory_space_id is None:
+            raise ValueError("aggregate_key filtering requires project_memory_space_id")
+
         run_at = now or datetime.now(UTC)
         async with self._unit_of_work.transaction() as tx:
-            if project_memory_space_id is None:
+            if (
+                project_memory_space_id is not None
+                and job_type is not None
+                and aggregate_key is not None
+            ):
+                claimed = await tx.outbox_jobs.claim_pending_for_project_type_and_aggregate(
+                    project_memory_space_id=project_memory_space_id,
+                    job_type=job_type,
+                    aggregate_key=aggregate_key,
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
+            elif project_memory_space_id is not None and job_type is not None:
+                claimed = await tx.outbox_jobs.claim_pending_for_project_and_type(
+                    project_memory_space_id=project_memory_space_id,
+                    job_type=job_type,
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
+            elif project_memory_space_id is None and job_type is not None:
+                claimed = await tx.outbox_jobs.claim_pending_for_types(
+                    job_types=(job_type,),
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
+            elif project_memory_space_id is None and job_types is not None:
+                claimed = await tx.outbox_jobs.claim_pending_for_types(
+                    job_types=job_types,
+                    now=run_at,
+                    worker_id=self._worker_id,
+                    lock_duration=self._lock_duration,
+                    limit=limit,
+                )
+            elif project_memory_space_id is None:
                 claimed = await tx.outbox_jobs.claim_pending(
                     now=run_at,
                     worker_id=self._worker_id,
@@ -140,6 +189,18 @@ class OutboxWorker:
                 )
             )
             return updated
+
+    async def record_success(self, *, job: OutboxJob, now: datetime) -> None:
+        await self._record_success(job=job, now=now)
+
+    async def record_handler_failure(self, *, job: OutboxJob, exc: Exception, now: datetime) -> OutboxJob:
+        failure = classify_failure(exc, audit_stage="outbox.handler")
+        return await self._record_failure(
+            job=job,
+            error=_safe_error_summary(exc),
+            reason_code=failure.reason_code,
+            now=now,
+        )
 
 
 def _audit_event(

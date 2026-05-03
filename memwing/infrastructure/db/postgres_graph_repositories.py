@@ -12,6 +12,7 @@ from .postgres_derived_sql import (
     _EXTEND_GRAPH_WRITE_LOCK_SQL,
     _INSERT_GRAPH_WRITE_JOB_SQL,
     _LIST_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
+    _LIST_GRAPH_WRITE_JOBS_FOR_SOURCE_EVENTS_SQL,
     _LIST_MEMORY_GRAPH_LINKS_BY_MEMORY_SQL,
     _MARK_GRAPH_WRITE_DEAD_LETTER_SQL,
     _MARK_GRAPH_WRITE_FAILED_SQL,
@@ -56,6 +57,23 @@ class PostgresGraphWriteJobRepository:
             {
                 "project_memory_space_id": project_memory_space_id,
                 "limit": limit,
+            },
+        )
+        return tuple(graph_write_job_from_row(row) for row in rows)
+
+    async def list_for_source_events(
+        self,
+        *,
+        project_memory_space_id: str,
+        source_event_ids: tuple[str, ...],
+    ) -> tuple[GraphWriteJob, ...]:
+        if not source_event_ids:
+            return ()
+        rows = await self._executor.fetch(
+            _LIST_GRAPH_WRITE_JOBS_FOR_SOURCE_EVENTS_SQL,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "source_event_ids": source_event_ids,
             },
         )
         return tuple(graph_write_job_from_row(row) for row in rows)

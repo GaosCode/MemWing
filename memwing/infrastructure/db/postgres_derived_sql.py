@@ -30,6 +30,14 @@ WHERE source_event_id = %(source_event_id)s
 RETURNING id
 """
 
+_COUNT_EVIDENCE_SOURCE_EVENTS_SQL = """
+SELECT COUNT(DISTINCT source_event_id) AS source_event_count
+FROM evidence_chunks
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND source_event_id = ANY(%(source_event_ids)s::text[])
+  AND invalidated_at IS NULL
+"""
+
 _APPEND_WORKING_MEMORY_SQL = """
 INSERT INTO working_memory_entries (
     id, source_event_id, project_memory_space_id, group_id, thread_id, shared_group_id,
@@ -77,6 +85,13 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
   AND sequence <= %(through_sequence)s
   AND flushed_at IS NULL
 RETURNING id
+"""
+
+_COUNT_WORKING_MEMORY_SOURCE_EVENTS_SQL = """
+SELECT COUNT(DISTINCT source_event_id) AS source_event_count
+FROM working_memory_entries
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND source_event_id = ANY(%(source_event_ids)s::text[])
 """
 
 _INSERT_MEMORY_RECALL_EVENT_SQL = """
@@ -461,6 +476,14 @@ FROM graph_write_jobs
 WHERE project_memory_space_id = %(project_memory_space_id)s
 ORDER BY {order_by}
 LIMIT %(limit)s
+"""
+
+_LIST_GRAPH_WRITE_JOBS_FOR_SOURCE_EVENTS_SQL = """
+SELECT *
+FROM graph_write_jobs
+WHERE project_memory_space_id = %(project_memory_space_id)s
+  AND source_event_ids && %(source_event_ids)s::text[]
+ORDER BY created_at ASC, id ASC
 """
 
 _CLAIM_GRAPH_WRITE_JOBS_SQL = """

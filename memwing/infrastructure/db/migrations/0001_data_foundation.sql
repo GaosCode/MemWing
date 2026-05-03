@@ -169,6 +169,9 @@ CREATE INDEX IF NOT EXISTS idx_outbox_jobs_status_lock_expires
 CREATE INDEX IF NOT EXISTS idx_outbox_jobs_project_aggregate_status
     ON outbox_jobs (project_memory_space_id, aggregate_key, status);
 
+CREATE INDEX IF NOT EXISTS idx_outbox_jobs_project_type_aggregate_status_run
+    ON outbox_jobs (project_memory_space_id, job_type, aggregate_key, status, next_run_at, priority);
+
 CREATE INDEX IF NOT EXISTS idx_outbox_jobs_source_event
     ON outbox_jobs (source_event_id);
 
