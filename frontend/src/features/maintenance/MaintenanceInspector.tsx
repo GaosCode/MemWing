@@ -6,20 +6,31 @@ import { maintenanceStateLabel, severityLabel } from "../../shared/i18n/formatte
 import { useI18n } from "../../shared/i18n";
 import type { MaintenanceItem } from "../../shared/types/entities";
 import { linkedReferences } from "./maintenanceData";
+import type { MaintenanceAction } from "./MaintenanceQueues";
 
 export function MaintenanceInspector({
   item,
   onOpenDetail,
+  onAction,
   onClose,
 }: {
   item: MaintenanceItem;
   onOpenDetail: () => void;
+  onAction: (item: MaintenanceItem, action: MaintenanceAction) => Promise<void>;
   onClose?: () => void;
 }) {
   const { dictionary } = useI18n();
   const [notice, setNotice] = useState(dictionary.maintenance.reviewBeforeRetry);
   const [pinned, setPinned] = useState(false);
   const statusTone = item.state === "Failed" ? "red" : item.state === "Open" ? "green" : "orange";
+
+  function runPrimaryAction() {
+    const action: MaintenanceAction = item.actionKind === "push_candidate" ? "approve" : "retry";
+    setNotice("Sending maintenance action to backend");
+    void onAction(item, action)
+      .then(() => setNotice("Backend maintenance action completed"))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing API request failed"));
+  }
 
   return (
     <div className="inspector-panel">
@@ -49,7 +60,7 @@ export function MaintenanceInspector({
         </div>
       </InspectorSection>
       <div className="action-grid">
-        <Button primary icon={RotateCcw} label={item.state === "Failed" ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={() => setNotice(item.state === "Failed" ? dictionary.maintenance.retryQueued : dictionary.maintenance.checkQueued)} />
+        <Button primary icon={RotateCcw} label={item.actionKind === "push_candidate" ? "Approve Push" : item.state === "Failed" ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={runPrimaryAction} disabled={item.actionKind === "job" && !item.retryable} />
         <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={onOpenDetail} />
         <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setNotice(dictionary.maintenance.sourcePreviewOpened)} />
         <Button icon={X} label={dictionary.actions.dismiss} onClick={onClose} />

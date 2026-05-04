@@ -40,6 +40,12 @@ export type ForgettingCurve = {
 };
 
 export type MaintenanceItem = {
+  id: string;
+  actionKind: "job" | "push_candidate" | "review";
+  jobKind?: string;
+  retryable?: boolean;
+  sourceEventIds?: string[];
+  memoryItemIds?: string[];
   type: string;
   title: string;
   source: string;

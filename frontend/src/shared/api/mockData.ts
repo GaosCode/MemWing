@@ -7,6 +7,10 @@ export const memories: MemoryItem[] =
 
 export const maintenanceItems: MaintenanceItem[] = [
   {
+    id: "mock_failed_job",
+    actionKind: "job",
+    jobKind: "outbox",
+    retryable: true,
     type: "Failed Job",
     title: "PushWorker failed to promote candidate",
     source: "Project Memory",
@@ -16,6 +20,8 @@ export const maintenanceItems: MaintenanceItem[] = [
     severity: "failed",
   },
   {
+    id: "mock_review_1",
+    actionKind: "review",
     type: "Review",
     title: "用户希望自动维护动作可解释、可撤销",
     source: "Feishu · 产品群",
@@ -25,6 +31,8 @@ export const maintenanceItems: MaintenanceItem[] = [
     severity: "warning",
   },
   {
+    id: "mock_review_2",
+    actionKind: "review",
     type: "Review",
     title: "Current Stage wording alignment",
     source: "Page Memory",
@@ -34,6 +42,8 @@ export const maintenanceItems: MaintenanceItem[] = [
     severity: "warning",
   },
   {
+    id: "mock_forgetting_1",
+    actionKind: "review",
     type: "Forgetting",
     title: "过时的 duplicate risk wording",
     source: "Project Memory",
@@ -43,6 +53,8 @@ export const maintenanceItems: MaintenanceItem[] = [
     severity: "healthy",
   },
   {
+    id: "mock_push_1",
+    actionKind: "push_candidate",
     type: "Push",
     title: "Inspector remains compact preview",
     source: "Project Memory",

@@ -1,17 +1,29 @@
 import { useState } from "react";
 import { ChevronDown, CircleAlert, FileText, List, ListFilter, MoreHorizontal, ShieldCheck, type LucideIcon } from "lucide-react";
-import { memories } from "../../shared/api/mockData";
 import { IconButton, PageHeader, StatusBadge } from "../../shared/components/ui";
 import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
 
-export function InboxPage({ selected, onSelect }: { selected: MemoryItem; onSelect: (memory: MemoryItem) => void }) {
+export function InboxPage({
+  memories,
+  selected,
+  onSelect,
+}: {
+  memories: MemoryItem[];
+  selected: MemoryItem;
+  onSelect: (memory: MemoryItem) => void;
+}) {
   const { dictionary } = useI18n();
   const [compact, setCompact] = useState(false);
   const [reviewOnly, setReviewOnly] = useState(false);
   const [expandedQueues, setExpandedQueues] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState(dictionary.inbox.noticeReady);
-  const reviewMemories = reviewOnly ? memories.slice(0, 2) : memories.slice(0, 2);
+  const reviewMemories = memories.filter((memory) => (
+    memory.status === "candidate" ||
+    memory.status === "needs_review" ||
+    memory.forgetting.curveState === "below_threshold"
+  ));
+  const candidateMemories = memories.filter((memory) => memory.status === "candidate");
 
   function toggleQueue(title: string) {
     setExpandedQueues((current) => ({ ...current, [title]: !current[title] }));
@@ -41,24 +53,24 @@ export function InboxPage({ selected, onSelect }: { selected: MemoryItem; onSele
 
       {!reviewOnly ? (
         <div className={`queue-section ${compact ? "queue-section--compact" : ""}`}>
-          <SectionHeading icon={ShieldCheck} title={dictionary.inbox.candidateMemories} count="3" />
-          {memories.slice(2, 5).map((memory) => (
+          <SectionHeading icon={ShieldCheck} title={dictionary.inbox.candidateMemories} count={String(candidateMemories.length)} />
+          {candidateMemories.map((memory) => (
             <QueueRow key={memory.id} memory={memory} selected={selected.id === memory.id} onSelect={onSelect} compact />
           ))}
         </div>
       ) : null}
 
       <div className={`queue-section ${compact ? "queue-section--compact" : ""}`}>
-        <SectionHeading icon={CircleAlert} title={dictionary.inbox.needsReview} count="2" warning />
-        {reviewMemories.map((memory) => (
+        <SectionHeading icon={CircleAlert} title={dictionary.inbox.needsReview} count={String(reviewMemories.length)} warning />
+        {(reviewOnly ? reviewMemories : reviewMemories.slice(0, 8)).map((memory) => (
           <QueueRow key={memory.id} memory={memory} selected={selected.id === memory.id} onSelect={onSelect} />
         ))}
       </div>
 
-      <CollapsedQueue title={dictionary.inbox.queues.expiringSoon} count="2" tone="warning" right="2 天后" expanded={!!expandedQueues.expiringSoon} onToggle={() => toggleQueue("expiringSoon")} onSelect={onSelect} />
-      <CollapsedQueue title={dictionary.inbox.queues.pendingPush} count="2" tone="success" right="4 项" expanded={!!expandedQueues.pendingPush} onToggle={() => toggleQueue("pendingPush")} onSelect={onSelect} />
-      <CollapsedQueue title={dictionary.inbox.queues.conflicts} count="2" tone="danger" right="3 高" expanded={!!expandedQueues.conflicts} onToggle={() => toggleQueue("conflicts")} onSelect={onSelect} />
-      <CollapsedQueue title={dictionary.inbox.queues.redactedSources} count="2" tone="danger" right="2 项" expanded={!!expandedQueues.redactedSources} onToggle={() => toggleQueue("redactedSources")} onSelect={onSelect} />
+      <CollapsedQueue title={dictionary.inbox.queues.expiringSoon} memories={memories.filter((memory) => memory.forgetting.curveState === "fading")} tone="warning" right="review" expanded={!!expandedQueues.expiringSoon} onToggle={() => toggleQueue("expiringSoon")} onSelect={onSelect} />
+      <CollapsedQueue title={dictionary.inbox.queues.pendingPush} memories={[]} tone="success" right="0 项" expanded={!!expandedQueues.pendingPush} onToggle={() => toggleQueue("pendingPush")} onSelect={onSelect} />
+      <CollapsedQueue title={dictionary.inbox.queues.conflicts} memories={memories.filter((memory) => memory.flags.includes("conflict"))} tone="danger" right="review" expanded={!!expandedQueues.conflicts} onToggle={() => toggleQueue("conflicts")} onSelect={onSelect} />
+      <CollapsedQueue title={dictionary.inbox.queues.redactedSources} memories={memories.filter((memory) => memory.flags.includes("source_redacted"))} tone="danger" right="review" expanded={!!expandedQueues.redactedSources} onToggle={() => toggleQueue("redactedSources")} onSelect={onSelect} />
     </>
   );
 }
@@ -108,7 +120,7 @@ function SectionHeading({
 
 function CollapsedQueue({
   title,
-  count,
+  memories,
   tone,
   right,
   expanded,
@@ -116,7 +128,7 @@ function CollapsedQueue({
   onSelect,
 }: {
   title: string;
-  count: string;
+  memories: MemoryItem[];
   tone: "success" | "warning" | "danger";
   right: string;
   expanded: boolean;
@@ -128,13 +140,13 @@ function CollapsedQueue({
       <button className="collapsed-queue" type="button" aria-expanded={expanded} onClick={onToggle}>
         <span className={`queue-symbol queue-symbol--${tone}`} />
         <span>{title}</span>
-        <span className="pill-count">{count}</span>
+        <span className="pill-count">{memories.length}</span>
         <span className={`queue-right queue-right--${tone}`}>{right}</span>
         <ChevronDown size={18} />
       </button>
       {expanded ? (
         <div className="queue-section queue-section--nested">
-          {memories.slice(0, 2).map((memory) => (
+          {memories.slice(0, 8).map((memory) => (
             <QueueRow key={`${title}-${memory.id}`} memory={memory} selected={false} onSelect={onSelect} compact />
           ))}
         </div>

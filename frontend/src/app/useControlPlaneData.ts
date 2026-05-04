@@ -1,0 +1,219 @@
+import { useEffect, useMemo, useState } from "react";
+import { controlMaintenanceToItems } from "../api/mappers/controlPlane";
+import { memoryListItemToViewModel } from "../api/mappers/memoryList";
+import type { MemoryEditInput, PageEditInput } from "../shared/api/controlPlaneClient";
+import {
+  approvePushCandidate,
+  editControlPage,
+  editMemory,
+  getControlIntegrations,
+  getControlMaintenance,
+  getControlMemory,
+  getControlPage,
+  getControlSettings,
+  listControlMemories,
+  listControlPages,
+  mutateMemoryLifecycle,
+  rebuildControlPage,
+  restoreControlPageVersion,
+  retryControlJob,
+  skipPushCandidate,
+} from "../shared/api/controlPlaneClient";
+import type {
+  ControlIntegrationsResponseDto,
+  ControlPageDetailDto,
+  ControlPageDto,
+  ControlSettingsDto,
+  MemoryDetailDto,
+  MemoryLifecycleAction,
+} from "../api/generated/controlPlane";
+import type { MaintenanceItem, MemoryItem } from "../shared/types/entities";
+import { controlScope } from "./controlScope";
+
+export type MaintenanceBackendAction = "retry" | "approve" | "skip";
+
+export function maintenanceKey(item: MaintenanceItem) {
+  return `${item.actionKind}:${item.id}`;
+}
+
+export function useControlPlaneData() {
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [memoryDetails, setMemoryDetails] = useState<Record<string, MemoryDetailDto>>({});
+  const [maintenanceItems, setMaintenanceItems] = useState<MaintenanceItem[]>([]);
+  const [pages, setPages] = useState<ControlPageDto[]>([]);
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const [selectedPageDetail, setSelectedPageDetail] = useState<ControlPageDetailDto | null>(null);
+  const [settings, setSettings] = useState<ControlSettingsDto | null>(null);
+  const [integrations, setIntegrations] = useState<ControlIntegrationsResponseDto | null>(null);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [selectedMaintenance, setSelectedMaintenance] = useState<MaintenanceItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void refreshControlPlane();
+  }, []);
+
+  useEffect(() => {
+    if (selectedMemoryId !== null && memoryDetails[selectedMemoryId] === undefined) {
+      void loadMemoryDetail(selectedMemoryId);
+    }
+  }, [memoryDetails, selectedMemoryId]);
+
+  const selectedMemory = useMemo(
+    () => memories.find((memory) => memory.id === selectedMemoryId) ?? memories[0] ?? null,
+    [memories, selectedMemoryId],
+  );
+  const selectedPage = useMemo(
+    () => pages.find((page) => page.id === selectedPageId) ?? pages[0] ?? null,
+    [pages, selectedPageId],
+  );
+
+  return {
+    memories,
+    memoryDetails,
+    maintenanceItems,
+    selectedMaintenance,
+    selectedMemory,
+    selectedPage,
+    selectedPageDetail,
+    settings,
+    integrations,
+    loading,
+    loadError,
+    setSelectedMemoryId,
+    setSelectedMaintenance,
+    refreshControlPlane,
+    refreshSettings,
+    runMemoryLifecycleAction,
+    runMemoryEdit,
+    runPageRebuild,
+    runPageEdit,
+    runPageRestore,
+    runMaintenanceAction,
+  };
+
+  async function refreshControlPlane() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [memoryList, maintenance, pageList, nextSettings, nextIntegrations] = await Promise.all([
+        listControlMemories(controlScope),
+        getControlMaintenance(controlScope),
+        listControlPages(controlScope),
+        getControlSettings(controlScope),
+        getControlIntegrations(),
+      ]);
+      const nextMemories = memoryList.items.map(memoryListItemToViewModel);
+      const nextMaintenanceItems = controlMaintenanceToItems(maintenance);
+      const nextPage = pageList.items.find((page) => page.id === selectedPageId) ?? pageList.items[0] ?? null;
+      const nextPageDetail = nextPage !== null ? await getControlPage(controlScope, nextPage.id) : null;
+      setMemories(nextMemories);
+      setMaintenanceItems(nextMaintenanceItems);
+      setPages(pageList.items);
+      setSettings(nextSettings);
+      setIntegrations(nextIntegrations);
+      setSelectedMemoryId((current) => current ?? nextMemories[0]?.id ?? null);
+      setSelectedMaintenance((current) => current ?? nextMaintenanceItems[0] ?? null);
+      setSelectedPageId((current) => current ?? nextPage?.id ?? null);
+      setSelectedPageDetail(nextPageDetail);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "MemWing API request failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runMemoryLifecycleAction(
+    memory: MemoryItem,
+    action: MemoryLifecycleAction,
+    reason: string,
+  ) {
+    const detail = await mutateMemoryLifecycle(controlScope, memory.id, action, reason);
+    const nextMemory = memoryListItemToViewModel(detail.item);
+    setMemoryDetails((current) => ({ ...current, [memory.id]: detail }));
+    replaceMemory(nextMemory);
+  }
+
+  async function runMemoryEdit(memory: MemoryItem, input: MemoryEditInput, reason: string) {
+    const detail = await editMemory(controlScope, memory.id, input, reason);
+    const nextMemory = memoryListItemToViewModel(detail.item);
+    setMemoryDetails((current) => ({ ...current, [memory.id]: detail }));
+    replaceMemory(nextMemory);
+  }
+
+  function replaceMemory(nextMemory: MemoryItem) {
+    setMemories((current) => current.map((item) => item.id === nextMemory.id ? nextMemory : item));
+    setSelectedMemoryId(nextMemory.id);
+  }
+
+  async function runPageRebuild(page: ControlPageDto) {
+    const detail = await rebuildControlPage(controlScope, page.id, "frontend manual page rebuild");
+    replacePageDetail(detail);
+  }
+
+  async function runPageEdit(page: ControlPageDto, input: PageEditInput, reason: string) {
+    const detail = await editControlPage(controlScope, page.id, input, reason);
+    replacePageDetail(detail);
+  }
+
+  async function runPageRestore(page: ControlPageDto, version: number) {
+    const detail = await restoreControlPageVersion(controlScope, page.id, version, "frontend page version restore");
+    replacePageDetail(detail);
+  }
+
+  function replacePageDetail(detail: ControlPageDetailDto) {
+    setPages((current) => current.map((page) => page.id === detail.page.id ? detail.page : page));
+    setSelectedPageId(detail.page.id);
+    setSelectedPageDetail(detail);
+  }
+
+  async function runMaintenanceAction(item: MaintenanceItem, action: MaintenanceBackendAction) {
+    if (item.actionKind === "job" && action === "retry") {
+      await retryControlJob(controlScope, item.id, item.jobKind ?? "", "frontend retry failed maintenance job");
+      await refreshMaintenance();
+      return;
+    }
+    if (item.actionKind === "push_candidate" && action === "approve") {
+      await approvePushCandidate(controlScope, item.id, "frontend approve push candidate");
+      await refreshMaintenance();
+      return;
+    }
+    if (item.actionKind === "push_candidate" && action === "skip") {
+      await skipPushCandidate(controlScope, item.id, "frontend skip push candidate");
+      await refreshMaintenance();
+      return;
+    }
+    throw new Error("This maintenance action is not supported by the backend contract.");
+  }
+
+  async function refreshMaintenance() {
+    const maintenance = await getControlMaintenance(controlScope);
+    const nextMaintenanceItems = controlMaintenanceToItems(maintenance);
+    setMaintenanceItems(nextMaintenanceItems);
+    setSelectedMaintenance((current) => {
+      if (current === null) {
+        return nextMaintenanceItems[0] ?? null;
+      }
+      return nextMaintenanceItems.find((item) => maintenanceKey(item) === maintenanceKey(current)) ?? nextMaintenanceItems[0] ?? null;
+    });
+  }
+
+  async function refreshSettings() {
+    const [nextSettings, nextIntegrations] = await Promise.all([
+      getControlSettings(controlScope),
+      getControlIntegrations(),
+    ]);
+    setSettings(nextSettings);
+    setIntegrations(nextIntegrations);
+  }
+
+  async function loadMemoryDetail(memoryId: string) {
+    try {
+      const detail = await getControlMemory(controlScope, memoryId);
+      setMemoryDetails((current) => ({ ...current, [memoryId]: detail }));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "MemWing memory detail request failed");
+    }
+  }
+}

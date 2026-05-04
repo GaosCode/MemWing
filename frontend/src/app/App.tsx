@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import { RefreshCcw } from "lucide-react";
+import "./controlPlaneState.css";
 import { AppShell } from "./AppShell";
-import { maintenanceItems, memories } from "../shared/api/mockData";
-import { SplitSurface } from "../shared/components/ui";
+import { maintenanceKey, useControlPlaneData } from "./useControlPlaneData";
+import { Button, SplitSurface } from "../shared/components/ui";
 import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
 import { InboxPage } from "../features/inbox/InboxPage";
 import { LibraryPage } from "../features/library/LibraryPage";
@@ -15,17 +17,12 @@ import { ProjectInspectorDetail } from "../features/project/ProjectInspectorDeta
 import { ProjectPage } from "../features/project/ProjectPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
-function maintenanceKey(item: MaintenanceItem) {
-  return `${item.type}:${item.title}:${item.updated}`;
-}
-
 export function App() {
   const [activeNav, setActiveNav] = useState<NavKey>("inbox");
   const [detailMode, setDetailMode] = useState<DetailMode>(null);
-  const [selectedMemory, setSelectedMemory] = useState<MemoryItem>(memories[0]);
-  const [selectedMaintenance, setSelectedMaintenance] = useState<MaintenanceItem>(maintenanceItems[0]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(400);
+  const control = useControlPlaneData();
 
   function openNav(next: NavKey) {
     setActiveNav(next);
@@ -34,22 +31,24 @@ export function App() {
   }
 
   function selectMemory(memory: MemoryItem) {
-    if (inspectorOpen && selectedMemory.id === memory.id) {
+    if (inspectorOpen && control.selectedMemory?.id === memory.id) {
       setInspectorOpen(false);
       return;
     }
-
-    setSelectedMemory(memory);
+    control.setSelectedMemoryId(memory.id);
     setInspectorOpen(true);
   }
 
   function selectMaintenance(item: MaintenanceItem) {
-    if (inspectorOpen && maintenanceKey(selectedMaintenance) === maintenanceKey(item)) {
+    if (
+      inspectorOpen
+      && control.selectedMaintenance !== null
+      && maintenanceKey(control.selectedMaintenance) === maintenanceKey(item)
+    ) {
       setInspectorOpen(false);
       return;
     }
-
-    setSelectedMaintenance(item);
+    control.setSelectedMaintenance(item);
     setInspectorOpen(true);
   }
 
@@ -65,24 +64,73 @@ export function App() {
   };
 
   const content = useMemo(() => {
+    if (control.loading || control.loadError !== null) {
+      return (
+        <ControlPlaneState
+          loading={control.loading}
+          error={control.loadError}
+          empty={!control.loading && control.loadError === null}
+          onRetry={() => {
+            void control.refreshControlPlane();
+          }}
+        />
+      );
+    }
+
+    if ((activeNav === "inbox" || activeNav === "library" || detailMode === "memory") && control.selectedMemory === null) {
+      return <ControlPlaneState loading={false} error={null} empty onRetry={() => void control.refreshControlPlane()} />;
+    }
+
     if (detailMode === "memory") {
-      return <MemoryDetailPage memory={selectedMemory} onBack={() => setDetailMode(null)} />;
+      if (control.selectedMemory === null) {
+        return null;
+      }
+      return (
+        <MemoryDetailPage
+          memory={control.selectedMemory}
+          detail={control.memoryDetails[control.selectedMemory.id] ?? null}
+          onBack={() => setDetailMode(null)}
+          onLifecycleAction={control.runMemoryLifecycleAction}
+          onEditMemory={control.runMemoryEdit}
+        />
+      );
     }
 
     if (detailMode === "project") {
-      return <ProjectInspectorDetail onBack={() => setDetailMode(null)} />;
+      if (control.selectedPage === null) {
+        return <ControlPlaneState loading={false} error={null} empty onRetry={() => void control.refreshControlPlane()} />;
+      }
+      return (
+        <ProjectInspectorDetail
+          page={control.selectedPage}
+          detail={control.selectedPageDetail}
+          memories={control.memories}
+          onSelectMemory={selectMemory}
+          onRebuildPage={control.runPageRebuild}
+          onEditPage={control.runPageEdit}
+          onRestorePageVersion={control.runPageRestore}
+          onBack={() => setDetailMode(null)}
+        />
+      );
     }
 
     if (detailMode === "maintenance") {
-      return <MaintenanceDetailPage item={selectedMaintenance} onBack={() => setDetailMode(null)} />;
+      return control.selectedMaintenance === null ? null : (
+        <MaintenanceDetailPage
+          item={control.selectedMaintenance}
+          memories={control.memories}
+          onAction={control.runMaintenanceAction}
+          onBack={() => setDetailMode(null)}
+        />
+      );
     }
 
     if (activeNav === "inbox") {
       return (
         <SplitSurface
           {...splitProps}
-          main={<InboxPage selected={selectedMemory} onSelect={selectMemory} />}
-          inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} {...inspectorControls} />}
+          main={<InboxPage memories={control.memories} selected={control.selectedMemory} onSelect={selectMemory} />}
+          inspector={<MemoryInspector memory={control.selectedMemory} onOpenDetail={() => setDetailMode("memory")} onLifecycleAction={control.runMemoryLifecycleAction} {...inspectorControls} />}
         />
       );
     }
@@ -91,38 +139,83 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<LibraryPage selected={selectedMemory} onSelect={selectMemory} />}
-          inspector={<MemoryInspector memory={selectedMemory} onOpenDetail={() => setDetailMode("memory")} libraryMode {...inspectorControls} />}
+          main={<LibraryPage memories={control.memories} selected={control.selectedMemory} onSelect={selectMemory} />}
+          inspector={<MemoryInspector memory={control.selectedMemory} onOpenDetail={() => setDetailMode("memory")} onLifecycleAction={control.runMemoryLifecycleAction} libraryMode {...inspectorControls} />}
         />
       );
     }
 
     if (activeNav === "project") {
+      if (control.selectedPage === null) {
+        return <ControlPlaneState loading={false} error={null} empty onRetry={() => void control.refreshControlPlane()} />;
+      }
       return (
         <SplitSurface
           {...splitProps}
-          main={<ProjectPage />}
-          inspector={<ProjectInspector onOpenDetail={() => setDetailMode("project")} {...inspectorControls} />}
+          main={
+            <ProjectPage
+              page={control.selectedPage}
+              detail={control.selectedPageDetail}
+              memories={control.memories}
+              onSelectMemory={selectMemory}
+              onRebuildPage={control.runPageRebuild}
+              onEditPage={control.runPageEdit}
+              onRestorePageVersion={control.runPageRestore}
+            />
+          }
+          inspector={<ProjectInspector page={control.selectedPage} detail={control.selectedPageDetail} onOpenDetail={() => setDetailMode("project")} {...inspectorControls} />}
         />
       );
     }
 
     if (activeNav === "maintenance") {
+      if (control.selectedMaintenance === null) {
+        return <ControlPlaneState loading={false} error={null} empty onRetry={() => void control.refreshControlPlane()} />;
+      }
       return (
         <SplitSurface
           {...splitProps}
-          main={<MaintenancePage selected={selectedMaintenance} onSelect={selectMaintenance} />}
-          inspector={<MaintenanceInspector item={selectedMaintenance} onOpenDetail={() => setDetailMode("maintenance")} {...inspectorControls} />}
+          main={
+            <MaintenancePage
+              items={control.maintenanceItems}
+              memories={control.memories}
+              selected={control.selectedMaintenance}
+              onSelect={selectMaintenance}
+              onAction={control.runMaintenanceAction}
+              onMemoryLifecycleAction={control.runMemoryLifecycleAction}
+            />
+          }
+          inspector={<MaintenanceInspector item={control.selectedMaintenance} onOpenDetail={() => setDetailMode("maintenance")} onAction={control.runMaintenanceAction} {...inspectorControls} />}
         />
       );
     }
 
-    return <SettingsPage />;
-  }, [activeNav, detailMode, inspectorOpen, inspectorWidth, selectedMaintenance, selectedMemory]);
+    return <SettingsPage settings={control.settings} integrations={control.integrations} onRefresh={() => void control.refreshSettings()} />;
+  }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth]);
 
   return (
     <AppShell activeNav={activeNav} shellMode={detailMode ? "detail" : "split"} onSelectNav={openNav}>
       {content}
     </AppShell>
+  );
+}
+
+function ControlPlaneState({
+  loading,
+  error,
+  empty,
+  onRetry,
+}: {
+  loading: boolean;
+  error: string | null;
+  empty?: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="control-plane-state">
+      <h1>{loading ? "Loading MemWing" : empty ? "No MemWing records" : "MemWing API unavailable"}</h1>
+      <p>{loading ? "Fetching current memory state from the backend." : empty ? "The backend returned an empty control plane result for the current scope." : error}</p>
+      {!loading ? <Button icon={RefreshCcw} label="Retry" onClick={onRetry} /> : null}
+    </section>
   );
 }

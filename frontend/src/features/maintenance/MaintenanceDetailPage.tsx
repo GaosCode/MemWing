@@ -1,14 +1,24 @@
 import { useState } from "react";
 import { ArrowLeft, Check, CircleAlert, Database, Eye, ExternalLink, FileText, Link2, MoreHorizontal, RotateCcw, ShieldCheck, UserCheck, Wrench } from "lucide-react";
-import { memories } from "../../shared/api/mockData";
 import { Button, Definition, DetailTabs, DocSection, IconButton, InspectorSection, Metric, StatusBadge, StatusPill, Timeline } from "../../shared/components/ui";
 import { severityTone } from "../../shared/design-system/status";
 import { maintenanceStateLabel, memoryTypeLabel, severityLabel } from "../../shared/i18n/formatters";
 import { useI18n } from "../../shared/i18n";
-import type { MaintenanceItem } from "../../shared/types/entities";
+import type { MaintenanceItem, MemoryItem } from "../../shared/types/entities";
 import { auditTrailRows, linkedReferences, retryHistoryRows } from "./maintenanceData";
+import type { MaintenanceAction } from "./MaintenanceQueues";
 
-export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem; onBack: () => void }) {
+export function MaintenanceDetailPage({
+  item,
+  memories,
+  onAction,
+  onBack,
+}: {
+  item: MaintenanceItem;
+  memories: MemoryItem[];
+  onAction: (item: MaintenanceItem, action: MaintenanceAction) => Promise<void>;
+  onBack: () => void;
+}) {
   const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Overview");
   const [notice, setNotice] = useState("Promotion remains blocked until conflict review is complete");
@@ -26,10 +36,16 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
           <p>{item.type} · {item.source} · 2026-04-27 {item.updated}</p>
         </div>
         <div className="inline-action-row">
-          <Button icon={RotateCcw} label={isFailedJob ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={() => {
-            setRetryState(isFailedJob ? "Review Pending" : item.state);
-            setNotice(isFailedJob ? "Retry requested; waiting for conflict review" : "Maintenance check queued");
-          }} />
+          <Button icon={RotateCcw} label={item.actionKind === "push_candidate" ? "Approve Push" : isFailedJob ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={() => {
+            setNotice("Sending maintenance action to backend");
+            const action: MaintenanceAction = item.actionKind === "push_candidate" ? "approve" : "retry";
+            void onAction(item, action)
+              .then(() => {
+                setRetryState(isFailedJob ? "Review Pending" : item.state);
+                setNotice("Backend maintenance action completed");
+              })
+              .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing API request failed"));
+          }} disabled={item.actionKind === "job" && !item.retryable} />
           <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={() => setActiveTab("Audit")} />
           <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Linked Evidence")} />
           <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Job command menu opened")} />
@@ -52,7 +68,7 @@ export function MaintenanceDetailPage({ item, onBack }: { item: MaintenanceItem;
           {activeTab === "Overview" ? <MaintenanceOverviewDetail item={item} isFailedJob={isFailedJob} /> : null}
           {activeTab === "Failure Trace" ? <FailureTrace item={item} /> : null}
           {activeTab === "Linked Evidence" ? <LinkedEvidence item={item} /> : null}
-          {activeTab === "Affected Memories" ? <AffectedMemories /> : null}
+          {activeTab === "Affected Memories" ? <AffectedMemories memories={memories} /> : null}
           {activeTab === "Audit" ? <AuditTrace /> : null}
           {activeTab === "Retries" ? <RetryTrace /> : null}
           {activeTab === "Logs" ? <LogTrace /> : null}
@@ -189,7 +205,7 @@ function LinkedEvidence({ item }: { item: MaintenanceItem }) {
   );
 }
 
-function AffectedMemories() {
+function AffectedMemories({ memories }: { memories: MemoryItem[] }) {
   const { dictionary } = useI18n();
   return (
     <DocSection icon={Database} title="Affected Memories">

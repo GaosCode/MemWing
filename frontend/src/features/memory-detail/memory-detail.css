@@ -1,0 +1,28 @@
+.detail-editor-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.detail-editor-field span {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.detail-editor-field input,
+.detail-editor-field textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
+.detail-editor-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}

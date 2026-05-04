@@ -2,17 +2,20 @@ import { useEffect, useState } from "react";
 import { Archive, Check, Edit3, Eye, EyeOff, Pin } from "lucide-react";
 import { Button, Definition, InspectorHeader, InspectorSection, StatusBadge, StrengthMeter, Timeline } from "../../shared/components/ui";
 import { useI18n } from "../../shared/i18n";
+import type { MemoryLifecycleAction } from "../../api/generated/controlPlane";
 import type { MemoryItem } from "../../shared/types/entities";
 
 export function MemoryInspector({
   memory,
   onOpenDetail,
   onClose,
+  onLifecycleAction,
   libraryMode,
 }: {
   memory: MemoryItem;
   onOpenDetail: () => void;
   onClose?: () => void;
+  onLifecycleAction: (memory: MemoryItem, action: MemoryLifecycleAction, reason: string) => Promise<void>;
   libraryMode?: boolean;
 }) {
   const { dictionary } = useI18n();
@@ -26,10 +29,7 @@ export function MemoryInspector({
 
   return (
     <div className="inspector-panel">
-      <InspectorHeader title={dictionary.inspector.memoryTitle} onOpen={onOpenDetail} onClose={onClose} pinned={pinned} onPin={() => {
-        setPinned((value) => !value);
-        setNotice(pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned);
-      }} />
+      <InspectorHeader title={dictionary.inspector.memoryTitle} onOpen={onOpenDetail} onClose={onClose} pinned={pinned} onPin={() => runAction(pinned ? "unpin" : "pin", pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned)} />
       <h2>{memory.title}</h2>
       <div className="inspector-notice">{notice}</div>
 
@@ -49,16 +49,25 @@ export function MemoryInspector({
         <Timeline rows={[dictionary.inspector.timeline.strengthRecalculated, dictionary.inspector.timeline.sourceLinked, dictionary.inspector.timeline.evidenceUpdated]} compact />
       </InspectorSection>
       <div className="action-grid">
-        <Button primary icon={Check} label={dictionary.actions.confirm} onClick={() => setNotice(dictionary.inspector.memoryConfirmed)} />
-        <Button icon={Edit3} label={dictionary.actions.edit} onClick={() => setNotice(dictionary.inspector.editOpened)} />
+        <Button primary icon={Check} label={dictionary.actions.confirm} onClick={() => runAction("confirm", dictionary.inspector.memoryConfirmed)} />
+        <Button icon={Edit3} label={dictionary.actions.edit} onClick={onOpenDetail} />
         <Button icon={Pin} label={pinned ? dictionary.actions.pinned : dictionary.actions.pin} onClick={() => {
-          setPinned((value) => !value);
-          setNotice(pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned);
+          runAction(pinned ? "unpin" : "pin", pinned ? dictionary.inspector.pinRemoved : dictionary.inspector.memoryPinned);
         }} />
-        <Button icon={Archive} label={dictionary.actions.archive} onClick={() => setNotice(dictionary.inspector.archiveRequested)} />
-        <Button icon={EyeOff} label={dictionary.actions.hide} onClick={() => setNotice(dictionary.inspector.hiddenFromRecall)} />
+        <Button icon={Archive} label={dictionary.actions.archive} onClick={() => runAction("archive", dictionary.inspector.archiveRequested)} />
+        <Button icon={EyeOff} label={dictionary.actions.hide} onClick={() => runAction("hide", dictionary.inspector.hiddenFromRecall)} />
         <Button icon={Eye} label={dictionary.actions.viewSource} onClick={onOpenDetail} />
       </div>
     </div>
   );
+
+  async function runAction(action: MemoryLifecycleAction, successNotice: string) {
+    setNotice("Updating MemWing...");
+    try {
+      await onLifecycleAction(memory, action, successNotice);
+      setNotice(successNotice);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "MemWing update failed");
+    }
+  }
 }
