@@ -25,6 +25,12 @@ import {
   type MemoryLifecycleAction,
   type MemoryListResponseDto,
 } from "../../api/generated/controlPlane";
+import {
+  requireBoolean,
+  requireOptionalText,
+  requireRecord,
+  requireText,
+} from "../../api/generated/schema";
 
 const API_BASE = (import.meta.env.VITE_MEMWING_API_BASE ?? "").replace(/\/$/, "");
 const ACTOR_ID = import.meta.env.VITE_MEMWING_ACTOR_ID ?? "user_001";
@@ -38,6 +44,20 @@ export type MemoryEditInput = {
 export type PageEditInput = {
   title: string;
   brief: string;
+};
+
+export type ManualMemoryInput = {
+  title: string;
+  content: string;
+  sourceUrl: string | null;
+  reason: string;
+};
+
+export type RememberEventResponseDto = {
+  source_event_id: string;
+  accepted: boolean;
+  trace_id: string;
+  duplicate_of: string | null;
 };
 
 export async function listControlMemories(scope: ControlScopeParams): Promise<MemoryListResponseDto> {
@@ -71,6 +91,19 @@ export async function editMemory(
     summary: input.summary,
   };
   return parseMemoryDetailMutation(await patchJson(`/v1/memory/${memoryId}`, scope, body)).item;
+}
+
+export async function createManualMemory(
+  scope: ControlScopeParams,
+  input: ManualMemoryInput,
+): Promise<RememberEventResponseDto> {
+  const body = {
+    ...mutationEnvelope(input.reason, `manual-memory:${scope.project_memory_space_id}`),
+    title: input.title,
+    content: input.content,
+    source_url: input.sourceUrl,
+  };
+  return parseRememberEventResponse(await postJson("/v1/control/memories/manual", scope, body));
 }
 
 export async function listControlPages(scope: ControlScopeParams): Promise<ControlPageListResponseDto> {
@@ -231,6 +264,16 @@ function scopeSearchParams(scope: ControlScopeParams): URLSearchParams {
     return typeof value === "string" && value.trim().length > 0;
   });
   return new URLSearchParams(entries);
+}
+
+function parseRememberEventResponse(input: unknown): RememberEventResponseDto {
+  const object = requireRecord(input, "remember event response");
+  return {
+    source_event_id: requireText(object.source_event_id, "source_event_id"),
+    accepted: requireBoolean(object.accepted, "accepted"),
+    trace_id: requireText(object.trace_id, "trace_id"),
+    duplicate_of: "duplicate_of" in object ? requireOptionalText(object.duplicate_of, "duplicate_of") : null,
+  };
 }
 
 function errorMessage(payload: unknown): string {

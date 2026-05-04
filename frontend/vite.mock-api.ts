@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
@@ -71,22 +72,27 @@ export function memwingMockApiPlugin(): Plugin {
           return;
         }
 
-        const memoryId = segment(path, 3);
-        const pushCandidateId = segment(path, 4);
-        const body = routeMockApi({
-          method: request.method,
-          path,
-          memoryList,
-          memoryId,
-          pushCandidateId,
-          page,
-          pageDetail,
-          maintenance,
-          settings,
-          integrations,
-          sourceEvent,
-        });
-        sendJson(response, body.status, body.payload);
+        void readRequestJson(request)
+          .then((payload) => {
+            const memoryId = segment(path, 3);
+            const pushCandidateId = segment(path, 4);
+            const body = routeMockApi({
+              method: request.method ?? "GET",
+              path,
+              payload,
+              memoryList,
+              memoryId,
+              pushCandidateId,
+              page,
+              pageDetail,
+              maintenance,
+              settings,
+              integrations,
+              sourceEvent,
+            });
+            sendJson(response, body.status, body.payload);
+          })
+          .catch(next);
       });
     },
   };
@@ -95,6 +101,7 @@ export function memwingMockApiPlugin(): Plugin {
 function routeMockApi(input: {
   method: string;
   path: string;
+  payload: JsonObject;
   memoryList: MemoryListFixture;
   memoryId: string;
   pushCandidateId: string;
@@ -108,6 +115,7 @@ function routeMockApi(input: {
   const {
     method,
     path,
+    payload,
     memoryList,
     memoryId,
     pushCandidateId,
@@ -119,6 +127,19 @@ function routeMockApi(input: {
     sourceEvent,
   } = input;
 
+  if (method === "POST" && path === "/v1/control/memories/manual") {
+    const memory = mockManualMemory(payload);
+    memoryList.items.unshift(memory);
+    return {
+      status: 202,
+      payload: {
+        source_event_id: memory.source_event_ids[0],
+        accepted: true,
+        duplicate_of: null,
+        trace_id: "mock_manual_memory",
+      },
+    };
+  }
   if (method === "GET" && path === "/v1/control/memories") {
     return ok(memoryList);
   }
@@ -177,6 +198,41 @@ function routeMockApi(input: {
 
 function readMemoryListFixture(): MemoryListFixture {
   return JSON.parse(readFileSync(memoryListFixturePath, "utf8")) as MemoryListFixture;
+}
+
+function mockManualMemory(payload: JsonObject): MemoryFixtureItem {
+  const nestedPayload = jsonObjectValue(payload.payload);
+  const scope = jsonObjectValue(payload.scope);
+  const content = textValue(payload.content) ?? textValue(nestedPayload?.content) ?? "Manual memory";
+  const title = textValue(payload.title) ?? textValue(nestedPayload?.title) ?? content.split(/\n+/)[0] ?? "Manual memory";
+  const reason = textValue(payload.reason) ?? textValue(nestedPayload?.reason) ?? "manual memory submitted from control plane";
+  const eventTime = textValue(payload.event_time) ?? new Date().toISOString();
+  const suffix = String(Date.now());
+  return {
+    id: `mock_manual_memory_${suffix}`,
+    title,
+    summary: content,
+    display_type: "note",
+    route: "manual",
+    status: "candidate",
+    group_id: textValue(scope?.group_id),
+    thread_id: textValue(scope?.thread_id),
+    source_event_ids: [`mock_manual_source_${suffix}`],
+    decay_score: 1,
+    original_score: 1,
+    half_life_days: 90,
+    recall_threshold: 0.45,
+    curve_state: "retained",
+    last_reinforced_at: eventTime,
+    next_review_at: null,
+    retention_reason: reason,
+    flags: ["manual"],
+    source_state: "manual",
+    graph_backend_raw_retained: false,
+    available_actions: ["confirm", "edit", "archive", "hide"],
+    warning_count: 0,
+    updated_at: eventTime,
+  };
 }
 
 function mockMemoryDetail(memoryList: MemoryListFixture, memoryId: string): JsonObject {
@@ -320,4 +376,36 @@ function sendJson(response: { statusCode: number; setHeader: (name: string, valu
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json");
   response.end(JSON.stringify(payload));
+}
+
+function readRequestJson(request: IncomingMessage): Promise<JsonObject> {
+  if (request.method === "GET" || request.method === "HEAD") {
+    return Promise.resolve({});
+  }
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    request.on("data", (chunk: Buffer | string) => {
+      raw += chunk.toString();
+    });
+    request.on("end", () => {
+      if (raw.trim().length === 0) {
+        resolve({});
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      resolve(jsonObjectValue(parsed) ?? {});
+    });
+    request.on("error", reject);
+  });
+}
+
+function jsonObjectValue(value: unknown): JsonObject | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as JsonObject;
+}
+
+function textValue(value: JsonValue | undefined): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
