@@ -9,6 +9,10 @@ export type MemoryItem = {
   title: string;
   type: MemoryType;
   source: string;
+  groupId: string | null;
+  threadId: string | null;
+  sourceState: string;
+  sourceEventIds: string[];
   lastSeen: string;
   status: LifecycleStatus;
   strength: number;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Clock3, Columns3, ExternalLink, List, ListFilter, Search } from "lucide-react";
+import { Check, Clock3, Columns3, ExternalLink, List, ListFilter, Plus, Search } from "lucide-react";
 import { PageHeader, SelectMenu } from "../../shared/components/ui";
 import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
@@ -14,10 +14,12 @@ export function LibraryPage({
   memories,
   selected,
   onSelect,
+  onAddMemory,
 }: {
   memories: MemoryItem[];
   selected: MemoryItem;
   onSelect: (memory: MemoryItem) => void;
+  onAddMemory: () => void;
 }) {
   const { dictionary } = useI18n();
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -101,18 +103,29 @@ export function LibraryPage({
         title={dictionary.library.title}
         subtitle={dictionary.library.subtitle}
         actions={
-          <div className="segmented">
-            {[
-              { label: "List" as const, icon: List },
-              { label: "Timeline" as const, icon: Clock3 },
-              { label: "Board" as const, icon: Columns3 },
-            ].map(({ label, icon: Icon }) => (
-              <button key={label} className={view === label ? "is-active" : ""} type="button" onClick={() => setView(label)}>
-                <Icon size={18} />
-                {dictionary.library.views[label.toLowerCase() as "list" | "timeline" | "board"]}
-              </button>
-            ))}
-          </div>
+          <>
+            <button
+              className="button button--primary"
+              type="button"
+              onPointerUp={onAddMemory}
+              onClick={onAddMemory}
+            >
+              <Plus size={17} />
+              新增记忆
+            </button>
+            <div className="segmented">
+              {[
+                { label: "List" as const, icon: List },
+                { label: "Timeline" as const, icon: Clock3 },
+                { label: "Board" as const, icon: Columns3 },
+              ].map(({ label, icon: Icon }) => (
+                <button key={label} className={view === label ? "is-active" : ""} type="button" onClick={() => setView(label)}>
+                  <Icon size={18} />
+                  {dictionary.library.views[label.toLowerCase() as "list" | "timeline" | "board"]}
+                </button>
+              ))}
+            </div>
+          </>
         }
       />
 

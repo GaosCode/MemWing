@@ -30,6 +30,7 @@ export function MemoryListView({
         <span>{dictionary.library.columns.strength}</span>
         <span>{dictionary.library.columns.tags}</span>
       </div>
+      {memories.length === 0 ? <div className="table-empty">No matching memories in the current scope.</div> : null}
       {memories.map((memory) => (
         <button
           className={`table-row ${selected.id === memory.id ? "is-selected" : ""}`}
@@ -44,7 +45,7 @@ export function MemoryListView({
           <span>{memory.lastSeen.slice(0, 16)}</span>
           <span><StatusBadge status={memory.status} /></span>
           <span><StrengthMeter value={memory.strength} compact /></span>
-          <span className="flag-list">{memory.flags.map((flag) => <span key={flag}>{flag}</span>)}</span>
+          <span className="flag-list">{memory.flags.map((flag) => <span key={flag} title={flag}>{flag}</span>)}</span>
         </button>
       ))}
     </div>

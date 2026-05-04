@@ -16,6 +16,7 @@ import { useState } from "react";
 import { BrandMark } from "../shared/components/BrandMark";
 import { SelectMenu } from "../shared/components/ui";
 import { useI18n } from "../shared/i18n";
+import type { ControlScopeParams } from "../api/generated/controlPlane";
 import type { NavKey } from "../shared/types/entities";
 
 const navItems: Array<{ key: NavKey; icon: LucideIcon }> = [
@@ -26,25 +27,51 @@ const navItems: Array<{ key: NavKey; icon: LucideIcon }> = [
   { key: "settings", icon: Settings },
 ];
 
+export type TopbarScopeOptions = {
+  workspaces: string[];
+  groups: string[];
+  threads: string[];
+};
+
 export function AppShell({
   activeNav,
   shellMode,
   children,
   onSelectNav,
   onRefresh,
+  scope,
+  scopeOptions,
+  onScopeChange,
+  searchQuery,
+  searchResultCount,
+  onSearchQueryChange,
 }: {
   activeNav: NavKey;
   shellMode: "split" | "detail";
   children: React.ReactNode;
   onSelectNav: (key: NavKey) => void;
   onRefresh: () => Promise<void>;
+  scope: ControlScopeParams;
+  scopeOptions: TopbarScopeOptions;
+  onScopeChange: (nextScope: ControlScopeParams) => void;
+  searchQuery: string;
+  searchResultCount: number | null;
+  onSearchQueryChange: (query: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const { dictionary } = useI18n();
   return (
     <div className={`app-shell app-shell--${shellMode} ${collapsed ? "app-shell--nav-collapsed" : ""}`}>
       <Sidebar active={activeNav} collapsed={collapsed} onToggleCollapse={() => setCollapsed((value) => !value)} onSelect={onSelectNav} />
-      <Topbar onRefresh={onRefresh} />
+      <Topbar
+        scope={scope}
+        scopeOptions={scopeOptions}
+        searchQuery={searchQuery}
+        searchResultCount={searchResultCount}
+        onRefresh={onRefresh}
+        onScopeChange={onScopeChange}
+        onSearchQueryChange={onSearchQueryChange}
+      />
       <main className="workspace" aria-label={dictionary.app.shell.workspaceAria}>
         {children}
       </main>
@@ -94,15 +121,34 @@ function Sidebar({
   );
 }
 
-function Topbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
+function Topbar({
+  scope,
+  scopeOptions,
+  searchQuery,
+  searchResultCount,
+  onRefresh,
+  onScopeChange,
+  onSearchQueryChange,
+}: {
+  scope: ControlScopeParams;
+  scopeOptions: TopbarScopeOptions;
+  searchQuery: string;
+  searchResultCount: number | null;
+  onRefresh: () => Promise<void>;
+  onScopeChange: (nextScope: ControlScopeParams) => void;
+  onSearchQueryChange: (query: string) => void;
+}) {
   const { locale, dictionary, setLocale } = useI18n();
-  const [workspaceIndex, setWorkspaceIndex] = useState(0);
-  const [groupIndex, setGroupIndex] = useState(0);
-  const [threadIndex, setThreadIndex] = useState(0);
-  const [search, setSearch] = useState("");
   const [syncedNow, setSyncedNow] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const languageValue = locale === "zh-CN" ? dictionary.app.shell.languageChinese : dictionary.app.shell.languageEnglish;
+  const allGroupsLabel = locale === "zh-CN" ? "全部分组" : "All groups";
+  const allThreadsLabel = locale === "zh-CN" ? "全部线程" : "All threads";
+  const workspaceOptions = withCurrent(scopeOptions.workspaces, scope.project_memory_space_id);
+  const groupOptions = [allGroupsLabel, ...scopeOptions.groups];
+  const threadOptions = [allThreadsLabel, ...scopeOptions.threads];
+  const groupValue = scope.group_id ?? allGroupsLabel;
+  const threadValue = scope.thread_id ?? allThreadsLabel;
 
   function changeLocale(nextLabel: string) {
     setLocale(nextLabel === dictionary.app.shell.languageEnglish ? "en" : "zh-CN");
@@ -124,32 +170,37 @@ function Topbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         <SelectMenu
           className="scope-select"
           label={dictionary.app.shell.workspaceLabel}
-          value={dictionary.app.shell.workspaceOptions[workspaceIndex]}
-          options={[...dictionary.app.shell.workspaceOptions]}
-          onChange={(next) => setWorkspaceIndex(dictionary.app.shell.workspaceOptions.indexOf(next))}
+          value={scope.project_memory_space_id}
+          options={workspaceOptions}
+          onChange={(next) => onScopeChange({ ...scope, project_memory_space_id: next, group_id: undefined, thread_id: undefined })}
         />
         <SelectMenu
           className="scope-select"
           label={dictionary.app.shell.groupLabel}
-          value={dictionary.app.shell.groupOptions[groupIndex]}
-          options={[...dictionary.app.shell.groupOptions]}
-          onChange={(next) => setGroupIndex(dictionary.app.shell.groupOptions.indexOf(next))}
+          value={groupValue}
+          options={groupOptions}
+          onChange={(next) => onScopeChange({ ...scope, group_id: next === allGroupsLabel ? undefined : next })}
         />
         <SelectMenu
           className="scope-select"
           label={dictionary.app.shell.threadLabel}
-          value={dictionary.app.shell.threadOptions[threadIndex]}
-          options={[...dictionary.app.shell.threadOptions]}
-          onChange={(next) => setThreadIndex(dictionary.app.shell.threadOptions.indexOf(next))}
+          value={threadValue}
+          options={threadOptions}
+          onChange={(next) => onScopeChange({ ...scope, thread_id: next === allThreadsLabel ? undefined : next })}
         />
       </div>
 
       <label className="global-search">
         <Search size={18} />
         <span className="sr-only">{dictionary.app.shell.globalSearchLabel}</span>
-        <input value={search} placeholder={dictionary.app.shell.globalSearchPlaceholder} onChange={(event) => setSearch(event.target.value)} />
+        <input value={searchQuery} placeholder={dictionary.app.shell.globalSearchPlaceholder} onChange={(event) => onSearchQueryChange(event.target.value)} />
         <kbd>{dictionary.common.searchShortcut}</kbd>
-        {search ? <span className="search-result-hint">{dictionary.app.shell.localFilterPrefix}{search}</span> : null}
+        {searchQuery ? (
+          <span className="search-result-hint">
+            {dictionary.app.shell.localFilterPrefix}{searchQuery}
+            {searchResultCount !== null ? ` · ${searchResultCount} matches` : ""}
+          </span>
+        ) : null}
       </label>
 
       <button className="sync-user" type="button" onClick={() => void refreshFromBackend()} disabled={syncing}>
@@ -173,6 +224,10 @@ function Topbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
       </button>
     </header>
   );
+}
+
+function withCurrent(options: string[], current: string) {
+  return options.includes(current) ? options : [current, ...options];
 }
 
 function Statusbar() {

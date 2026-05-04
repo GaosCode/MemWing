@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { RefreshCcw } from "lucide-react";
 import "./controlPlaneState.css";
-import { AppShell } from "./AppShell";
+import { AppShell, type TopbarScopeOptions } from "./AppShell";
 import { maintenanceKey, useControlPlaneData } from "./useControlPlaneData";
+import { controlScope } from "./controlScope";
 import { Button, SplitSurface } from "../shared/components/ui";
+import type { ControlPageDto, ControlScopeParams } from "../api/generated/controlPlane";
+import type { ManualMemoryInput } from "../shared/api/controlPlaneClient";
 import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
 import { InboxPage } from "../features/inbox/InboxPage";
 import { LibraryPage } from "../features/library/LibraryPage";
@@ -22,7 +25,31 @@ export function App() {
   const [detailMode, setDetailMode] = useState<DetailMode>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(400);
-  const control = useControlPlaneData();
+  const [scope, setScope] = useState<ControlScopeParams>(() => ({ ...controlScope }));
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [memoryComposerOpen, setMemoryComposerOpen] = useState(false);
+  const control = useControlPlaneData(scope);
+
+  const visibleMemories = useMemo(
+    () => filterMemoriesBySearch(control.memories, globalSearchQuery),
+    [control.memories, globalSearchQuery],
+  );
+  const visibleMaintenanceItems = useMemo(
+    () => filterMaintenanceBySearch(control.maintenanceItems, globalSearchQuery),
+    [control.maintenanceItems, globalSearchQuery],
+  );
+  const scopeOptions = useMemo(
+    () => buildScopeOptions(scope, control.memories, control.selectedPage, control.settings?.project_memory_space_id ?? null),
+    [control.memories, control.selectedPage, control.settings?.project_memory_space_id, scope],
+  );
+  const searchResultCount = useMemo(() => {
+    if (globalSearchQuery.trim().length === 0) {
+      return null;
+    }
+    return visibleMemories.length
+      + visibleMaintenanceItems.length
+      + (control.selectedPage !== null && matchesPageSearch(control.selectedPage, globalSearchQuery) ? 1 : 0);
+  }, [control.selectedPage, globalSearchQuery, visibleMaintenanceItems.length, visibleMemories.length]);
 
   function openNav(next: NavKey) {
     setActiveNav(next);
@@ -131,7 +158,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<InboxPage memories={control.memories} selected={control.selectedMemory} onSelect={selectMemory} />}
+          main={<InboxPage memories={visibleMemories} selected={control.selectedMemory} onSelect={selectMemory} />}
           inspector={<MemoryInspector memory={control.selectedMemory} onOpenDetail={() => setDetailMode("memory")} onLifecycleAction={control.runMemoryLifecycleAction} {...inspectorControls} />}
         />
       );
@@ -141,7 +168,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<LibraryPage memories={control.memories} selected={control.selectedMemory} onSelect={selectMemory} />}
+          main={<LibraryPage memories={visibleMemories} selected={control.selectedMemory} onSelect={selectMemory} onAddMemory={() => setMemoryComposerOpen(true)} />}
           inspector={<MemoryInspector memory={control.selectedMemory} onOpenDetail={() => setDetailMode("memory")} onLifecycleAction={control.runMemoryLifecycleAction} libraryMode {...inspectorControls} />}
         />
       );
@@ -158,7 +185,7 @@ export function App() {
             <ProjectPage
               page={control.selectedPage}
               detail={control.selectedPageDetail}
-              memories={control.memories}
+              memories={visibleMemories}
               onSelectMemory={selectMemory}
               onRebuildPage={control.runPageRebuild}
               onEditPage={control.runPageEdit}
@@ -181,8 +208,8 @@ export function App() {
           {...splitProps}
           main={
             <MaintenancePage
-              items={control.maintenanceItems}
-              memories={control.memories}
+              items={visibleMaintenanceItems}
+              memories={visibleMemories}
               selected={control.selectedMaintenance}
               onSelect={selectMaintenance}
               onAction={control.runMaintenanceAction}
@@ -196,18 +223,232 @@ export function App() {
     }
 
     return <SettingsPage settings={control.settings} integrations={control.integrations} onRefresh={() => void control.refreshSettings()} />;
-  }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth]);
+  }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth, visibleMaintenanceItems, visibleMemories]);
+
+  async function submitManualMemory(input: ManualMemoryInput) {
+    await control.runManualMemoryCreate(input);
+    setActiveNav("library");
+    setDetailMode(null);
+    setInspectorOpen(false);
+    setGlobalSearchQuery(input.title);
+  }
 
   return (
-    <AppShell
-      activeNav={activeNav}
-      shellMode={detailMode ? "detail" : "split"}
-      onSelectNav={openNav}
-      onRefresh={control.refreshControlPlane}
-    >
-      {content}
-    </AppShell>
+    <>
+      <AppShell
+        activeNav={activeNav}
+        shellMode={detailMode ? "detail" : "split"}
+        scope={scope}
+        scopeOptions={scopeOptions}
+        searchQuery={globalSearchQuery}
+        searchResultCount={searchResultCount}
+        onSelectNav={openNav}
+        onRefresh={control.refreshControlPlane}
+        onScopeChange={setScope}
+        onSearchQueryChange={setGlobalSearchQuery}
+      >
+        {content}
+      </AppShell>
+      <AddMemoryDialog
+        open={memoryComposerOpen}
+        onClose={() => setMemoryComposerOpen(false)}
+        onSubmit={submitManualMemory}
+      />
+    </>
   );
+}
+
+function AddMemoryDialog({
+  open,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (input: ManualMemoryInput) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [reason, setReason] = useState("手动新增记忆");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setTitle("");
+    setContent("");
+    setSourceUrl("");
+    setReason("手动新增记忆");
+    setError(null);
+    setSubmitting(false);
+  }, [open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const canSubmit = title.trim().length > 0 && content.trim().length > 0 && reason.trim().length > 0;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSubmit || submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        content: content.trim(),
+        sourceUrl: sourceUrl.trim().length > 0 ? sourceUrl.trim() : null,
+        reason: reason.trim(),
+      });
+      onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "新增记忆提交失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        onClose();
+      }
+    }}>
+      <form className="memory-create-dialog" aria-label="新增记忆" onSubmit={submit}>
+        <div className="dialog-header">
+          <div>
+            <h2>新增记忆</h2>
+            <p>提交后写入 MemWing 事件管线，由后端生成候选记忆和审计记录。</p>
+          </div>
+          <button type="button" aria-label="关闭新增记忆" onClick={onClose}>×</button>
+        </div>
+        <label>
+          <span>标题</span>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：Demo 范围优先飞书文档记忆" />
+        </label>
+        <label>
+          <span>内容</span>
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} placeholder="写下需要 MemWing 记住的事实、偏好、规则或决策。" />
+        </label>
+        <label>
+          <span>来源链接</span>
+          <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="可选" />
+        </label>
+        <label>
+          <span>原因</span>
+          <input value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        {error ? <p className="dialog-error">{error}</p> : null}
+        <div className="dialog-actions">
+          <button className="button" type="button" onClick={onClose}>取消</button>
+          <button className="button button--primary" type="submit" disabled={!canSubmit || submitting}>
+            {submitting ? "提交中" : "提交记忆"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function buildScopeOptions(
+  scope: ControlScopeParams,
+  memories: MemoryItem[],
+  selectedPage: ControlPageDto | null,
+  settingsWorkspaceId: string | null,
+): TopbarScopeOptions {
+  return {
+    workspaces: uniqueText([
+      scope.project_memory_space_id,
+      settingsWorkspaceId,
+      selectedPage?.project_memory_space_id ?? null,
+    ]),
+    groups: uniqueText([
+      ...memories.map((memory) => memory.groupId),
+      selectedPage?.group_id ?? null,
+    ]),
+    threads: uniqueText([
+      ...memories.map((memory) => memory.threadId),
+      selectedPage?.thread_id ?? null,
+    ]),
+  };
+}
+
+function filterMemoriesBySearch(memories: MemoryItem[], query: string): MemoryItem[] {
+  if (query.trim().length === 0) {
+    return memories;
+  }
+  return memories.filter((memory) => matchesSearch(query, [
+    memory.id,
+    memory.title,
+    memory.type,
+    memory.source,
+    memory.sourceState,
+    memory.groupId,
+    memory.threadId,
+    memory.lastSeen,
+    memory.status,
+    memory.reason,
+    ...memory.flags,
+    ...memory.sourceEventIds,
+  ]));
+}
+
+function filterMaintenanceBySearch(items: MaintenanceItem[], query: string): MaintenanceItem[] {
+  if (query.trim().length === 0) {
+    return items;
+  }
+  return items.filter((item) => matchesSearch(query, [
+    item.id,
+    item.actionKind,
+    item.jobKind ?? null,
+    item.type,
+    item.title,
+    item.source,
+    item.reason,
+    item.state,
+    item.updated,
+    item.severity,
+    ...(item.sourceEventIds ?? []),
+    ...(item.memoryItemIds ?? []),
+  ]));
+}
+
+function matchesPageSearch(page: ControlPageDto, query: string) {
+  return matchesSearch(query, [
+    page.id,
+    page.title,
+    page.brief,
+    page.project_memory_space_id,
+    page.group_id,
+    page.thread_id,
+    page.scope_id,
+    page.scope_type,
+    page.updated_at,
+    ...page.source_event_ids,
+    ...page.linked_memory_item_ids,
+    ...page.open_questions,
+    ...page.next_steps,
+    ...page.topics.flatMap((topic) => [topic.title, topic.summary]),
+  ]);
+}
+
+function matchesSearch(query: string, values: Array<string | null>) {
+  const normalizedQuery = normalizeSearch(query);
+  return values.some((value) => value !== null && normalizeSearch(value).includes(normalizedQuery));
+}
+
+function normalizeSearch(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
+
+function uniqueText(values: Array<string | null>) {
+  return [...new Set(values.filter((value): value is string => value !== null && value.trim().length > 0))];
 }
 
 function ControlPlaneState({
