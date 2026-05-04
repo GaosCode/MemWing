@@ -1,5 +1,6 @@
 import { Eye, RotateCcw, ShieldCheck } from "lucide-react";
 import { Button, StatusPill } from "../../shared/components/ui";
+import type { StatusTone } from "../../shared/design-system/status";
 import { severityTone } from "../../shared/design-system/status";
 import { maintenanceStateLabel } from "../../shared/i18n/formatters";
 import { useI18n } from "../../shared/i18n";
@@ -8,7 +9,7 @@ import type { MaintenanceItem } from "../../shared/types/entities";
 
 const chips = ["All", "Failed", "Review", "Push", "Forgetting"];
 
-export type MaintenanceAction = "retry" | "approve" | "skip";
+export type MaintenanceAction = "retry" | "approve" | "skip" | "send";
 
 export function maintenanceItemKey(item: MaintenanceItem) {
   return `${item.actionKind}:${item.id}`;
@@ -23,6 +24,19 @@ export function chipLabel(dictionary: LocaleDictionary, chip: string) {
     Forgetting: dictionary.maintenance.chips.forgetting,
   };
   return chipMap[chip] ?? chip;
+}
+
+export function maintenanceStateTone(state: MaintenanceItem["state"]): StatusTone {
+  if (state === "Failed") {
+    return "red";
+  }
+  if (state === "Open" || state === "Sent") {
+    return "green";
+  }
+  if (state === "Skipped") {
+    return "gray";
+  }
+  return "orange";
 }
 
 export function filterMaintenanceItems(items: MaintenanceItem[], activeChip: string) {
@@ -154,6 +168,8 @@ export function PushCandidates({
   onSelect: (item: MaintenanceItem) => void;
   onAction: (item: MaintenanceItem, action: MaintenanceAction) => void;
 }) {
+  const { dictionary } = useI18n();
+
   return (
     <>
       <div className="section-toolbar">
@@ -161,7 +177,7 @@ export function PushCandidates({
           <h2>Push Candidates</h2>
           <p className="section-subtitle">Approvals and skips are persisted through backend push candidate endpoints.</p>
         </div>
-        <span className="muted-count">{items.length} open</span>
+        <span className="muted-count">{items.filter((item) => item.state === "Open").length} open</span>
       </div>
       <div className="push-candidate-summary">
         <section>
@@ -170,9 +186,9 @@ export function PushCandidates({
           <p>Open candidates can be approved or skipped.</p>
         </section>
         <section>
-          <span>Target</span>
-          <strong>Project Memory</strong>
-          <p>Approved pushes become backend state, then future rebuilds can consume them.</p>
+          <span>Approved</span>
+          <strong>{items.filter((item) => item.state === "Approved").length}</strong>
+          <p>Approved candidates can be sent as Feishu cards.</p>
         </section>
         <section>
           <span>Safety gate</span>
@@ -183,13 +199,17 @@ export function PushCandidates({
       <div className="action-list action-list--maintenance">
         {items.map((item) => (
           <section key={item.id} className="action-list-row action-list-row--push-candidate">
-            <StatusPill label={actions[maintenanceItemKey(item)] ?? item.type} tone="green" />
+            <StatusPill
+              label={actions[maintenanceItemKey(item)] ?? maintenanceStateLabel(dictionary, item.state)}
+              tone={maintenanceStateTone(item.state)}
+            />
             <span>{item.title}</span>
             <strong>{item.reason}</strong>
             <span>{item.source}</span>
             <button type="button" onClick={() => onSelect(item)}>inspect</button>
             <button type="button" onClick={() => onAction(item, "approve")} disabled={item.state !== "Open"}>approve push</button>
-            <button type="button" onClick={() => onAction(item, "skip")} disabled={item.state !== "Open"}>skip</button>
+            <button type="button" onClick={() => onAction(item, "send")} disabled={item.state !== "Approved"}>send card</button>
+            <button type="button" onClick={() => onAction(item, "skip")} disabled={item.state !== "Open" && item.state !== "Approved"}>skip</button>
           </section>
         ))}
         {items.length === 0 ? <p>No push candidate is currently returned by the backend.</p> : null}
@@ -230,7 +250,7 @@ export function MaintenanceTable({
           <span>{item.title}</span>
           <span>{item.source}</span>
           <span>{item.reason}</span>
-          <span><StatusPill label={actions?.[maintenanceItemKey(item)] ?? maintenanceStateLabel(dictionary, item.state)} tone={item.state === "Failed" ? "red" : item.state === "Open" ? "green" : "orange"} /></span>
+          <span><StatusPill label={actions?.[maintenanceItemKey(item)] ?? maintenanceStateLabel(dictionary, item.state)} tone={maintenanceStateTone(item.state)} /></span>
           <span>{item.updated}</span>
         </button>
       ))}

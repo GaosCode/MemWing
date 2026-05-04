@@ -103,6 +103,9 @@ export const en = {
       "Review Pending": "Review Pending",
       "Ready to forget": "Ready to forget",
       Open: "Open",
+      Approved: "Approved",
+      Sent: "Sent",
+      Skipped: "Skipped",
     },
     curveState: {
       retained: "Retained",

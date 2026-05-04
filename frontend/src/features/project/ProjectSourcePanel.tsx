@@ -1,21 +1,28 @@
-import { Database, Eye, ShieldCheck } from "lucide-react";
+import { Check, Clipboard, Database, Eye } from "lucide-react";
+import { useState } from "react";
 import { Button, StatusPill } from "../../shared/components/ui";
-import type { ControlPageDto } from "../../api/generated/controlPlane";
+import type { ControlPageDto, ControlSourceEventDetailDto } from "../../api/generated/controlPlane";
 
 export function ProjectSourcePanel({
   page,
   selectedSource,
+  sourceDetail,
+  loading,
   onSelect,
   onOpen,
 }: {
   page: ControlPageDto;
   selectedSource: string;
+  sourceDetail: ControlSourceEventDetailDto | null;
+  loading: boolean;
   onSelect: (source: string) => void;
-  onOpen: () => void;
+  onOpen: (source: string) => void;
 }) {
+  const [copyState, setCopyState] = useState("Ready");
   const sourceIds = page.source_event_ids.length > 0 ? page.source_event_ids : ["none"];
   const selected = sourceIds.includes(selectedSource) ? selectedSource : sourceIds[0];
   const linkedTopics = page.topics.filter((topic) => topic.source_event_ids.includes(selected));
+  const detail = sourceDetail?.source_event.id === selected ? sourceDetail : null;
 
   return (
     <div className="project-split-panel">
@@ -40,12 +47,32 @@ export function ProjectSourcePanel({
           <dl className="definition"><dt>Linked Topics</dt><dd>{linkedTopics.length}</dd></dl>
           <dl className="definition"><dt>Graph Raw</dt><dd>{page.graph_backend_raw_retained ? "retained" : "not retained"}</dd></dl>
         </div>
+        {detail !== null ? (
+          <div className="definition-columns">
+            <dl className="definition"><dt>Preview</dt><dd>{detail.source_event.content_preview}</dd></dl>
+            <dl className="definition"><dt>Event Time</dt><dd>{detail.source_event.event_time}</dd></dl>
+            <dl className="definition"><dt>Linked Memories</dt><dd>{detail.memory_item_ids.length}</dd></dl>
+            <dl className="definition"><dt>Audit Refs</dt><dd>{detail.audit_refs.length}</dd></dl>
+            <dl className="definition"><dt>Source URL</dt><dd>{detail.source_event.source_url ?? "none"}</dd></dl>
+            <dl className="definition"><dt>Purge State</dt><dd>{detail.source_event.purged ? detail.source_event.purge_level : "available"}</dd></dl>
+          </div>
+        ) : null}
         {linkedTopics.map((topic) => <blockquote key={topic.title}>{topic.title}: {topic.summary}</blockquote>)}
         <div className="inline-action-row">
-          <Button icon={Eye} label="Open Evidence" onClick={onOpen} disabled={selected === "none"} />
-          <Button icon={ShieldCheck} label="Mark Reviewed" onClick={onOpen} disabled={selected === "none"} />
+          <Button icon={Eye} label={loading ? "Loading Evidence" : "Open Evidence"} onClick={() => onOpen(selected)} disabled={selected === "none" || loading} />
+          <Button icon={Clipboard} label="Copy Source ID" onClick={() => void copySourceId(selected)} disabled={selected === "none"} />
         </div>
+        <div className="notice-row"><Check size={15} />{copyState}</div>
       </article>
     </div>
   );
+
+  async function copySourceId(sourceId: string) {
+    try {
+      await navigator.clipboard.writeText(sourceId);
+      setCopyState(`Copied ${sourceId}`);
+    } catch {
+      setCopyState(sourceId);
+    }
+  }
 }

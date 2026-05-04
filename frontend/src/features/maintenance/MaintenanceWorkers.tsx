@@ -6,11 +6,13 @@ import { jobHistoryRows, workerHealthRows } from "./maintenanceData";
 export function WorkerHealth({
   compact,
   items,
-  onAction,
+  onInspect,
+  onRestart,
 }: {
   compact?: boolean;
   items: MaintenanceItem[];
-  onAction?: (key: string, message: string) => void;
+  onInspect?: (item: MaintenanceItem) => void;
+  onRestart?: (item: MaintenanceItem) => void;
 }) {
   const backendJobs = items.filter((item) => item.actionKind === "job");
   const failedCount = backendJobs.filter((item) => item.state === "Failed").length;
@@ -60,8 +62,8 @@ export function WorkerHealth({
             {!compact ? (
               <>
                 <span>{row.source}</span>
-                <button type="button" onClick={() => onAction?.(row.id, `${row.title} logs opened`)}>logs</button>
-                <button type="button" onClick={() => onAction?.(row.id, `${row.title} restart requested`)} disabled={!row.retryable}>restart</button>
+                <button type="button" onClick={() => onInspect?.(row)} disabled={!onInspect}>logs</button>
+                <button type="button" onClick={() => onRestart?.(row)} disabled={!row.retryable || !onRestart}>restart</button>
               </>
             ) : null}
           </div>

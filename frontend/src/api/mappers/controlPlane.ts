@@ -26,6 +26,7 @@ function jobToMaintenanceItem(job: ControlJobDto): MaintenanceItem {
 }
 
 function pushCandidateToMaintenanceItem(candidate: ControlPushCandidateDto): MaintenanceItem {
+  const state = pushCandidateState(candidate.status);
   return {
     id: candidate.id,
     actionKind: "push_candidate",
@@ -35,8 +36,24 @@ function pushCandidateToMaintenanceItem(candidate: ControlPushCandidateDto): Mai
     title: candidate.title,
     source: candidate.type,
     reason: candidate.trigger_reason,
-    state: candidate.status === "pending" ? "Open" : "Review Pending",
+    state,
     updated: candidate.created_at,
-    severity: candidate.status === "pending" ? "healthy" : "warning",
+    severity: state === "Open" || state === "Sent" ? "healthy" : "warning",
   };
+}
+
+function pushCandidateState(status: string): MaintenanceItem["state"] {
+  if (status === "pending") {
+    return "Open";
+  }
+  if (status === "approved") {
+    return "Approved";
+  }
+  if (status === "sent") {
+    return "Sent";
+  }
+  if (status === "skipped") {
+    return "Skipped";
+  }
+  return "Review Pending";
 }

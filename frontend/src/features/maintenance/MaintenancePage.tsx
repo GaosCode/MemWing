@@ -24,6 +24,7 @@ export function MaintenancePage({
   selected,
   onSelect,
   onAction,
+  onRefreshData,
   onMemoryLifecycleAction,
 }: {
   items: MaintenanceItem[];
@@ -31,6 +32,7 @@ export function MaintenancePage({
   selected: MaintenanceItem;
   onSelect: (item: MaintenanceItem) => void;
   onAction: (item: MaintenanceItem, action: MaintenanceAction) => Promise<void>;
+  onRefreshData: () => Promise<void>;
   onMemoryLifecycleAction: (memory: MemoryItem, action: MemoryLifecycleAction, reason: string) => Promise<void>;
 }) {
   const { dictionary } = useI18n();
@@ -50,13 +52,32 @@ export function MaintenancePage({
     setNotice(message);
   }
 
+  function clearAction(key: string, message: string) {
+    setTaskActions((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setNotice(message);
+  }
+
   function runBackendAction(item: MaintenanceItem, action: MaintenanceAction) {
     const key = maintenanceItemKey(item);
     setUpdatingKey(key);
     recordAction(key, "Sending to backend");
     void onAction(item, action)
-      .then(() => recordAction(key, "Backend action completed"))
+      .then(() => clearAction(key, "Backend action completed"))
       .catch((error) => recordAction(key, error instanceof Error ? error.message : "MemWing API request failed"))
+      .finally(() => setUpdatingKey(null));
+  }
+
+  function refreshDecayScores() {
+    const key = "forgetting-refresh";
+    setUpdatingKey(key);
+    setNotice("Refreshing decay scores from backend");
+    void onRefreshData()
+      .then(() => setNotice("Decay scores refreshed from backend"))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing API request failed"))
       .finally(() => setUpdatingKey(null));
   }
 
@@ -72,7 +93,10 @@ export function MaintenancePage({
               setNotice(queuePaused ? dictionary.maintenance.queueResumed : dictionary.maintenance.queuePaused);
             }} />
             <Button icon={RotateCcw} label={dictionary.actions.retryFailed} onClick={() => failedItems.forEach((item) => runBackendAction(item, "retry"))} disabled={failedItems.length === 0 || updatingKey !== null} />
-            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Maintenance command menu opened")} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => {
+              setActiveTab("Job History");
+              setNotice("Opened backend job history");
+            }} />
           </>
         }
       />
@@ -103,13 +127,22 @@ export function MaintenancePage({
           items={items}
           memories={memories}
           onSelect={onSelect}
-          onRefresh={() => setNotice("Decay scores refreshed from loaded memory list")}
+          onRefresh={refreshDecayScores}
           onDecision={recordAction}
           onMemoryLifecycleAction={onMemoryLifecycleAction}
           decisions={taskActions}
         />
       ) : null}
-      {activeTab === "Worker Health" ? <WorkerHealth items={items} onAction={recordAction} /> : null}
+      {activeTab === "Worker Health" ? (
+        <WorkerHealth
+          items={items}
+          onInspect={(item) => {
+            onSelect(item);
+            setNotice(`Opened ${item.title} in inspector`);
+          }}
+          onRestart={(item) => runBackendAction(item, "retry")}
+        />
+      ) : null}
       {activeTab === "Job History" ? <JobHistory items={items} /> : null}
     </>
   );

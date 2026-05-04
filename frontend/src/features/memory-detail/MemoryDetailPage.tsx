@@ -39,6 +39,7 @@ export function MemoryDetailPage({
   const [draftTitle, setDraftTitle] = useState(memory.title);
   const [draftSummary, setDraftSummary] = useState(memory.reason);
   const [draftContent, setDraftContent] = useState(detail?.content ?? memory.reason);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
     setDraftTitle(memory.title);
@@ -74,7 +75,10 @@ export function MemoryDetailPage({
             }} />
             <Button icon={Pin} label={pinned ? dictionary.actions.pinned : dictionary.actions.pin} onClick={togglePin} />
             <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Sources")} />
-            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => markAction("Memory command menu opened")} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => {
+              setMoreOpen((value) => !value);
+              markAction(moreOpen ? "Memory command menu closed" : "Memory command menu opened");
+            }} />
           </div>
           <div className="danger-row">
             <Button danger icon={Archive} label={dictionary.actions.archive} onClick={() => runLifecycle("archive", "Archive requested; audit remains visible")} />
@@ -82,6 +86,14 @@ export function MemoryDetailPage({
           </div>
         </div>
       </header>
+      {moreOpen ? (
+        <div className="detail-command-menu" role="menu" aria-label="Memory commands">
+          <Button icon={Eye} label="Open Graph" onClick={() => setActiveTab("Graph")} />
+          <Button icon={Eye} label="Open Audit" onClick={() => setActiveTab("Audit")} />
+          <Button icon={Eye} label="Open Versions" onClick={() => setActiveTab("Versions")} />
+          <Button icon={Check} label="Request Review" onClick={() => runLifecycle("review", "Memory marked for review")} />
+        </div>
+      ) : null}
 
       <div className="detail-meta-strip">
         <Definition label="Lifecycle status"><StatusBadge status={memory.status} /></Definition>

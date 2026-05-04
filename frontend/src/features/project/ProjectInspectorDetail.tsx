@@ -1,7 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import type { PageEditInput } from "../../shared/api/controlPlaneClient";
 import type { MemoryItem } from "../../shared/types/entities";
-import type { ControlPageDetailDto, ControlPageDto } from "../../api/generated/controlPlane";
+import type { ControlPageDetailDto, ControlPageDto, ControlSourceEventDetailDto } from "../../api/generated/controlPlane";
 import { ProjectPage } from "./ProjectPage";
 
 export function ProjectInspectorDetail({
@@ -12,6 +12,8 @@ export function ProjectInspectorDetail({
   onRebuildPage,
   onEditPage,
   onRestorePageVersion,
+  sourceEventDetails,
+  onLoadSourceEvent,
   onBack,
 }: {
   page: ControlPageDto;
@@ -21,6 +23,8 @@ export function ProjectInspectorDetail({
   onRebuildPage: (page: ControlPageDto) => Promise<void>;
   onEditPage: (page: ControlPageDto, input: PageEditInput, reason: string) => Promise<void>;
   onRestorePageVersion: (page: ControlPageDto, version: number) => Promise<void>;
+  sourceEventDetails: Record<string, ControlSourceEventDetailDto>;
+  onLoadSourceEvent: (sourceEventId: string) => Promise<ControlSourceEventDetailDto>;
   onBack: () => void;
 }) {
   return (
@@ -40,6 +44,8 @@ export function ProjectInspectorDetail({
         onRebuildPage={onRebuildPage}
         onEditPage={onEditPage}
         onRestorePageVersion={onRestorePageVersion}
+        sourceEventDetails={sourceEventDetails}
+        onLoadSourceEvent={onLoadSourceEvent}
       />
     </section>
   );

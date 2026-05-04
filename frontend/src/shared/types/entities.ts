@@ -50,7 +50,7 @@ export type MaintenanceItem = {
   title: string;
   source: string;
   reason: string;
-  state: "Failed" | "Review Pending" | "Ready to forget" | "Open";
+  state: "Failed" | "Review Pending" | "Ready to forget" | "Open" | "Approved" | "Sent" | "Skipped";
   updated: string;
   severity: Severity;
 };

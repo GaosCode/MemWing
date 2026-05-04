@@ -109,6 +109,8 @@ export function App() {
           onRebuildPage={control.runPageRebuild}
           onEditPage={control.runPageEdit}
           onRestorePageVersion={control.runPageRestore}
+          sourceEventDetails={control.sourceEventDetails}
+          onLoadSourceEvent={control.loadSourceEventDetail}
           onBack={() => setDetailMode(null)}
         />
       );
@@ -161,6 +163,8 @@ export function App() {
               onRebuildPage={control.runPageRebuild}
               onEditPage={control.runPageEdit}
               onRestorePageVersion={control.runPageRestore}
+              sourceEventDetails={control.sourceEventDetails}
+              onLoadSourceEvent={control.loadSourceEventDetail}
             />
           }
           inspector={<ProjectInspector page={control.selectedPage} detail={control.selectedPageDetail} onOpenDetail={() => setDetailMode("project")} {...inspectorControls} />}
@@ -182,6 +186,7 @@ export function App() {
               selected={control.selectedMaintenance}
               onSelect={selectMaintenance}
               onAction={control.runMaintenanceAction}
+              onRefreshData={() => control.refreshControlPlane({ showLoading: false })}
               onMemoryLifecycleAction={control.runMemoryLifecycleAction}
             />
           }
@@ -194,7 +199,12 @@ export function App() {
   }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth]);
 
   return (
-    <AppShell activeNav={activeNav} shellMode={detailMode ? "detail" : "split"} onSelectNav={openNav}>
+    <AppShell
+      activeNav={activeNav}
+      shellMode={detailMode ? "detail" : "split"}
+      onSelectNav={openNav}
+      onRefresh={control.refreshControlPlane}
+    >
       {content}
     </AppShell>
   );

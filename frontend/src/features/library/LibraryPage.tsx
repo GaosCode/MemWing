@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Clock3, Columns3, ExternalLink, List, ListFilter, Search } from "lucide-react";
 import { PageHeader, SelectMenu } from "../../shared/components/ui";
 import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
+import { exportLibraryMemoriesCsv, filterLibraryMemories } from "./libraryControls";
 import { MemoryBoardView, MemoryListView, MemoryTimelineView, type Density, type LibraryView } from "./LibraryViews";
 
 const primaryFilters = ["project", "group", "thread", "type", "lifecycle"] as const;
@@ -26,6 +27,7 @@ export function LibraryPage({
   const [savedView, setSavedView] = useState("Default");
   const [notice, setNotice] = useState(dictionary.library.ready);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [searchQuery, setSearchQuery] = useState("");
 
   function filterLabel(key: FilterKey) {
     return dictionary.library.filterLabels[key];
@@ -77,11 +79,20 @@ export function LibraryPage({
 
   function clearFilters() {
     setFilters({});
+    setSearchQuery("");
     setNotice("Filters cleared");
   }
 
-  const visibleMemories = [...memories].sort((a, b) =>
-    sortDescending ? b.lastSeen.localeCompare(a.lastSeen) : a.lastSeen.localeCompare(b.lastSeen),
+  const visibleMemories = useMemo(
+    () => filterLibraryMemories({
+      memories,
+      filters,
+      savedView,
+      searchQuery,
+      sortDescending,
+      dictionary,
+    }),
+    [dictionary, filters, memories, savedView, searchQuery, sortDescending],
   );
 
   return (
@@ -125,7 +136,14 @@ export function LibraryPage({
             ))}
             <label className="filter-search">
               <Search size={17} />
-              <input placeholder={dictionary.app.shell.globalSearchPlaceholder} onChange={(event) => setNotice(`Search scoped to "${event.target.value}"`)} />
+              <input
+                value={searchQuery}
+                placeholder={dictionary.app.shell.globalSearchPlaceholder}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setNotice(`Search scoped to "${event.target.value}"`);
+                }}
+              />
               <kbd>{dictionary.common.searchShortcut}</kbd>
             </label>
             <button className="secondary-button filter-action" type="button" onClick={clearFilters}>{dictionary.actions.clearAll}</button>
@@ -136,7 +154,7 @@ export function LibraryPage({
       <div className="table-toolbar">
         <div>
           <h2>{dictionary.library.allMemories}</h2>
-          <span>{dictionary.library.results}</span>
+          <span>{visibleMemories.length} / {memories.length} records</span>
         </div>
         <div className="toolbar-actions">
           <SelectMenu
@@ -159,7 +177,7 @@ export function LibraryPage({
               setNotice(`Density set to ${next}`);
             }}
           />
-          <button type="button" onClick={() => setNotice("Export queued as CSV")}>
+          <button type="button" onClick={() => exportMemories(visibleMemories)}>
             <ExternalLink size={16} />
             {dictionary.actions.export}
           </button>
@@ -170,7 +188,7 @@ export function LibraryPage({
             options={["Default", "Review Due", "Pinned", "Fading"]}
             onChange={(next) => {
               setSavedView(next);
-              setNotice(`Saved view switched to ${next}`);
+              setNotice(`Saved view applied: ${next}`);
             }}
           />
         </div>
@@ -189,6 +207,11 @@ export function LibraryPage({
       ) : null}
     </>
   );
+
+  function exportMemories(records: MemoryItem[]) {
+    exportLibraryMemoriesCsv(records);
+    setNotice(`Exported ${records.length} records as CSV`);
+  }
 }
 
 function FilterControl({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {

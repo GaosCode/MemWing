@@ -25,6 +25,9 @@ import type {
   ControlPageVersionDto,
   ControlPushCandidateDto,
   ControlSettingsDto,
+  ControlSourceEventDetailDto,
+  ControlSourceEventDto,
+  ControlSourceEventListResponseDto,
   MemoryDetailDto,
 } from "./controlPlaneTypes";
 
@@ -45,6 +48,9 @@ export type {
   ControlPushCandidateDto,
   ControlScopeParams,
   ControlSettingsDto,
+  ControlSourceEventDetailDto,
+  ControlSourceEventDto,
+  ControlSourceEventListResponseDto,
   MemoryDetailDto,
   MemoryLifecycleAction,
 } from "./controlPlaneTypes";
@@ -115,6 +121,31 @@ export function parseControlPageDetail(input: unknown): ControlPageDetailDto {
 
 export function parseControlPageDetailMutation(input: unknown): ControlMutationResponseDto<ControlPageDetailDto> {
   return parseMutationResponse(input, parseControlPageDetail);
+}
+
+export function parseControlSourceEventList(input: unknown): ControlSourceEventListResponseDto {
+  const object = requireRecord(input, "control source event list");
+  requireExactFields(object, ["items", "next_cursor", "trace_id"], "control source event list");
+  const items = object.items;
+  if (!Array.isArray(items)) {
+    throw new Error("source event items must be an array");
+  }
+  return {
+    items: items.map(parseControlSourceEvent),
+    next_cursor: requireOptionalText(object.next_cursor, "next_cursor"),
+    trace_id: requireText(object.trace_id, "trace_id"),
+  };
+}
+
+export function parseControlSourceEventDetail(input: unknown): ControlSourceEventDetailDto {
+  const object = requireRecord(input, "control source event detail");
+  requireExactFields(object, ["source_event", "memory_item_ids", "audit_refs", "trace_id"], "control source event detail");
+  return {
+    source_event: parseControlSourceEvent(object.source_event),
+    memory_item_ids: requireTextArray(object.memory_item_ids, "memory_item_ids"),
+    audit_refs: requireTextArray(object.audit_refs, "audit_refs"),
+    trace_id: requireText(object.trace_id, "trace_id"),
+  };
 }
 
 export function parseControlMaintenance(input: unknown): ControlMaintenanceDto {
@@ -349,6 +380,42 @@ function parseControlJob(input: unknown): ControlJobDto {
     last_error: requireOptionalText(object.last_error, "last_error"),
     dead_letter_reason: requireOptionalText(object.dead_letter_reason, "dead_letter_reason"),
     retryable: requireBoolean(object.retryable, "retryable"),
+  };
+}
+
+function parseControlSourceEvent(input: unknown): ControlSourceEventDto {
+  const object = requireRecord(input, "control source event");
+  requireExactFields(
+    object,
+    [
+      "id",
+      "project_memory_space_id",
+      "group_id",
+      "thread_id",
+      "source_type",
+      "content_preview",
+      "source_url",
+      "purged",
+      "purge_level",
+      "graph_backend_raw_retained",
+      "event_time",
+      "created_at",
+    ],
+    "control source event",
+  );
+  return {
+    id: requireText(object.id, "id"),
+    project_memory_space_id: requireText(object.project_memory_space_id, "project_memory_space_id"),
+    group_id: requireOptionalText(object.group_id, "group_id"),
+    thread_id: requireOptionalText(object.thread_id, "thread_id"),
+    source_type: requireText(object.source_type, "source_type"),
+    content_preview: requireText(object.content_preview, "content_preview"),
+    source_url: requireOptionalText(object.source_url, "source_url"),
+    purged: requireBoolean(object.purged, "purged"),
+    purge_level: requireText(object.purge_level, "purge_level"),
+    graph_backend_raw_retained: requireBoolean(object.graph_backend_raw_retained, "graph_backend_raw_retained"),
+    event_time: requireText(object.event_time, "event_time"),
+    created_at: requireText(object.created_at, "created_at"),
   };
 }
 

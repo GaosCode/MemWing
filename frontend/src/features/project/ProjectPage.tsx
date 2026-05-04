@@ -4,7 +4,7 @@ import { Button, DetailTabs, IconButton, PageHeader, StatusPill } from "../../sh
 import { useI18n } from "../../shared/i18n";
 import type { PageEditInput } from "../../shared/api/controlPlaneClient";
 import type { MemoryItem } from "../../shared/types/entities";
-import type { ControlPageDetailDto, ControlPageDto } from "../../api/generated/controlPlane";
+import type { ControlPageDetailDto, ControlPageDto, ControlSourceEventDetailDto } from "../../api/generated/controlPlane";
 import { ProjectDocument } from "./ProjectDocument";
 import {
   ProjectAuditPanel,
@@ -24,6 +24,8 @@ export function ProjectPage({
   onRebuildPage,
   onEditPage,
   onRestorePageVersion,
+  sourceEventDetails,
+  onLoadSourceEvent,
 }: {
   page: ControlPageDto;
   detail: ControlPageDetailDto | null;
@@ -32,6 +34,8 @@ export function ProjectPage({
   onRebuildPage: (page: ControlPageDto) => Promise<void>;
   onEditPage: (page: ControlPageDto, input: PageEditInput, reason: string) => Promise<void>;
   onRestorePageVersion: (page: ControlPageDto, version: number) => Promise<void>;
+  sourceEventDetails: Record<string, ControlSourceEventDetailDto>;
+  onLoadSourceEvent: (sourceEventId: string) => Promise<ControlSourceEventDetailDto>;
 }) {
   const { dictionary } = useI18n();
   const [activeTab, setActiveTab] = useState("Document");
@@ -42,6 +46,7 @@ export function ProjectPage({
   const [auditFilter, setAuditFilter] = useState("All");
   const [notice, setNotice] = useState("Page Memory loaded from backend");
   const [updating, setUpdating] = useState(false);
+  const [sourceLoading, setSourceLoading] = useState(false);
 
   useEffect(() => {
     setDraftBrief(page.brief);
@@ -93,6 +98,15 @@ export function ProjectPage({
     setActiveTab("Versions");
   }
 
+  function openSourceEvent(sourceEventId: string) {
+    setSourceLoading(true);
+    setNotice(`Loading source event ${sourceEventId}`);
+    void onLoadSourceEvent(sourceEventId)
+      .then((sourceDetail) => setNotice(`Loaded source ${sourceDetail.source_event.id} from backend`))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing source request failed"))
+      .finally(() => setSourceLoading(false));
+  }
+
   return (
     <>
       <PageHeader
@@ -103,7 +117,10 @@ export function ProjectPage({
             <span className="header-meta">Last rebuilt: {page.updated_at}</span>
             <StatusPill label={page.needs_rebuild ? "needs rebuild" : `v${page.version} current`} tone={page.needs_rebuild ? "orange" : "green"} />
             <Button icon={RefreshCcw} label={updating ? "Running" : "Run Rebuild"} onClick={runRebuild} disabled={updating} />
-            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice(`trace ${detail?.trace_id ?? "not loaded"}`)} />
+            <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => {
+              setActiveTab("Audit");
+              setNotice(`Trace ${detail?.trace_id ?? "not loaded"}`);
+            }} />
           </>
         }
       />
@@ -153,7 +170,16 @@ export function ProjectPage({
         />
       ) : null}
       {activeTab === "Rebuild Preview" ? <ProjectReviewPanel page={page} updating={updating} onRebuild={runRebuild} onOpenSources={() => setActiveTab("Sources")} /> : null}
-      {activeTab === "Sources" ? <ProjectSourcePanel page={page} selectedSource={selectedSource} onSelect={setSelectedSource} onOpen={() => setNotice("Evidence source selected from backend source_event_ids")} /> : null}
+      {activeTab === "Sources" ? (
+        <ProjectSourcePanel
+          page={page}
+          selectedSource={selectedSource}
+          sourceDetail={sourceEventDetails[selectedSource] ?? null}
+          loading={sourceLoading}
+          onSelect={setSelectedSource}
+          onOpen={openSourceEvent}
+        />
+      ) : null}
       {activeTab === "Versions" ? (
         <ProjectVersionsPanel
           page={page}

@@ -89,6 +89,34 @@ export type ControlPageDetailDto = {
   trace_id: string;
 };
 
+export type ControlSourceEventDto = {
+  id: string;
+  project_memory_space_id: string;
+  group_id: string | null;
+  thread_id: string | null;
+  source_type: string;
+  content_preview: string;
+  source_url: string | null;
+  purged: boolean;
+  purge_level: string;
+  graph_backend_raw_retained: boolean;
+  event_time: string;
+  created_at: string;
+};
+
+export type ControlSourceEventListResponseDto = {
+  items: ControlSourceEventDto[];
+  next_cursor: string | null;
+  trace_id: string;
+};
+
+export type ControlSourceEventDetailDto = {
+  source_event: ControlSourceEventDto;
+  memory_item_ids: string[];
+  audit_refs: string[];
+  trace_id: string;
+};
+
 export type ControlJobDto = {
   id: string;
   kind: string;

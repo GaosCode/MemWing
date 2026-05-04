@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Eye, FileText, RotateCcw, ShieldCheck, X } from "lucide-react";
+import { Eye, FileText, RotateCcw, Send, ShieldCheck, X } from "lucide-react";
 import { Button, Definition, InspectorHeader, InspectorSection, StatusPill } from "../../shared/components/ui";
 import { severityTone } from "../../shared/design-system/status";
 import { maintenanceStateLabel, severityLabel } from "../../shared/i18n/formatters";
 import { useI18n } from "../../shared/i18n";
 import type { MaintenanceItem } from "../../shared/types/entities";
 import { linkedReferences } from "./maintenanceData";
-import type { MaintenanceAction } from "./MaintenanceQueues";
+import { maintenanceStateTone, type MaintenanceAction } from "./MaintenanceQueues";
 
 export function MaintenanceInspector({
   item,
@@ -22,12 +22,15 @@ export function MaintenanceInspector({
   const { dictionary } = useI18n();
   const [notice, setNotice] = useState(dictionary.maintenance.reviewBeforeRetry);
   const [pinned, setPinned] = useState(false);
-  const statusTone = item.state === "Failed" ? "red" : item.state === "Open" ? "green" : "orange";
+  const primaryAction = primaryMaintenanceAction(item);
+  const primaryDisabled = item.actionKind === "job" ? !item.retryable : primaryAction === null;
 
   function runPrimaryAction() {
-    const action: MaintenanceAction = item.actionKind === "push_candidate" ? "approve" : "retry";
+    if (primaryAction === null) {
+      return;
+    }
     setNotice("Sending maintenance action to backend");
-    void onAction(item, action)
+    void onAction(item, primaryAction)
       .then(() => setNotice("Backend maintenance action completed"))
       .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing API request failed"));
   }
@@ -41,7 +44,7 @@ export function MaintenanceInspector({
       <h2>{item.title}</h2>
       <div className="inspector-notice">{notice}</div>
       <div className="definition-grid definition-grid--maintenance">
-        <Definition label={dictionary.maintenance.metrics.status}><StatusPill label={maintenanceStateLabel(dictionary, item.state)} tone={statusTone} /></Definition>
+        <Definition label={dictionary.maintenance.metrics.status}><StatusPill label={maintenanceStateLabel(dictionary, item.state)} tone={maintenanceStateTone(item.state)} /></Definition>
         <Definition label={dictionary.maintenance.metrics.severity}><StatusPill label={severityLabel(dictionary, item.severity)} tone={severityTone[item.severity]} /></Definition>
         <Definition label={dictionary.maintenance.metrics.retryCount}>{item.state === "Failed" ? "2" : "0"}</Definition>
         <Definition label={dictionary.maintenance.metrics.affectedMemories}>{item.state === "Failed" ? "3" : "1"}</Definition>
@@ -60,11 +63,37 @@ export function MaintenanceInspector({
         </div>
       </InspectorSection>
       <div className="action-grid">
-        <Button primary icon={RotateCcw} label={item.actionKind === "push_candidate" ? "Approve Push" : item.state === "Failed" ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={runPrimaryAction} disabled={item.actionKind === "job" && !item.retryable} />
+        <Button primary icon={primaryAction === "send" ? Send : RotateCcw} label={primaryActionLabel(item, dictionary)} onClick={runPrimaryAction} disabled={primaryDisabled} />
         <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={onOpenDetail} />
         <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setNotice(dictionary.maintenance.sourcePreviewOpened)} />
         <Button icon={X} label={dictionary.actions.dismiss} onClick={onClose} />
       </div>
     </div>
   );
+}
+
+function primaryMaintenanceAction(item: MaintenanceItem): MaintenanceAction | null {
+  if (item.actionKind === "push_candidate") {
+    if (item.state === "Open") {
+      return "approve";
+    }
+    if (item.state === "Approved") {
+      return "send";
+    }
+    return null;
+  }
+  return "retry";
+}
+
+function primaryActionLabel(item: MaintenanceItem, dictionary: ReturnType<typeof useI18n>["dictionary"]) {
+  if (item.actionKind === "push_candidate") {
+    if (item.state === "Approved") {
+      return "Send Card";
+    }
+    if (item.state === "Open") {
+      return "Approve Push";
+    }
+    return "No Action";
+  }
+  return item.state === "Failed" ? dictionary.actions.retryJob : dictionary.actions.rerunCheck;
 }

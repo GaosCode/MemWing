@@ -11,12 +11,14 @@ import {
   getControlMemory,
   getControlPage,
   getControlSettings,
+  getControlSourceEvent,
   listControlMemories,
   listControlPages,
   mutateMemoryLifecycle,
   rebuildControlPage,
   restoreControlPageVersion,
   retryControlJob,
+  sendFeishuPushCandidate,
   skipPushCandidate,
 } from "../shared/api/controlPlaneClient";
 import type {
@@ -24,17 +26,22 @@ import type {
   ControlPageDetailDto,
   ControlPageDto,
   ControlSettingsDto,
+  ControlSourceEventDetailDto,
   MemoryDetailDto,
   MemoryLifecycleAction,
 } from "../api/generated/controlPlane";
 import type { MaintenanceItem, MemoryItem } from "../shared/types/entities";
 import { controlScope } from "./controlScope";
 
-export type MaintenanceBackendAction = "retry" | "approve" | "skip";
+export type MaintenanceBackendAction = "retry" | "approve" | "skip" | "send";
 
 export function maintenanceKey(item: MaintenanceItem) {
   return `${item.actionKind}:${item.id}`;
 }
+
+type RefreshOptions = {
+  showLoading?: boolean;
+};
 
 export function useControlPlaneData() {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -43,6 +50,7 @@ export function useControlPlaneData() {
   const [pages, setPages] = useState<ControlPageDto[]>([]);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [selectedPageDetail, setSelectedPageDetail] = useState<ControlPageDetailDto | null>(null);
+  const [sourceEventDetails, setSourceEventDetails] = useState<Record<string, ControlSourceEventDetailDto>>({});
   const [settings, setSettings] = useState<ControlSettingsDto | null>(null);
   const [integrations, setIntegrations] = useState<ControlIntegrationsResponseDto | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
@@ -77,6 +85,7 @@ export function useControlPlaneData() {
     selectedMemory,
     selectedPage,
     selectedPageDetail,
+    sourceEventDetails,
     settings,
     integrations,
     loading,
@@ -91,10 +100,14 @@ export function useControlPlaneData() {
     runPageEdit,
     runPageRestore,
     runMaintenanceAction,
+    loadSourceEventDetail,
   };
 
-  async function refreshControlPlane() {
-    setLoading(true);
+  async function refreshControlPlane(options: RefreshOptions = {}) {
+    const showLoading = options.showLoading ?? true;
+    if (showLoading) {
+      setLoading(true);
+    }
     setLoadError(null);
     try {
       const [memoryList, maintenance, pageList, nextSettings, nextIntegrations] = await Promise.all([
@@ -120,7 +133,9 @@ export function useControlPlaneData() {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "MemWing API request failed");
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }
 
@@ -184,6 +199,11 @@ export function useControlPlaneData() {
       await refreshMaintenance();
       return;
     }
+    if (item.actionKind === "push_candidate" && action === "send") {
+      await sendFeishuPushCandidate(controlScope, item.id, "frontend send approved push candidate");
+      await refreshMaintenance();
+      return;
+    }
     throw new Error("This maintenance action is not supported by the backend contract.");
   }
 
@@ -215,5 +235,14 @@ export function useControlPlaneData() {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "MemWing memory detail request failed");
     }
+  }
+
+  async function loadSourceEventDetail(sourceEventId: string) {
+    if (sourceEventDetails[sourceEventId] !== undefined) {
+      return sourceEventDetails[sourceEventId];
+    }
+    const detail = await getControlSourceEvent(controlScope, sourceEventId);
+    setSourceEventDetails((current) => ({ ...current, [sourceEventId]: detail }));
+    return detail;
   }
 }

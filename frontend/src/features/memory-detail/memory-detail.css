@@ -26,3 +26,10 @@
   min-height: 96px;
   resize: vertical;
 }
+
+.detail-command-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -8px 0 16px;
+}

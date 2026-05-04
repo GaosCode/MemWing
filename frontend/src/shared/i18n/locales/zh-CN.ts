@@ -101,6 +101,9 @@ export const zhCN = {
       "Review Pending": "待审阅",
       "Ready to forget": "可遗忘",
       Open: "开放",
+      Approved: "已批准",
+      Sent: "已发送",
+      Skipped: "已跳过",
     },
     curveState: {
       retained: "保留",

@@ -31,18 +31,20 @@ export function AppShell({
   shellMode,
   children,
   onSelectNav,
+  onRefresh,
 }: {
   activeNav: NavKey;
   shellMode: "split" | "detail";
   children: React.ReactNode;
   onSelectNav: (key: NavKey) => void;
+  onRefresh: () => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const { dictionary } = useI18n();
   return (
     <div className={`app-shell app-shell--${shellMode} ${collapsed ? "app-shell--nav-collapsed" : ""}`}>
       <Sidebar active={activeNav} collapsed={collapsed} onToggleCollapse={() => setCollapsed((value) => !value)} onSelect={onSelectNav} />
-      <Topbar />
+      <Topbar onRefresh={onRefresh} />
       <main className="workspace" aria-label={dictionary.app.shell.workspaceAria}>
         {children}
       </main>
@@ -92,17 +94,28 @@ function Sidebar({
   );
 }
 
-function Topbar() {
+function Topbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const { locale, dictionary, setLocale } = useI18n();
   const [workspaceIndex, setWorkspaceIndex] = useState(0);
   const [groupIndex, setGroupIndex] = useState(0);
   const [threadIndex, setThreadIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [syncedNow, setSyncedNow] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const languageValue = locale === "zh-CN" ? dictionary.app.shell.languageChinese : dictionary.app.shell.languageEnglish;
 
   function changeLocale(nextLabel: string) {
     setLocale(nextLabel === dictionary.app.shell.languageEnglish ? "en" : "zh-CN");
+  }
+
+  async function refreshFromBackend() {
+    setSyncing(true);
+    try {
+      await onRefresh();
+      setSyncedNow(true);
+    } finally {
+      setSyncing(false);
+    }
   }
 
   return (
@@ -139,10 +152,10 @@ function Topbar() {
         {search ? <span className="search-result-hint">{dictionary.app.shell.localFilterPrefix}{search}</span> : null}
       </label>
 
-      <button className="sync-user" type="button" onClick={() => setSyncedNow(true)}>
+      <button className="sync-user" type="button" onClick={() => void refreshFromBackend()} disabled={syncing}>
         <RefreshCcw size={20} />
         <span className="status-dot status-dot--green" aria-hidden="true" />
-        <span className="sync-text">{syncedNow ? dictionary.app.shell.syncedNow : dictionary.app.shell.syncedRecently}</span>
+        <span className="sync-text">{syncing ? "Syncing" : syncedNow ? dictionary.app.shell.syncedNow : dictionary.app.shell.syncedRecently}</span>
         <span className="avatar" aria-hidden="true">
           <User size={16} />
         </span>

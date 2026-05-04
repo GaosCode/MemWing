@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { ArrowLeft, Check, CircleAlert, Database, Eye, ExternalLink, FileText, Link2, MoreHorizontal, RotateCcw, ShieldCheck, UserCheck, Wrench } from "lucide-react";
+import { ArrowLeft, Check, CircleAlert, Database, Eye, ExternalLink, FileText, Link2, MoreHorizontal, RotateCcw, Send, ShieldCheck, UserCheck, Wrench } from "lucide-react";
 import { Button, Definition, DetailTabs, DocSection, IconButton, InspectorSection, Metric, StatusBadge, StatusPill, Timeline } from "../../shared/components/ui";
 import { severityTone } from "../../shared/design-system/status";
 import { maintenanceStateLabel, memoryTypeLabel, severityLabel } from "../../shared/i18n/formatters";
 import { useI18n } from "../../shared/i18n";
 import type { MaintenanceItem, MemoryItem } from "../../shared/types/entities";
 import { auditTrailRows, linkedReferences, retryHistoryRows } from "./maintenanceData";
-import type { MaintenanceAction } from "./MaintenanceQueues";
+import { maintenanceStateTone, type MaintenanceAction } from "./MaintenanceQueues";
 
 export function MaintenanceDetailPage({
   item,
@@ -25,6 +25,9 @@ export function MaintenanceDetailPage({
   const [retryState, setRetryState] = useState(item.state);
   const tabs = ["Overview", "Failure Trace", "Linked Evidence", "Affected Memories", "Audit", "Retries", "Logs"];
   const isFailedJob = item.state === "Failed";
+  const actionItem = { ...item, state: retryState };
+  const primaryAction = primaryMaintenanceAction(actionItem);
+  const primaryDisabled = item.actionKind === "job" ? !item.retryable : primaryAction === null;
   const severityMetricTone = severityTone[item.severity] === "gray" ? undefined : severityTone[item.severity] as "green" | "orange" | "red";
 
   return (
@@ -36,16 +39,18 @@ export function MaintenanceDetailPage({
           <p>{item.type} · {item.source} · 2026-04-27 {item.updated}</p>
         </div>
         <div className="inline-action-row">
-          <Button icon={RotateCcw} label={item.actionKind === "push_candidate" ? "Approve Push" : isFailedJob ? dictionary.actions.retryJob : dictionary.actions.rerunCheck} onClick={() => {
+          <Button icon={primaryAction === "send" ? Send : RotateCcw} label={primaryActionLabel(actionItem, dictionary)} onClick={() => {
+            if (primaryAction === null) {
+              return;
+            }
             setNotice("Sending maintenance action to backend");
-            const action: MaintenanceAction = item.actionKind === "push_candidate" ? "approve" : "retry";
-            void onAction(item, action)
+            void onAction(item, primaryAction)
               .then(() => {
-                setRetryState(isFailedJob ? "Review Pending" : item.state);
+                setRetryState(nextStateForAction(primaryAction, isFailedJob));
                 setNotice("Backend maintenance action completed");
               })
               .catch((error) => setNotice(error instanceof Error ? error.message : "MemWing API request failed"));
-          }} disabled={item.actionKind === "job" && !item.retryable} />
+          }} disabled={primaryDisabled} />
           <Button icon={ShieldCheck} label={dictionary.actions.openAudit} onClick={() => setActiveTab("Audit")} />
           <Button icon={Eye} label={dictionary.actions.viewSource} onClick={() => setActiveTab("Linked Evidence")} />
           <IconButton label={dictionary.common.more} icon={MoreHorizontal} onClick={() => setNotice("Job command menu opened")} />
@@ -53,7 +58,7 @@ export function MaintenanceDetailPage({
       </header>
 
       <div className="status-strip status-strip--detail">
-        <Metric label={dictionary.maintenance.metrics.status} value={maintenanceStateLabel(dictionary, retryState)} tone={retryState === "Failed" ? "red" : retryState === "Open" ? "green" : "orange"} />
+        <Metric label={dictionary.maintenance.metrics.status} value={maintenanceStateLabel(dictionary, retryState)} tone={metricToneForState(retryState)} />
         <Metric label={dictionary.maintenance.metrics.severity} value={severityLabel(dictionary, item.severity)} tone={severityMetricTone} />
         <Metric label={dictionary.maintenance.metrics.retryCount} value={isFailedJob ? "2" : "0"} />
         <Metric label={dictionary.maintenance.metrics.affectedMemories} value={isFailedJob ? "3" : "1"} />
@@ -121,7 +126,7 @@ export function MaintenanceDetailPage({
             <Timeline rows={[...auditTrailRows]} compact />
           </InspectorSection>
           <InspectorSection title="Worker Health">
-            <Definition label="Current status"><StatusPill label={maintenanceStateLabel(dictionary, retryState)} tone={retryState === "Failed" ? "red" : "orange"} /></Definition>
+            <Definition label="Current status"><StatusPill label={maintenanceStateLabel(dictionary, retryState)} tone={maintenanceStateTone(retryState)} /></Definition>
             <Definition label="Avg duration">4.6s</Definition>
             <Definition label="Failures in 24h">2</Definition>
             <Definition label="Last healthy run">2026-04-27 10:33</Definition>
@@ -133,6 +138,50 @@ export function MaintenanceDetailPage({
       </div>
     </section>
   );
+}
+
+function primaryMaintenanceAction(item: MaintenanceItem): MaintenanceAction | null {
+  if (item.actionKind === "push_candidate") {
+    if (item.state === "Open") {
+      return "approve";
+    }
+    if (item.state === "Approved") {
+      return "send";
+    }
+    return null;
+  }
+  return "retry";
+}
+
+function primaryActionLabel(item: MaintenanceItem, dictionary: ReturnType<typeof useI18n>["dictionary"]) {
+  if (item.actionKind === "push_candidate") {
+    if (item.state === "Approved") {
+      return "Send Card";
+    }
+    if (item.state === "Open") {
+      return "Approve Push";
+    }
+    return "No Action";
+  }
+  return item.state === "Failed" ? dictionary.actions.retryJob : dictionary.actions.rerunCheck;
+}
+
+function nextStateForAction(action: MaintenanceAction, failedJob: boolean): MaintenanceItem["state"] {
+  if (action === "approve") {
+    return "Approved";
+  }
+  if (action === "send") {
+    return "Sent";
+  }
+  if (action === "skip") {
+    return "Skipped";
+  }
+  return failedJob ? "Review Pending" : "Open";
+}
+
+function metricToneForState(state: MaintenanceItem["state"]): "green" | "orange" | "red" | undefined {
+  const tone = maintenanceStateTone(state);
+  return tone === "gray" ? undefined : tone;
 }
 
 function MaintenanceOverviewDetail({ item, isFailedJob }: { item: MaintenanceItem; isFailedJob: boolean }) {

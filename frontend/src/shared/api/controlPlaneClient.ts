@@ -8,6 +8,8 @@ import {
   parseControlPageList,
   parseControlPushCandidateMutation,
   parseControlSettings,
+  parseControlSourceEventDetail,
+  parseControlSourceEventList,
   parseMemoryDetail,
   parseMemoryDetailMutation,
   type ControlIntegrationsResponseDto,
@@ -17,6 +19,8 @@ import {
   type ControlPushCandidateDto,
   type ControlScopeParams,
   type ControlSettingsDto,
+  type ControlSourceEventDetailDto,
+  type ControlSourceEventListResponseDto,
   type MemoryDetailDto,
   type MemoryLifecycleAction,
   type MemoryListResponseDto,
@@ -75,6 +79,17 @@ export async function listControlPages(scope: ControlScopeParams): Promise<Contr
 
 export async function getControlPage(scope: ControlScopeParams, pageId: string): Promise<ControlPageDetailDto> {
   return parseControlPageDetail(await getJson(`/v1/control/pages/${pageId}`, scope));
+}
+
+export async function listControlSourceEvents(scope: ControlScopeParams): Promise<ControlSourceEventListResponseDto> {
+  return parseControlSourceEventList(await getJson("/v1/control/source-events", scope));
+}
+
+export async function getControlSourceEvent(
+  scope: ControlScopeParams,
+  sourceEventId: string,
+): Promise<ControlSourceEventDetailDto> {
+  return parseControlSourceEventDetail(await getJson(`/v1/control/source-events/${sourceEventId}`, scope));
 }
 
 export async function editControlPage(
@@ -146,6 +161,17 @@ export async function skipPushCandidate(
 ): Promise<ControlPushCandidateDto> {
   const body = mutationEnvelope(reason, `skip-push:${candidateId}`);
   return parseControlPushCandidateMutation(await postJson(`/v1/control/push-candidates/${candidateId}/skip`, scope, body)).item;
+}
+
+export async function sendFeishuPushCandidate(
+  scope: ControlScopeParams,
+  candidateId: string,
+  reason: string,
+): Promise<ControlPushCandidateDto> {
+  const body = mutationEnvelope(reason, `send-feishu-push:${candidateId}`);
+  return parseControlPushCandidateMutation(
+    await postJson(`/v1/platforms/feishu/push-candidates/${candidateId}/send`, scope, body),
+  ).item;
 }
 
 export async function getControlSettings(scope: ControlScopeParams): Promise<ControlSettingsDto> {
