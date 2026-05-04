@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.remember_event_records import outbox_job
 from memwing.core.memory_search import MemorySearchResult, MemorySearchResultItem
@@ -156,7 +157,11 @@ def test_drain_coalesces_scope_level_outbox_handlers() -> None:
         drain_worker = BenchmarkDrainWorker(
             store,
             evidence_index=None,
-            long_term_filter=LongTermFilterService(store, long_term_filter),
+            long_term_filter=LongTermFilterService(
+                store,
+                long_term_filter,
+                lifecycle_transition=LifecycleTransitionService(store),
+            ),
             page_memory_worker=page_memory_worker,
             graph_write_worker=None,
         )
@@ -225,7 +230,11 @@ def test_derived_outbox_scope_handlers_only_claim_matching_aggregate_key() -> No
         worker = DerivedOutboxWorker(
             store,
             evidence_index=None,
-            long_term_filter=LongTermFilterService(store, long_term_filter),
+            long_term_filter=LongTermFilterService(
+                store,
+                long_term_filter,
+                lifecycle_transition=LifecycleTransitionService(store),
+            ),
             page_memory_worker=None,
             worker_id="derived_outbox",
         )
@@ -253,7 +262,11 @@ def _service(store: InMemoryDataStore, evidence) -> BenchmarkAdminService:
         drain_worker=BenchmarkDrainWorker(
             store,
             evidence_index=evidence,
-            long_term_filter=LongTermFilterService(store, _NoopLongTermFilter()),
+            long_term_filter=LongTermFilterService(
+                store,
+                _NoopLongTermFilter(),
+                lifecycle_transition=LifecycleTransitionService(store),
+            ),
             page_memory_worker=None,
             graph_write_worker=None,
         ),

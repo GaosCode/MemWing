@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from memwing.api.server import create_app
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.bootstrap import MemWingApiRuntimeContext
@@ -142,8 +143,12 @@ def _runtime_context_factory(
             drain_worker=BenchmarkDrainWorker(
                 data_store,
                 evidence_index=evidence_index,
-                long_term_filter=LongTermFilterService(data_store, _NoopLongTermFilter()),
-                page_memory_worker=None,
+                long_term_filter=LongTermFilterService(
+                    data_store,
+                    _NoopLongTermFilter(),
+                    lifecycle_transition=LifecycleTransitionService(data_store),
+                ),
+                page_memory_worker=_NoopPageMemoryWorker(),
                 graph_write_worker=None,
             ),
             graph_backend=None,
@@ -184,6 +189,11 @@ class _EvidenceIndex:
             next_cursor=None,
             trace_id=query.trace_id or "trace",
         )
+
+
+class _NoopPageMemoryWorker:
+    async def maybe_rebuild(self, job) -> None:
+        return None
 
 
 class _NoopLongTermFilter:

@@ -19,6 +19,7 @@ from memwing.api.runtime_config import (
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
 from memwing.application.gateway_service import MemoryGateway
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.page_memory_service import PageMemoryService
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
@@ -202,9 +203,11 @@ async def create_worker_runner_from_env(
         store = PostgresDataStore(connection)
         resolver = MemWingModelConfigResolver.from_env(env)
         scope_resolver = ScopeResolver(store)
+        lifecycle_transition = LifecycleTransitionService(store)
         long_term_filter = LongTermFilterService(
             store,
             MemWingLongTermFilterAdapter(_llm_client_for_role(resolver, "long_term_filter")),
+            lifecycle_transition=lifecycle_transition,
         )
         page_memory_worker = PageMemoryWorker(
             store,
@@ -218,6 +221,7 @@ async def create_worker_runner_from_env(
             GraphWriteWorker(
                 store,
                 graph_backend=graph_backend,
+                lifecycle_transition=lifecycle_transition,
                 worker_id=f"{worker_id}:graph",
             )
             if graph_backend is not None
@@ -290,9 +294,11 @@ def _benchmark_admin_service(
 ) -> BenchmarkAdminService:
     resolver = MemWingModelConfigResolver.from_env(env)
     scope_resolver = ScopeResolver(store)
+    lifecycle_transition = LifecycleTransitionService(store)
     long_term_filter = LongTermFilterService(
         store,
         MemWingLongTermFilterAdapter(_llm_client_for_role(resolver, "long_term_filter")),
+        lifecycle_transition=lifecycle_transition,
     )
     page_memory_worker = PageMemoryWorker(
         store,
@@ -306,6 +312,7 @@ def _benchmark_admin_service(
         GraphWriteWorker(
             store,
             graph_backend=graph_backend,
+            lifecycle_transition=lifecycle_transition,
             worker_id="benchmark_graph_write",
             retry_delay=timedelta(0),
         )

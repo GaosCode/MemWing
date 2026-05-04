@@ -9,6 +9,7 @@ from memwing.application.long_term_filter_service import (
     LongTermFilterProcessCommand,
     LongTermFilterService,
 )
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.core.models import (
     LongTermFilterItem,
     MemoryDisplayType,
@@ -24,7 +25,7 @@ from memwing.ports.llm_filter import LongTermFilterRequest
 NOW = datetime(2026, 4, 30, tzinfo=UTC)
 
 
-def test_long_term_filter_service_persists_candidates_and_only_enqueues_graph_routes() -> None:
+def test_long_term_filter_service_auto_activates_recallable_items_and_enqueues_graph_routes() -> None:
     async def scenario() -> None:
         store = InMemoryDataStore()
         async with store.transaction() as tx:
@@ -45,14 +46,24 @@ def test_long_term_filter_service_persists_candidates_and_only_enqueues_graph_ro
                 ),
             )
         )
-        service = LongTermFilterService(store, filter_port)
+        service = LongTermFilterService(
+            store,
+            filter_port,
+            lifecycle_transition=LifecycleTransitionService(store),
+        )
 
         result = await service.process_scope(
-            LongTermFilterProcessCommand(scope=_scope(), now=NOW, trace_id="trace_001")
+            LongTermFilterProcessCommand(
+                scope=_scope(),
+                source_event_ids=("source_001", "source_002"),
+                now=NOW,
+                trace_id="trace_001",
+            )
         )
 
         assert result.source_event_count == 2
         assert result.candidate_count == 2
+        assert result.activated_count == 2
         assert result.graph_write_job_count == 1
         assert filter_port.last_request is not None
         assert {event.id for event in filter_port.last_request.source_events} == {
@@ -64,7 +75,8 @@ def test_long_term_filter_service_persists_candidates_and_only_enqueues_graph_ro
             items = await tx.memory_items.list_for_scope(scope=_scope(), limit=10)
 
         assert {item.title for item in items} == {"Graph memory", "Vector memory"}
-        assert {item.status for item in items} == {MemoryStatus.CANDIDATE}
+        assert {item.status for item in items} == {MemoryStatus.ACTIVE}
+        assert all(item.activated_at == NOW for item in items)
         assert len(store.graph_write_jobs) == 1
         assert store.graph_write_jobs[0].memory_id in {item.id for item in items}
         assert store.audit_events[-1].stage == "long_term_filter.succeeded"
@@ -89,15 +101,115 @@ def test_long_term_filter_service_rejects_filter_output_for_unloaded_source_even
                     ),
                 )
             ),
+            lifecycle_transition=LifecycleTransitionService(store),
         )
 
         with pytest.raises(ValueError, match="source_event_ids outside"):
             await service.process_scope(
-                LongTermFilterProcessCommand(scope=_scope(), now=NOW, trace_id="trace_bad")
+                LongTermFilterProcessCommand(
+                    scope=_scope(),
+                    source_event_ids=("source_001",),
+                    now=NOW,
+                    trace_id="trace_bad",
+                )
             )
 
         async with store.transaction() as tx:
             assert await tx.memory_items.list_for_scope(scope=_scope(), limit=10) == ()
+
+    asyncio.run(scenario())
+
+
+def test_long_term_filter_service_keeps_manual_and_raw_items_as_candidates() -> None:
+    async def scenario() -> None:
+        store = InMemoryDataStore()
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001", "Manual review"))
+            await tx.source_events.insert_if_absent(_source_event("source_002", "Raw note"))
+
+        service = LongTermFilterService(
+            store,
+            _FakeLongTermFilterPort(
+                (
+                    _filter_item(
+                        title="Manual memory",
+                        route=MemoryRoute.MANUAL,
+                        source_event_ids=("source_001",),
+                    ),
+                    _filter_item(
+                        title="Raw memory",
+                        route=MemoryRoute.RAW_ONLY,
+                        source_event_ids=("source_002",),
+                    ),
+                )
+            ),
+            lifecycle_transition=LifecycleTransitionService(store),
+        )
+
+        result = await service.process_scope(
+            LongTermFilterProcessCommand(
+                scope=_scope(),
+                source_event_ids=("source_001", "source_002"),
+                now=NOW,
+                trace_id="trace_manual",
+            )
+        )
+
+        assert result.candidate_count == 2
+        assert result.activated_count == 0
+        async with store.transaction() as tx:
+            items = await tx.memory_items.list_for_scope(scope=_scope(), limit=10)
+
+        assert {item.status for item in items} == {MemoryStatus.CANDIDATE}
+
+    asyncio.run(scenario())
+
+
+def test_long_term_filter_service_retry_does_not_demote_active_memory() -> None:
+    async def scenario() -> None:
+        store = InMemoryDataStore()
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001", "Graph fact"))
+
+        service = LongTermFilterService(
+            store,
+            _FakeLongTermFilterPort(
+                (
+                    _filter_item(
+                        title="Graph memory",
+                        route=MemoryRoute.GRAPH,
+                        source_event_ids=("source_001",),
+                    ),
+                )
+            ),
+            lifecycle_transition=LifecycleTransitionService(store),
+        )
+
+        first = await service.process_scope(
+            LongTermFilterProcessCommand(
+                scope=_scope(),
+                source_event_ids=("source_001",),
+                now=NOW,
+                trace_id="trace_retry",
+            )
+        )
+        second = await service.process_scope(
+            LongTermFilterProcessCommand(
+                scope=_scope(),
+                source_event_ids=("source_001",),
+                now=NOW,
+                trace_id="trace_retry",
+            )
+        )
+
+        assert first.activated_count == 1
+        assert second.activated_count == 0
+        async with store.transaction() as tx:
+            items = await tx.memory_items.list_for_scope(scope=_scope(), limit=10)
+
+        assert len(items) == 1
+        assert items[0].status is MemoryStatus.ACTIVE
+        assert items[0].lifecycle_revision == 1
 
     asyncio.run(scenario())
 

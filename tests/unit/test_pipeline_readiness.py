@@ -86,6 +86,38 @@ def test_write_evaluate_requires_page_memory_and_memory_items() -> None:
     asyncio.run(run())
 
 
+def test_retrieval_evaluate_accepts_external_evidence_job_success() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        source = _source_event("source_001")
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source)
+            await tx.outbox_jobs.enqueue(
+                replace(
+                    outbox_job(source_event=source, job_type="evidence.index_source_event", now=NOW),
+                    status="succeeded",
+                )
+            )
+
+        result = await PipelineReadinessService(
+            store,
+            evidence_enabled=True,
+            graph_enabled=False,
+        ).check(
+            PipelineReadinessCommand(
+                source_event_ids=("source_001",),
+                scope=_scope(),
+                profile=PipelineReadinessProfile.RETRIEVAL_EVALUATE,
+            )
+        )
+
+        assert result.ready is True
+        assert result.derived["evidence"].ready is True
+        assert result.derived["evidence"].count == 1
+
+    asyncio.run(run())
+
+
 def test_write_evaluate_counts_only_current_active_memory_items() -> None:
     async def run() -> None:
         store = InMemoryDataStore()

@@ -5,6 +5,7 @@ from memwing.api.agent_common import AgentRuntimeRef
 from memwing.api.agent_memory import AgentMemoryQuery
 from memwing.application.access_service import MemoryAccessService
 from memwing.application.gateway_service import MemoryGateway
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.page_memory_service import PageMemoryService
 from memwing.application.remember_event_command import ActorRef, RememberEventCommand, SourceRef
@@ -95,13 +96,17 @@ def test_memory_pipeline_runtime_smoke_derives_page_memory_and_readiness() -> No
             derived_outbox_worker=DerivedOutboxWorker(
                 store,
                 evidence_index=None,
-                long_term_filter=LongTermFilterService(store, _OneItemLongTermFilter()),
+                long_term_filter=LongTermFilterService(
+                    store,
+                    _OneItemLongTermFilter(),
+                    lifecycle_transition=LifecycleTransitionService(store),
+                ),
                 page_memory_worker=page_memory_worker,
                 worker_id="smoke_pipeline",
             ),
             graph_write_worker=None,
         )
-        await runner.run_once(now=NOW + timedelta(minutes=20), outbox_limit=100)
+        await runner.run_once(outbox_limit=100)
 
         readiness_service = PipelineReadinessService(
             store,
@@ -204,7 +209,7 @@ class _OneItemLongTermFilter:
             LongTermFilterItem(
                 title="Page Memory smoke durable item",
                 content="Page Memory smoke durable memory item exists.",
-                route=MemoryRoute.MANUAL,
+                route=MemoryRoute.VECTOR_ONLY,
                 display_type=MemoryDisplayType.NOTE,
                 original_score=0.8,
                 half_life_days=30,

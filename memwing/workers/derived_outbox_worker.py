@@ -277,13 +277,35 @@ class DerivedOutboxWorker:
         await self._page_memory_worker.maybe_rebuild(job)
 
     async def _classify_long_term(self, job: OutboxJob, scope: EffectiveScope) -> None:
+        source_event_ids = await self._claimed_aggregate_source_event_ids(job)
         await self._long_term_filter.process_scope(
             LongTermFilterProcessCommand(
                 scope=scope,
+                source_event_ids=source_event_ids,
                 now=datetime.now(UTC),
                 trace_id=f"long_term_filter:{job.id}",
             )
         )
+
+    async def _claimed_aggregate_source_event_ids(self, job: OutboxJob) -> tuple[str, ...]:
+        if job.aggregate_key is None:
+            return (job.source_event_id,)
+        async with self._unit_of_work.transaction() as tx:
+            jobs = await tx.outbox_jobs.list_for_project_type_and_aggregates(
+                project_memory_space_id=job.project_memory_space_id,
+                job_type=job.job_type,
+                aggregate_keys=(job.aggregate_key,),
+            )
+        source_event_ids = tuple(
+            dict.fromkeys(
+                candidate.source_event_id
+                for candidate in jobs
+                if candidate.status == "processing"
+                and candidate.locked_by == self._worker_id
+                and candidate.aggregate_key == job.aggregate_key
+            )
+        )
+        return source_event_ids or (job.source_event_id,)
 
     async def _load_source_event(self, source_event_id: str) -> SourceEvent:
         async with self._unit_of_work.transaction() as tx:

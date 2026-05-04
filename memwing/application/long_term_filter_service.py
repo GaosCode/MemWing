@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Final
 import uuid
 
+from memwing.core.lifecycle import LifecycleAction
 from memwing.core.models import (
     AuditEvent,
     GraphWriteJob,
@@ -13,20 +14,27 @@ from memwing.core.models import (
     MemoryRoute,
     MemoryStatus,
     PageMemoryScopeType,
+    SourceEvent,
 )
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
+from memwing.ports.lifecycle_transition import (
+    LifecycleTransitionPort,
+    LifecycleTransitionRequest,
+)
 from memwing.ports.llm_filter import LongTermFilterPort, LongTermFilterRequest
 
 
 _SYSTEM_ACTOR: Final = "system"
-_SOURCE_EVENT_LIMIT: Final = 40
 _HISTORY_ITEM_LIMIT: Final = 50
+_AUTO_ACTIVATE_ROUTES: Final = frozenset((MemoryRoute.GRAPH, MemoryRoute.VECTOR_ONLY))
+_AUTO_ACTIVATE_MIN_SCORE: Final = 0.75
 
 
 @dataclass(frozen=True, slots=True)
 class LongTermFilterProcessCommand:
     scope: EffectiveScope
+    source_event_ids: tuple[str, ...]
     now: datetime
     trace_id: str = "long_term_filter:process"
     actor_id: str | None = _SYSTEM_ACTOR
@@ -36,6 +44,7 @@ class LongTermFilterProcessCommand:
 class LongTermFilterProcessResult:
     source_event_count: int
     candidate_count: int
+    activated_count: int
     graph_write_job_count: int
 
 
@@ -44,18 +53,22 @@ class LongTermFilterService:
         self,
         unit_of_work: EventStoreUnitOfWorkPort,
         filter_port: LongTermFilterPort,
+        *,
+        lifecycle_transition: LifecycleTransitionPort,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._filter_port = filter_port
+        self._lifecycle_transition = lifecycle_transition
 
     async def process_scope(
         self,
         command: LongTermFilterProcessCommand,
     ) -> LongTermFilterProcessResult:
         async with self._unit_of_work.transaction() as tx:
-            source_events = await tx.source_events.list_recent_for_scope(
+            source_events = await _load_source_events(
+                tx.source_events,
+                source_event_ids=command.source_event_ids,
                 scope=command.scope,
-                limit=_SOURCE_EVENT_LIMIT,
             )
             history_items = await tx.memory_items.list_for_scope(
                 scope=command.scope,
@@ -78,6 +91,7 @@ class LongTermFilterService:
             return LongTermFilterProcessResult(
                 source_event_count=0,
                 candidate_count=0,
+                activated_count=0,
                 graph_write_job_count=0,
             )
 
@@ -94,6 +108,7 @@ class LongTermFilterService:
         _validate_filter_items(filter_items, source_event_ids={event.id for event in source_events})
 
         graph_write_job_count = 0
+        saved_items: list[MemoryItem] = []
         async with self._unit_of_work.transaction() as tx:
             for filter_item in filter_items:
                 memory_item = _memory_item_from_filter_item(
@@ -101,18 +116,41 @@ class LongTermFilterService:
                     scope=command.scope,
                     now=command.now,
                 )
-                saved_item = await tx.memory_items.upsert(memory_item)
+                existing_item = await tx.memory_items.get_for_update(memory_item.id)
+                saved_item = existing_item or await tx.memory_items.upsert(memory_item)
+                saved_items.append(saved_item)
                 if saved_item.route == MemoryRoute.GRAPH:
                     await tx.graph_write_jobs.enqueue(
                         _graph_write_job_from_memory_item(saved_item, now=command.now)
                     )
                     graph_write_job_count += 1
 
+        activated_count = 0
+        for item in saved_items:
+            if not _should_auto_activate(item):
+                continue
+            await self._lifecycle_transition.transition(
+                LifecycleTransitionRequest(
+                    memory_id=item.id,
+                    action=LifecycleAction.APPROVE,
+                    actor_id=command.actor_id or _SYSTEM_ACTOR,
+                    reason="auto-approved by long term filter",
+                    idempotency_key=f"long_term_filter:auto_approve:{command.trace_id}:{item.id}",
+                    trace_id=command.trace_id,
+                    now=command.now,
+                )
+            )
+            activated_count += 1
+
+        async with self._unit_of_work.transaction() as tx:
             await tx.audit_events.record(
                 _audit_event(
                     command=command,
                     stage="long_term_filter.succeeded",
-                    decision=f"created_candidates:{len(filter_items)}",
+                    decision=(
+                        f"created_candidates:{len(filter_items)};"
+                        f"auto_activated:{activated_count}"
+                    ),
                     source_event_ids=tuple(event.id for event in source_events),
                 )
             )
@@ -120,6 +158,7 @@ class LongTermFilterService:
         return LongTermFilterProcessResult(
             source_event_count=len(source_events),
             candidate_count=len(filter_items),
+            activated_count=activated_count,
             graph_write_job_count=graph_write_job_count,
         )
 
@@ -150,6 +189,37 @@ def _page_scope_ref(scope: EffectiveScope) -> tuple[PageMemoryScopeType, str]:
     return "project", scope.project_memory_space_id
 
 
+async def _load_source_events(
+    repository: object,
+    *,
+    source_event_ids: tuple[str, ...],
+    scope: EffectiveScope,
+) -> tuple[SourceEvent, ...]:
+    source_events: list[SourceEvent] = []
+    missing_ids: list[str] = []
+    for source_event_id in source_event_ids:
+        event = await repository.get_source_event(source_event_id)
+        if event is None or not _source_event_in_scope(event, scope):
+            missing_ids.append(source_event_id)
+            continue
+        source_events.append(event)
+    if missing_ids:
+        raise ValueError("long term filter source_event_ids are missing or outside scope")
+    return tuple(source_events)
+
+
+def _source_event_in_scope(event: SourceEvent, scope: EffectiveScope) -> bool:
+    if event.project_memory_space_id != scope.project_memory_space_id:
+        return False
+    if scope.thread_id is not None and event.thread_id != scope.thread_id:
+        return False
+    if scope.group_ids is not None and event.group_id not in scope.group_ids:
+        return False
+    if scope.shared_group_id is not None and event.shared_group_id != scope.shared_group_id:
+        return False
+    return True
+
+
 def _validate_filter_items(
     items: tuple[LongTermFilterItem, ...],
     *,
@@ -165,6 +235,14 @@ def _validate_filter_items(
             raise ValueError(
                 "long term filter returned primary_source_event_id outside the loaded scope"
             )
+
+
+def _should_auto_activate(item: MemoryItem) -> bool:
+    return (
+        item.status is MemoryStatus.CANDIDATE
+        and item.route in _AUTO_ACTIVATE_ROUTES
+        and item.original_score >= _AUTO_ACTIVATE_MIN_SCORE
+    )
 
 
 def _memory_item_from_filter_item(

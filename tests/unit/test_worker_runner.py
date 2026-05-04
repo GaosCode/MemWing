@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
 
+from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.remember_event_records import outbox_job
 from memwing.core.models import LongTermFilterItem, SourceEvent
@@ -65,6 +67,34 @@ def test_worker_runner_graph_lane_skips_outbox() -> None:
     asyncio.run(run())
 
 
+def test_worker_runner_all_lane_run_forever_does_not_block_outbox_on_graph() -> None:
+    async def run() -> None:
+        outbox_worker = _CountingDerivedOutboxWorker()
+        graph_worker = _BlockingGraphWriteWorker()
+        runner = MemWingWorkerRunner(
+            derived_outbox_worker=outbox_worker,
+            graph_write_worker=graph_worker,
+        )
+
+        task = asyncio.create_task(
+            runner.run_forever(
+                interval_seconds=0,
+                idle_interval_seconds=0,
+                outbox_limit=1,
+                graph_limit=1,
+            )
+        )
+        try:
+            await asyncio.wait_for(outbox_worker.second_call.wait(), timeout=0.5)
+            assert graph_worker.started.is_set()
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(run())
+
+
 def test_derived_outbox_global_run_coalesces_scope_triggers_by_aggregate() -> None:
     async def run() -> None:
         store = InMemoryDataStore()
@@ -87,7 +117,11 @@ def test_derived_outbox_global_run_coalesces_scope_triggers_by_aggregate() -> No
         worker = DerivedOutboxWorker(
             store,
             evidence_index=None,
-            long_term_filter=LongTermFilterService(store, filter_port),
+            long_term_filter=LongTermFilterService(
+                store,
+                filter_port,
+                lifecycle_transition=LifecycleTransitionService(store),
+            ),
             page_memory_worker=None,
             worker_id="derived_outbox",
         )
@@ -122,7 +156,11 @@ def test_page_memory_job_retries_when_worker_is_not_configured() -> None:
         worker = DerivedOutboxWorker(
             store,
             evidence_index=None,
-            long_term_filter=LongTermFilterService(store, _RecordingLongTermFilter()),
+            long_term_filter=LongTermFilterService(
+                store,
+                _RecordingLongTermFilter(),
+                lifecycle_transition=LifecycleTransitionService(store),
+            ),
             page_memory_worker=None,
             worker_id="derived_outbox",
         )
@@ -205,6 +243,41 @@ class _FakeGraphWriteWorker:
         return GraphWriteWorkerResult(
             claimed=self._claimed,
             succeeded=self._claimed,
+            retried=0,
+            dead_lettered=0,
+        )
+
+
+class _CountingDerivedOutboxWorker:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.second_call = asyncio.Event()
+
+    async def run_global_once(self, **kwargs):
+        from memwing.workers.derived_outbox_worker import DerivedOutboxWorkerResult
+
+        self.calls += 1
+        if self.calls >= 2:
+            self.second_call.set()
+        return DerivedOutboxWorkerResult(
+            claimed=1,
+            succeeded=1,
+            retried=0,
+            dead_lettered=0,
+            evidence_indexed_source_events=0,
+        )
+
+
+class _BlockingGraphWriteWorker:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def run_once(self, **kwargs) -> GraphWriteWorkerResult:
+        self.started.set()
+        await asyncio.sleep(60)
+        return GraphWriteWorkerResult(
+            claimed=1,
+            succeeded=1,
             retried=0,
             dead_lettered=0,
         )

@@ -69,6 +69,39 @@ class MemWingWorkerRunner:
         lane: PipelineWorkerLane = PipelineWorkerLane.ALL,
     ) -> None:
         idle_interval = interval_seconds if idle_interval_seconds is None else idle_interval_seconds
+        if lane == PipelineWorkerLane.ALL:
+            await asyncio.gather(
+                self._run_outbox_lane_forever(
+                    lane=PipelineWorkerLane.EVIDENCE,
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    outbox_limit=outbox_limit,
+                ),
+                self._run_outbox_lane_forever(
+                    lane=PipelineWorkerLane.WORKING_MEMORY,
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    outbox_limit=outbox_limit,
+                ),
+                self._run_outbox_lane_forever(
+                    lane=PipelineWorkerLane.PAGE_MEMORY,
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    outbox_limit=outbox_limit,
+                ),
+                self._run_outbox_lane_forever(
+                    lane=PipelineWorkerLane.LONG_TERM_FILTER,
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    outbox_limit=outbox_limit,
+                ),
+                self._run_graph_forever(
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    graph_limit=graph_limit,
+                ),
+            )
+            return
         while True:
             result = await self.run_once(
                 outbox_limit=outbox_limit,
@@ -79,6 +112,37 @@ class MemWingWorkerRunner:
                 await asyncio.sleep(idle_interval)
             else:
                 await asyncio.sleep(interval_seconds)
+
+    async def _run_outbox_lane_forever(
+        self,
+        *,
+        lane: PipelineWorkerLane,
+        interval_seconds: float,
+        idle_interval_seconds: float,
+        outbox_limit: int,
+    ) -> None:
+        while True:
+            outbox = await self._run_outbox_once(
+                now=datetime.now(UTC),
+                limit=outbox_limit,
+                lane=lane,
+            )
+            await asyncio.sleep(interval_seconds if outbox.claimed else idle_interval_seconds)
+
+    async def _run_graph_forever(
+        self,
+        *,
+        interval_seconds: float,
+        idle_interval_seconds: float,
+        graph_limit: int,
+    ) -> None:
+        while True:
+            graph = await self._run_graph_once(
+                now=datetime.now(UTC),
+                limit=graph_limit,
+                lane=PipelineWorkerLane.GRAPH,
+            )
+            await asyncio.sleep(interval_seconds if graph.claimed else idle_interval_seconds)
 
     async def _run_outbox_once(
         self,

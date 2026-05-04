@@ -21,6 +21,7 @@ from memwing.application.remember_event_records import (
 )
 from memwing.core.models import MemoryItem, OutboxJob, PageMemory, SourceEvent
 from memwing.core.pipeline_readiness import (
+    JobStatusCount,
     PipelineReadinessCommand,
     PipelineReadinessResult,
     SourceEventReadiness,
@@ -109,12 +110,18 @@ class PipelineReadinessService:
             )
 
         graph_status = job_count(graph_jobs, now=checked_at)
+        evidence_status = outbox_by_type.get("evidence.index_source_event")
+        indexed_evidence_count = _indexed_evidence_count(
+            stored_count=evidence_count,
+            source_event_count=source_readiness.available,
+            evidence_status=evidence_status,
+        )
         derived = build_derived_readiness(
             source_readiness=source_readiness,
             outbox_by_type=outbox_by_type,
             evidence_enabled=self._evidence_enabled,
             graph_enabled=self._graph_enabled,
-            evidence_count=evidence_count,
+            evidence_count=indexed_evidence_count,
             working_count=working_count,
             page_count=len(page_coverage.pages),
             page_ids=tuple(page.id for page in page_coverage.pages),
@@ -162,6 +169,19 @@ class PipelineReadinessService:
         if last.ready:
             return last
         return replace(last, timed_out=True)
+
+
+def _indexed_evidence_count(
+    *,
+    stored_count: int,
+    source_event_count: int,
+    evidence_status: JobStatusCount | None,
+) -> int:
+    if stored_count > 0 or evidence_status is None:
+        return stored_count
+    if evidence_status.ready:
+        return min(evidence_status.succeeded, source_event_count)
+    return stored_count
 
 
 async def _load_available_source_events(
