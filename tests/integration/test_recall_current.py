@@ -262,6 +262,94 @@ def test_recall_current_relevance_search_promotes_scored_evidence_over_unscored_
     asyncio.run(scenario())
 
 
+def test_recall_current_relevance_search_uses_query_terms_to_break_close_vector_scores() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    async def scenario() -> None:
+        access = MemoryAccessService(
+            ScopeResolver(store),
+            store,
+            evidence_index=CloseScoreEvidenceIndex(),
+            now=lambda: NOW,
+        )
+        result = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="云帆看板改造项目现在的负责人是谁？",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+                mode="current",
+                limit=2,
+                sort="relevance",
+            )
+        )
+
+        assert tuple(item.id for item in result.results) == ("owner_fact", "acceptance_fact")
+
+    asyncio.run(scenario())
+
+
+def test_recall_current_relevance_search_adds_assembled_context_for_compound_questions() -> None:
+    store = InMemoryDataStore()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="project_001",
+            name="Project",
+            default_safe_mode_enabled=False,
+        )
+    )
+    store.add_runtime_scope_binding(
+        RuntimeScopeBinding(
+            runtime="openclaw",
+            agent_id="agent_001",
+            workspace_id=None,
+            session_key_pattern="*",
+            project_memory_space_id="project_001",
+        )
+    )
+
+    async def scenario() -> None:
+        access = MemoryAccessService(
+            ScopeResolver(store),
+            store,
+            evidence_index=CompoundEvidenceIndex(),
+            now=lambda: NOW,
+        )
+        result = await access.search(
+            AgentMemoryQuery(
+                runtime_ref=AgentRuntimeRef(runtime="openclaw", agent_id="agent_001"),
+                query="海棠账单和海棠结算的上线窗口分别是什么？不要混淆。",
+                scope=MemoryScope(project_memory_space_id="project_001"),
+                mode="current",
+                limit=3,
+                sort="relevance",
+            )
+        )
+
+        assert result.results[0].id == "current_truth:assembled"
+        assert result.results[0].source == "working_memory"
+        assert "海棠账单的上线窗口是 2026-05-06 20:00-22:00" in result.results[0].text
+        assert "海棠结算的上线窗口是 2026-05-07 01:00-03:00" in result.results[0].text
+        assert tuple(item.id for item in result.results[1:]) == ("bill_window", "settlement_window")
+
+    asyncio.run(scenario())
+
+
 def test_recall_history_uses_graph_history_and_preserves_historical_validity() -> None:
     store = InMemoryDataStore()
     store.add_project_memory_space(
@@ -447,6 +535,86 @@ class ScoredEvidenceIndex:
         return MemorySearchResult(
             contexts=(item.text,),
             results=(item,),
+            next_cursor=None,
+            trace_id="evidence_current",
+        )
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class CloseScoreEvidenceIndex:
+    async def index_source_event(self, source_event: object, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+    async def search(self, query: MemorySearchQuery) -> MemorySearchResult:
+        items = (
+            MemorySearchResultItem(
+                id="acceptance_fact",
+                text="云帆看板改造的验收人是韩悦，最终验收截止时间为 2026-04-30 18:00。",
+                score=0.83,
+                source="evidence_index",
+                source_event_ids=("source_acceptance",),
+                memory_item_ids=(),
+                valid_from=None,
+                valid_to=None,
+                metadata={},
+            ),
+            MemorySearchResultItem(
+                id="owner_fact",
+                text="项目晨会结论：云帆看板改造项目负责人确定为沈南，负责需求收口和跨部门协调。",
+                score=0.82,
+                source="evidence_index",
+                source_event_ids=("source_owner",),
+                memory_item_ids=(),
+                valid_from=None,
+                valid_to=None,
+                metadata={},
+            ),
+        )
+        return MemorySearchResult(
+            contexts=tuple(item.text for item in items),
+            results=items,
+            next_cursor=None,
+            trace_id="evidence_current",
+        )
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class CompoundEvidenceIndex:
+    async def index_source_event(self, source_event: object, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+    async def search(self, query: MemorySearchQuery) -> MemorySearchResult:
+        items = (
+            MemorySearchResultItem(
+                id="bill_window",
+                text="海棠账单的上线窗口是 2026-05-06 20:00-22:00，当前负责人是秦榆。",
+                score=0.88,
+                source="evidence_index",
+                source_event_ids=("source_bill",),
+                memory_item_ids=(),
+                valid_from=None,
+                valid_to=None,
+                metadata={},
+            ),
+            MemorySearchResultItem(
+                id="settlement_window",
+                text="海棠结算的上线窗口是 2026-05-07 01:00-03:00，当前负责人是孟棠。",
+                score=0.87,
+                source="evidence_index",
+                source_event_ids=("source_settlement",),
+                memory_item_ids=(),
+                valid_from=None,
+                valid_to=None,
+                metadata={},
+            ),
+        )
+        return MemorySearchResult(
+            contexts=tuple(item.text for item in items),
+            results=items,
             next_cursor=None,
             trace_id="evidence_current",
         )
