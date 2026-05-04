@@ -8,6 +8,7 @@ from memwing.application.control_memory_service import (
     _memory_item_in_scope,
     _source_events_for_item,
 )
+from memwing.application.control_manual_memory_service import ControlManualMemoryServiceMixin
 from memwing.application.control_page_service import ControlPageServiceMixin
 from memwing.application.control_pagination import (
     control_fetch_limit,
@@ -39,7 +40,12 @@ from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.platform_connector import PlatformConnectorPort
 
 
-class ControlService(ControlMemoryServiceMixin, ControlPageServiceMixin, ControlPushServiceMixin):
+class ControlService(
+    ControlManualMemoryServiceMixin,
+    ControlMemoryServiceMixin,
+    ControlPageServiceMixin,
+    ControlPushServiceMixin,
+):
     def __init__(
         self,
         unit_of_work: EventStoreUnitOfWorkPort,

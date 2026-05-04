@@ -73,6 +73,53 @@ def test_control_http_lists_details_and_mutates_memories() -> None:
     assert edit_response.json()["item"]["item"]["title"] == "Edited memory title"
 
 
+def test_control_http_manual_memory_create_writes_source_event_without_runtime_binding() -> None:
+    store = _store()
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/control/memories/manual",
+            params={"project_memory_space_id": "project_001"},
+            json={
+                **_envelope("manual-memory-001"),
+                "title": "Manual memory title",
+                "content": "Manual memory content.",
+                "source_url": "https://memwing.local/manual",
+            },
+        )
+        duplicate_response = client.post(
+            "/v1/control/memories/manual",
+            params={"project_memory_space_id": "project_001"},
+            json={
+                **_envelope("manual-memory-001"),
+                "title": "Manual memory title",
+                "content": "Manual memory content.",
+                "source_url": "https://memwing.local/manual",
+            },
+        )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["duplicate_of"] is None
+    assert body["trace_id"] == "trace_manual-memory-001"
+    assert duplicate_response.status_code == 202
+    assert duplicate_response.json()["duplicate_of"] == body["source_event_id"]
+
+    assert len(store.source_events) == 1
+    source_event = store.source_events[0]
+    assert source_event.id == body["source_event_id"]
+    assert source_event.project_memory_space_id == "project_001"
+    assert source_event.author_id == "user_001"
+    assert source_event.source_type == "control.manual_memory"
+    assert source_event.content == "Manual memory title\n\nManual memory content."
+    assert source_event.source_url == "https://memwing.local/manual"
+    assert source_event.metadata["source_ref"] == {"kind": "control", "actor_id": "user_001"}
+    assert len(store.outbox_jobs) == 4
+    assert store.audit_events[0].stage == "remember_event.captured"
+
+
 def test_control_http_edits_pages_and_purges_sources() -> None:
     store = _store()
     _seed_memory(store)

@@ -218,10 +218,25 @@ async def _dispatch_mutation(
     payload: Mapping[str, object],
     services: ControlHttpServices,
 ) -> JsonObject:
-    scope = await _scope_from_query(query, services.scope_resolver)
+    resolved_scope = await _resolved_scope_from_query(query, services.scope_resolver)
+    scope = resolved_scope.effective_scope
     envelope = _mutation_envelope(payload)
     trace_id = envelope.trace_id or _generated_trace_id(path)
     parts = _path_parts(path)
+
+    if method == "POST" and len(parts) == 4 and parts == ("v1", "control", "memories", "manual"):
+        return json_object(
+            await services.control.create_manual_memory(
+                scope=resolved_scope,
+                title=_required_body_text(payload, "title"),
+                content=_required_body_text(payload, "content"),
+                source_url=_optional_body_text(payload, "source_url"),
+                actor_id=envelope.actor_id,
+                reason=envelope.reason,
+                idempotency_key=envelope.idempotency_key,
+                trace_id=trace_id,
+            )
+        )
 
     if method == "PATCH" and len(parts) == 3 and parts[:2] == ("v1", "memory"):
         result = await services.control.edit_memory(
@@ -385,7 +400,14 @@ async def _scope_from_query(
     query: Mapping[str, str],
     resolver: ScopeResolver,
 ):
-    resolved = await resolver.resolve_control(
+    return (await _resolved_scope_from_query(query, resolver)).effective_scope
+
+
+async def _resolved_scope_from_query(
+    query: Mapping[str, str],
+    resolver: ScopeResolver,
+):
+    return await resolver.resolve_control(
         MemoryScope(
             project_memory_space_id=_required_query_text(query, "project_memory_space_id"),
             group_id=_optional_query_text(query, "group_id"),
@@ -393,7 +415,6 @@ async def _scope_from_query(
             shared_group_id=_optional_query_text(query, "shared_group_id"),
         )
     )
-    return resolved.effective_scope
 
 
 def _mutation_envelope(payload: Mapping[str, object]) -> MutationEnvelope:
@@ -467,6 +488,8 @@ def _path_parts(path: str) -> tuple[str, ...]:
 
 
 def _success_status(method: str, path: str) -> int:
+    if method.upper() == "POST" and path == "/v1/control/memories/manual":
+        return 202
     if method.upper() == "POST" and "/events/" in path:
         return 202
     return 200
