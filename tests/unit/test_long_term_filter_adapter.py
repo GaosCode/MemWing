@@ -15,13 +15,14 @@ from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
 
 
 class FakeLLMClient:
-    def __init__(self, text: str) -> None:
-        self.text = text
+    def __init__(self, text: str | list[str]) -> None:
+        self.texts = [text] if isinstance(text, str) else text
         self.requests: list[LLMModelRequest] = []
 
     async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
         self.requests.append(request)
-        return LLMModelResponse(text=self.text, provider="fake", model="fake")
+        index = min(len(self.requests) - 1, len(self.texts) - 1)
+        return LLMModelResponse(text=self.texts[index], provider="fake", model="fake")
 
 
 def test_long_term_filter_adapter_maps_json_to_contract() -> None:
@@ -66,6 +67,66 @@ def test_long_term_filter_adapter_allows_empty_candidate_list() -> None:
     adapter = MemWingLongTermFilterAdapter(FakeLLMClient('{"items":[]}'))
 
     assert asyncio.run(adapter.filter_events(_request())) == ()
+
+
+def test_long_term_filter_adapter_fills_compact_item_defaults() -> None:
+    adapter = MemWingLongTermFilterAdapter(
+        FakeLLMClient(
+            """
+            ```json
+            {
+              "items": [
+                {
+                  "title": "Skyline codename",
+                  "content": "The project codename is Skyline.",
+                  "route": "vector_only",
+                  "display_type": "note",
+                  "source_event_ids": ["event_001"],
+                  "reason": "Durable project fact.",
+                  "confidence": 0.88
+                }
+              ]
+            }
+            ```
+            """
+        )
+    )
+
+    result = asyncio.run(adapter.filter_events(_request()))
+
+    assert result[0].primary_source_event_id == "event_001"
+    assert result[0].original_score == 0.88
+    assert result[0].half_life_days == 180
+
+
+def test_long_term_filter_adapter_repairs_schema_once() -> None:
+    adapter = MemWingLongTermFilterAdapter(
+        FakeLLMClient(
+            [
+                '{"items":[{"title":"missing fields"}]}',
+                """
+                {
+                  "items": [
+                    {
+                      "title": "Skyline codename",
+                      "content": "The project codename is Skyline.",
+                      "route": "vector_only",
+                      "display_type": "note",
+                      "source_event_ids": ["event_001"],
+                      "reason": "Durable project fact.",
+                      "confidence": 0.9
+                    }
+                  ]
+                }
+                """,
+            ]
+        )
+    )
+
+    result = asyncio.run(adapter.filter_events(_request()))
+
+    assert len(result) == 1
+    assert result[0].source_event_ids == ("event_001",)
 
 
 def test_long_term_filter_adapter_rejects_malformed_json() -> None:

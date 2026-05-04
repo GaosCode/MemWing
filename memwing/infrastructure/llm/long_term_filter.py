@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+import re
+import sys
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -41,6 +46,8 @@ class _LongTermFilterOutput(BaseModel):
 
 
 class MemWingLongTermFilterAdapter(LongTermFilterPort):
+    _MAX_ATTEMPTS = 2
+
     def __init__(self, client: LLMModelClient) -> None:
         self._client = client
 
@@ -48,27 +55,125 @@ class MemWingLongTermFilterAdapter(LongTermFilterPort):
         self,
         request: LongTermFilterRequest,
     ) -> tuple[LongTermFilterItem, ...]:
-        response = await self._client.complete(
-            LLMModelRequest(
-                system_prompt=_LONG_TERM_FILTER_SYSTEM_PROMPT,
-                user_prompt=_long_term_filter_user_prompt(request),
-                trace_id=request.trace_id,
-            )
+        _debug_ltf(
+            f"filter_events: {len(request.source_events)} source_events, "
+            f"{len(request.history_items)} history_items, "
+            f"page_memory={'present' if request.recent_page_memory else 'none'}"
         )
-        parsed = parse_json_object(response.text, source="LongTermFilter LLM")
+        last_error: LLMOutputSchemaError | None = None
+        last_text: str | None = None
+        for attempt in range(self._MAX_ATTEMPTS):
+            response = await self._client.complete(
+                LLMModelRequest(
+                    system_prompt=_LONG_TERM_FILTER_SYSTEM_PROMPT,
+                    user_prompt=(
+                        _long_term_filter_user_prompt(request)
+                        if attempt == 0
+                        else _long_term_filter_repair_prompt(
+                            request=request,
+                            previous_text=last_text or "",
+                            error_message=str(last_error) if last_error is not None else "invalid schema",
+                        )
+                    ),
+                    trace_id=request.trace_id,
+                )
+            )
+            last_text = response.text
+            try:
+                return tuple(_to_filter_item(item) for item in _validate_output(response.text).items)
+            except LLMOutputSchemaError as exc:
+                last_error = exc
+
+        raise last_error or LLMOutputSchemaError("LongTermFilter LLM output did not match schema")
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _validate_output(text: str) -> _LongTermFilterOutput:
+    parsed = _parse_json_object(text, source="LongTermFilter LLM")
+    _fill_item_defaults(parsed)
+    try:
+        return _LongTermFilterOutput.model_validate(parsed)
+    except ValidationError as exc:
+        raise LLMOutputSchemaError("LongTermFilter LLM output did not match schema") from exc
+
+
+def _parse_json_object(text: str, *, source: str) -> dict[str, Any]:
+    try:
+        return parse_json_object(text, source=source)
+    except LLMOutputSchemaError as direct_error:
+        stripped = text.strip()
+        fence = _JSON_FENCE_RE.search(stripped)
+        if fence is not None:
+            stripped = fence.group(1).strip()
+        else:
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start >= 0 and end > start:
+                stripped = stripped[start : end + 1]
         try:
-            output = _LongTermFilterOutput.model_validate(parsed)
-        except ValidationError as exc:
-            raise LLMOutputSchemaError("LongTermFilter LLM output did not match schema") from exc
-        return tuple(_to_filter_item(item) for item in output.items)
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise direct_error from exc
+        if not isinstance(parsed, dict):
+            raise LLMOutputSchemaError(f"{source} must be a JSON object")
+        return parsed
+
+
+def _fill_item_defaults(parsed: dict[str, Any]) -> None:
+    items = parsed.get("items")
+    if items is None:
+        parsed["items"] = []
+        return
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_event_ids = item.get("source_event_ids")
+        if isinstance(source_event_ids, list) and source_event_ids:
+            item.setdefault("primary_source_event_id", source_event_ids[0])
+        item.setdefault("original_score", item.get("confidence", 0.75))
+        item.setdefault("half_life_days", 180)
+        item.setdefault("event_time", None)
+        item.setdefault("valid_from", None)
+        item.setdefault("valid_to", None)
+
+
+_DEBUG_LTF = os.environ.get("MEMWING_DEBUG_OPENCLAW") == "1"
+
+
+def _debug_ltf(msg: str) -> None:
+    if not _DEBUG_LTF:
+        return
+    print(f"[ltf] {msg}", file=sys.stderr, flush=True)
 
 
 _LONG_TERM_FILTER_SYSTEM_PROMPT = """\
 You are MemWing LongTermFilter. Return compact JSON only, no markdown.
 Promote only durable facts, decisions, preferences, rules, tasks, or evidence. Use only source_event_ids from input.
 If nothing is durable, return {"items":[]}.
-Required shape: {"items":[{"title":str,"content":str,"route":"graph|vector_only|raw_only|manual","display_type":"decision|task|preference|rule|note|evidence","original_score":float,"half_life_days":int,"source_event_ids":[str],"primary_source_event_id":str|null,"reason":str,"confidence":float,"event_time":str|null,"valid_from":str|null,"valid_to":str|null}]}.
+Return at most 6 items. Each item must cite 1-2 source_event_ids.
+Required minimal shape: {"items":[{"title":str,"content":str,"route":"graph|vector_only|raw_only|manual","display_type":"decision|task|preference|rule|note|evidence","source_event_ids":[str],"reason":str,"confidence":float}]}.
+Omit nullable fields and scoring defaults when redundant.
 """
+
+
+def _long_term_filter_repair_prompt(
+    *,
+    request: LongTermFilterRequest,
+    previous_text: str,
+    error_message: str,
+) -> str:
+    return "\n\n".join(
+        (
+            _long_term_filter_user_prompt(request),
+            f"Previous output failed validation: {error_message}",
+            f"Previous output:\n{previous_text[:4000]}",
+            "Return corrected compact JSON only. Do not add prose or markdown.",
+        )
+    )
 
 
 def _long_term_filter_user_prompt(request: LongTermFilterRequest) -> str:
@@ -99,21 +204,27 @@ def _scope_block(scope: EffectiveScope) -> str:
 def _recent_page_memory_block(page: PageMemory | None) -> str:
     if page is None:
         return "none"
-    topics = "; ".join(f"{topic.title}: {topic.summary}" for topic in page.topics)
-    return f"title={page.title}\nbrief={page.brief}\ntopics={topics}"
+    topics = "; ".join(
+        f"{_short_text(topic.title, 40)}: {_short_text(topic.summary, 120)}"
+        for topic in page.topics
+    )
+    return f"title={_short_text(page.title, 80)}\nbrief={_short_text(page.brief, 160)}\ntopics={topics}"
 
 
 def _history_items_block(items: tuple[MemoryItem, ...]) -> str:
     if not items:
         return "none"
-    return "\n".join(f"- id={item.id}; title={item.title}; content={item.content}" for item in items)
+    return "\n".join(
+        f"- id={item.id}; title={_short_text(item.title, 80)}; content={_short_text(item.content, 180)}"
+        for item in items
+    )
 
 
 def _evidence_snippets_block(snippets: tuple[EvidenceChunk, ...]) -> str:
     if not snippets:
         return "none"
     return "\n".join(
-        f"- id={snippet.id}; source_event_id={snippet.source_event_id}; text={snippet.chunk_text}"
+        f"- id={snippet.id}; source_event_id={snippet.source_event_id}; text={_short_text(snippet.chunk_text, 180)}"
         for snippet in snippets
     )
 
@@ -126,8 +237,15 @@ def _source_event_line(event: SourceEvent) -> str:
     content = event.content.strip() or event.content_preview.strip()
     return (
         f"- id={event.id}; time={event.event_time.isoformat()}; "
-        f"author={event.author_name or event.author_id or ''}; content={content}"
+        f"author={event.author_name or event.author_id or ''}; content={_short_text(content, 180)}"
     )
+
+
+def _short_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "..."
 
 
 def _to_filter_item(output: _LongTermFilterItemOutput) -> LongTermFilterItem:
