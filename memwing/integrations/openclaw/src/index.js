@@ -38,10 +38,18 @@ const REQUIRED_TOOLS = [
 function register(api, options = {}) {
   assertOpenClawApi(api);
   const client = options.client || createMemWingHttpClient(registrationClientOptions(api, options));
+  const config = options.config || api.pluginConfig || {};
   api.registerContextEngine("memwing", () => createContextEngine(api, client));
 
   for (const hookName of REQUIRED_HOOKS) {
-    api.on(hookName, async (payload) => client.observeHook(hookName, payload), hookOptions(hookName));
+    api.on(
+      hookName,
+      async (payload, context) => client.observeHook(
+        hookName,
+        normalizeHookPayload(hookName, payload, context, config)
+      ),
+      hookOptions(hookName)
+    );
   }
 
   for (const toolName of REQUIRED_TOOLS) {
@@ -285,6 +293,75 @@ function emptySearchEnvelope(traceId) {
   };
 }
 
+function normalizeHookPayload(hookName, payload, context, config) {
+  const input = isPlainObject(payload) ? payload : {};
+  const hookContext = isPlainObject(context) ? context : {};
+  const defaultScope = normalizeDefaultScope(config && config.defaultScope);
+  return withoutUndefined({
+    ...input,
+    hook_name: hookName,
+    agent_id: textField(input.agent_id) || textField(input.agentId) || textField(hookContext.agentId),
+    workspace_id:
+      textField(input.workspace_id) ||
+      textField(input.workspaceId) ||
+      textField(config && config.workspaceId) ||
+      textField(hookContext.workspaceDir),
+    session_id:
+      textField(input.session_id) ||
+      textField(input.sessionId) ||
+      textField(hookContext.sessionKey) ||
+      textField(hookContext.sessionId),
+    run_id: textField(input.run_id) || textField(input.runId) || textField(hookContext.runId),
+    scope: isPlainObject(input.scope) ? input.scope : defaultScope,
+    content: textField(input.content) || hookContent(hookName, input),
+    event_time: textField(input.event_time) || textField(input.eventTime) || new Date().toISOString()
+  });
+}
+
+function normalizeDefaultScope(scope) {
+  if (!isPlainObject(scope)) {
+    return undefined;
+  }
+  const projectMemorySpaceId = textField(scope.project_memory_space_id);
+  if (!projectMemorySpaceId) {
+    return undefined;
+  }
+  return withoutUndefined({
+    project_memory_space_id: projectMemorySpaceId,
+    group_id: textField(scope.group_id),
+    thread_id: textField(scope.thread_id),
+    shared_group_id: textField(scope.shared_group_id)
+  });
+}
+
+function hookContent(hookName, payload) {
+  if (hookName === "llm_input") {
+    return textField(payload.prompt) || `OpenClaw llm_input hook observed.`;
+  }
+  if (hookName === "llm_output") {
+    const assistantTexts = Array.isArray(payload.assistantTexts)
+      ? payload.assistantTexts.filter((item) => typeof item === "string" && item.trim() !== "")
+      : [];
+    return assistantTexts.join("\n\n") || "OpenClaw llm_output hook observed.";
+  }
+  if (hookName === "agent_end") {
+    return `OpenClaw agent_end hook observed: success=${payload.success === true ? "true" : "false"}.`;
+  }
+  return `OpenClaw ${hookName} hook observed.`;
+}
+
+function textField(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function withoutUndefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
 function hookOptions(hookName) {
   if (hookName === "llm_input" || hookName === "llm_output" || hookName === "agent_end") {
     return {
@@ -314,6 +391,7 @@ module.exports = {
   createMemWingHttpClient,
   createMockMemWingClient,
   delegateCompactionToRuntime,
+  normalizeHookPayload,
   registrationClientOptions,
   register
 };

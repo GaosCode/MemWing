@@ -16,12 +16,16 @@ test("manifest config schema accepts documented MemWing base URL", () => {
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(Object.keys(schema.properties), [
     "memwingBaseUrl",
+    "workspaceId",
+    "defaultScope",
     "modelRuntime",
     "models",
     "modelTimeoutSeconds"
   ]);
   assert.equal(schema.properties.memwingBaseUrl.type, "string");
   assert.equal(schema.properties.memwingBaseUrl.minLength, 1);
+  assert.deepEqual(schema.properties.workspaceId.type, ["string", "null"]);
+  assert.deepEqual(schema.properties.defaultScope.required, ["project_memory_space_id"]);
   assert.deepEqual(schema.properties.modelRuntime.enum, ["openclaw"]);
   assert.deepEqual(Object.keys(schema.properties.models.properties), [
     "pageMemory",
@@ -181,6 +185,60 @@ test("memwing_search_memory rejects invalid input and returns explicit empty env
     min_score: 0.25
   });
   assert.equal(Object.hasOwn(searchCalls[0], "max_results"), false);
+});
+
+test("conversation hooks enrich OpenClaw context before posting to MemWing", async () => {
+  const registered = captureRegistrations({
+    pluginConfig: {
+      memwingBaseUrl: "http://localhost:8000",
+      workspaceId: "workspace_001",
+      defaultScope: {
+        project_memory_space_id: "project_001",
+        group_id: "group_001"
+      }
+    }
+  });
+  const hookCalls = [];
+  const client = {
+    ...plugin.createMockMemWingClient(),
+    async observeHook(hookName, params) {
+      hookCalls.push({ hookName, params });
+      return {
+        accepted: true,
+        sourceEventId: "source_001",
+        traceId: "trace_hook"
+      };
+    }
+  };
+
+  plugin.register(registered.api, { client, config: registered.api.pluginConfig });
+  const llmInputHook = registered.hooks.find((hook) => hook.name === "llm_input");
+  await llmInputHook.handler(
+    {
+      runId: "run_001",
+      sessionId: "session_001",
+      prompt: "Remember the MemWing session smoke result."
+    },
+    {
+      agentId: "main",
+      sessionKey: "agent:main:explicit:session_001",
+      workspaceDir: "/tmp/openclaw-workspace"
+    }
+  );
+
+  assert.equal(hookCalls.length, 1);
+  assert.equal(hookCalls[0].hookName, "llm_input");
+  assert.equal(hookCalls[0].params.agent_id, "main");
+  assert.equal(hookCalls[0].params.workspace_id, "workspace_001");
+  assert.equal(hookCalls[0].params.session_id, "session_001");
+  assert.equal(hookCalls[0].params.run_id, "run_001");
+  assert.equal(hookCalls[0].params.hook_name, "llm_input");
+  assert.deepEqual(hookCalls[0].params.scope, {
+    project_memory_space_id: "project_001",
+    group_id: "group_001"
+  });
+  assert.equal(hookCalls[0].params.content, "Remember the MemWing session smoke result.");
+  assert.match(hookCalls[0].params.event_time, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test("all memwing tools reject missing required fields before calling the client", async () => {

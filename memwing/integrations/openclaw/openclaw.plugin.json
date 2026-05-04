@@ -13,6 +13,47 @@
         "type": "string",
         "minLength": 1
       },
+      "workspaceId": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "minLength": 1
+      },
+      "defaultScope": {
+        "type": "object",
+        "properties": {
+          "project_memory_space_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "shared_group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        },
+        "required": [
+          "project_memory_space_id"
+        ],
+        "additionalProperties": false
+      },
       "modelRuntime": {
         "type": "string",
         "enum": [

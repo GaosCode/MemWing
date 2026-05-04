@@ -16,13 +16,23 @@ OpenClaw plugin config should enable conversation access because this plugin obs
           "allowConversationAccess": true
         },
         "config": {
-          "memwingBaseUrl": "http://localhost:8000"
+          "memwingBaseUrl": "http://localhost:8000",
+          "workspaceId": "workspace_001",
+          "defaultScope": {
+            "project_memory_space_id": "project_001"
+          }
         }
       }
     }
   }
 }
 ```
+
+`workspaceId` must match the logical `runtime_scope_bindings.workspace_id` used
+by MemWing for this OpenClaw workspace. `defaultScope` is required for lifecycle
+hooks such as `llm_input`, `llm_output`, and `agent_end`, because OpenClaw
+supplies agent/session context for those hooks but not a MemWing project scope.
+Tool calls can still provide a more specific scope in their tool parameters.
 
 `openclaw.plugin.json` is the manifest source of truth. v1 is distributed as a local linked plugin, not as an npm package or bundled OpenClaw plugin. The skeleton targets OpenClaw `>=2026.4.24 <2027.0.0`; it has mock API smoke coverage and CLI link smoke coverage when the OpenClaw CLI is installed, but it has not been exercised as a real OpenClaw runtime session yet.
 
