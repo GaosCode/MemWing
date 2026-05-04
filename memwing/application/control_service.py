@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Callable, Mapping
 
@@ -32,12 +33,17 @@ from memwing.application.control_service_support import (
     _not_found,
     _rejected_audit_event,
     _scope_values_match,
+    _uuid,
 )
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.core.lifecycle import LifecycleAction
-from memwing.core.models import MemoryItem, SourceEvent
+from memwing.core.models import MemoryItem, MemoryVersion, SourceEvent
 from memwing.core.scope import EffectiveScope
-from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
+from memwing.ports.event_store import (
+    EventStoreTransactionPort,
+    EventStoreUnitOfWorkPort,
+    MemoryVersionRepositoryPort,
+)
 from memwing.ports.lifecycle_transition import LifecycleTransitionRequest
 from memwing.ports.platform_connector import PlatformConnectorPort
 
@@ -196,6 +202,142 @@ class ControlService(ControlPageServiceMixin, ControlPushServiceMixin):
                 now=self._now(),
             )
         )
+        return await self.get_memory_detail(memory_id=memory_id, scope=scope, trace_id=trace_id)
+
+    async def edit_memory(
+        self,
+        *,
+        memory_id: str,
+        scope: EffectiveScope,
+        title: str,
+        content: str,
+        summary: str | None,
+        actor_id: str,
+        reason: str,
+        idempotency_key: str,
+        trace_id: str,
+    ) -> ControlMemoryDetailProjection:
+        now = self._now()
+        async with self._unit_of_work.transaction() as tx:
+            existing_audit = await tx.audit_events.get_by_idempotency_key(
+                entity_type="memory_item",
+                entity_id=memory_id,
+                idempotency_key=idempotency_key,
+            )
+            item = await tx.memory_items.get_for_update(memory_id)
+            if item is None or not _memory_item_in_scope(item, scope):
+                await tx.audit_events.record(
+                    _rejected_audit_event(
+                        entity_type="control_memory_edit",
+                        entity_id=memory_id,
+                        trace_id=trace_id,
+                        now=now,
+                    )
+                )
+                raise _not_found()
+            if existing_audit is None:
+                item = await tx.memory_items.upsert(
+                    replace(
+                        item,
+                        title=title,
+                        content=content,
+                        summary=summary,
+                        updated_at=now,
+                        lifecycle_revision=item.lifecycle_revision + 1,
+                    )
+                )
+                await tx.memory_versions.record(
+                    _memory_version(
+                        item,
+                        version=await _next_memory_version(tx.memory_versions, item.id),
+                        changed_by="user",
+                        reason=reason,
+                        now=now,
+                    )
+                )
+                await tx.audit_events.record(
+                    _audit_event(
+                        entity_type="memory_item",
+                        entity_id=item.id,
+                        stage="control.memory.updated",
+                        decision="updated",
+                        reason_text=reason,
+                        source_event_ids=item.source_event_ids,
+                        actor_id=actor_id,
+                        idempotency_key=idempotency_key,
+                        trace_id=trace_id,
+                        now=now,
+                    )
+                )
+        return await self.get_memory_detail(memory_id=memory_id, scope=scope, trace_id=trace_id)
+
+    async def restore_memory_version(
+        self,
+        *,
+        memory_id: str,
+        version: int,
+        scope: EffectiveScope,
+        actor_id: str,
+        reason: str,
+        idempotency_key: str,
+        trace_id: str,
+    ) -> ControlMemoryDetailProjection:
+        now = self._now()
+        async with self._unit_of_work.transaction() as tx:
+            existing_audit = await tx.audit_events.get_by_idempotency_key(
+                entity_type="memory_item",
+                entity_id=memory_id,
+                idempotency_key=idempotency_key,
+            )
+            item = await tx.memory_items.get_for_update(memory_id)
+            restore_version = await tx.memory_versions.get(memory_id, version)
+            if item is None or restore_version is None or not _memory_item_in_scope(item, scope):
+                await tx.audit_events.record(
+                    _rejected_audit_event(
+                        entity_type="control_memory_restore",
+                        entity_id=memory_id,
+                        trace_id=trace_id,
+                        now=now,
+                    )
+                )
+                raise _not_found()
+            if existing_audit is None:
+                item = await tx.memory_items.upsert(
+                    replace(
+                        item,
+                        title=restore_version.title,
+                        content=restore_version.content,
+                        summary=restore_version.summary,
+                        source_event_ids=restore_version.source_event_ids,
+                        status=restore_version.status,
+                        updated_at=now,
+                        lifecycle_revision=item.lifecycle_revision + 1,
+                    )
+                )
+                await tx.memory_versions.record(
+                    _memory_version(
+                        item,
+                        version=await _next_memory_version(tx.memory_versions, item.id),
+                        changed_by="user",
+                        reason=reason,
+                        now=now,
+                    )
+                )
+                await tx.audit_events.record(
+                    _audit_event(
+                        entity_type="memory_item",
+                        entity_id=item.id,
+                        stage="control.memory.restored",
+                        decision="restored",
+                        reason_text=reason,
+                        source_event_ids=item.source_event_ids,
+                        actor_id=actor_id,
+                        idempotency_key=idempotency_key,
+                        trace_id=trace_id,
+                        now=now,
+                        output_ref=str(version),
+                    )
+                )
         return await self.get_memory_detail(memory_id=memory_id, scope=scope, trace_id=trace_id)
 
     async def list_forgetting_review(
@@ -460,6 +602,37 @@ async def _source_events_for_item(
         if event is not None:
             events.append(event)
     return tuple(events)
+
+
+async def _next_memory_version(
+    memory_versions: MemoryVersionRepositoryPort,
+    memory_id: str,
+) -> int:
+    latest = await memory_versions.get_latest(memory_id)
+    return 1 if latest is None else latest.version + 1
+
+
+def _memory_version(
+    item: MemoryItem,
+    *,
+    version: int,
+    changed_by: str,
+    reason: str,
+    now: datetime,
+) -> MemoryVersion:
+    return MemoryVersion(
+        id=_uuid("memory_version", item.id, str(version)),
+        memory_id=item.id,
+        version=version,
+        title=item.title,
+        content=item.content,
+        summary=item.summary,
+        status=item.status,
+        source_event_ids=item.source_event_ids,
+        changed_by=changed_by,
+        change_reason=reason,
+        created_at=now,
+    )
 
 
 def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:

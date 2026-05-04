@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
-from datetime import datetime
-from enum import Enum
+from dataclasses import dataclass
 from urllib.parse import unquote
 
 from memwing.api.error_mapping import render_error_body
+from memwing.api.json_codec import json_object
 from memwing.api.memwing_tools import (
     memwing_explain_memory,
     memwing_get_memory,
@@ -27,7 +26,7 @@ from memwing.api.openclaw_runtime import (
     ingest_openclaw_event,
     observe_openclaw_hook,
 )
-from memwing.api.types import JsonObject, JsonValue
+from memwing.api.types import JsonObject
 from memwing.api.validation import SchemaValidationError
 from memwing.application.failure_semantics import classify_failure
 from memwing.application.scope_resolver import ScopeResolutionError
@@ -108,75 +107,49 @@ async def _dispatch_post(
 ) -> OpenClawHttpResponse:
     if path == "/v1/openclaw/context/assemble":
         result = await assemble_openclaw_context(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path == "/v1/openclaw/events/ingest":
         result = await ingest_openclaw_event(payload, runtime)
-        return OpenClawHttpResponse(status_code=202, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=202, body=json_object(result))
     if path == "/v1/openclaw/events/after-turn":
         result = await complete_openclaw_turn(payload, runtime)
-        return OpenClawHttpResponse(status_code=202, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=202, body=json_object(result))
     if path.startswith("/v1/openclaw/hooks/"):
         hook_name = unquote(path.removeprefix("/v1/openclaw/hooks/"))
         result = await observe_openclaw_hook({**payload, "hook_name": hook_name}, runtime)
-        return OpenClawHttpResponse(status_code=202, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=202, body=json_object(result))
 
     if path in ("/v1/memwing/tools/search-memory", "/v1/tools/memwing/search-memory"):
         result = await memwing_search_memory(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path in ("/v1/memwing/tools/get-memory", "/v1/tools/memwing/get-memory"):
         result = await memwing_get_memory(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path in ("/v1/memwing/tools/explain-memory", "/v1/tools/memwing/explain-memory"):
         result = await memwing_explain_memory(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path in ("/v1/memwing/tools/search-sources", "/v1/tools/memwing/search-sources"):
         result = await memwing_search_sources(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path in ("/v1/memwing/tools/project-context", "/v1/tools/memwing/get-project-context"):
         result = await memwing_get_project_context(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
 
     if path == "/v1/openclaw/native/memory-search":
         result = await native_memory_search(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path == "/v1/openclaw/native/memory-get":
         result = await native_memory_get(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
     if path == "/v1/openclaw/native/memory-index":
         result = await native_memory_index(payload)
-        return OpenClawHttpResponse(status_code=202, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=202, body=json_object(result))
     if path == "/v1/openclaw/native/memory-status":
         result = await native_memory_status(payload, runtime)
-        return OpenClawHttpResponse(status_code=200, body=_json_object(result))
+        return OpenClawHttpResponse(status_code=200, body=json_object(result))
 
     failure = classify_failure(
         ValidationFailure("route_not_found", "route not found"),
         audit_stage="api.openclaw_http",
     )
     return OpenClawHttpResponse(status_code=404, body=render_error_body(failure))
-
-
-def _json_object(value: object) -> JsonObject:
-    converted = _json_value(value)
-    if not isinstance(converted, dict):
-        raise TypeError("HTTP response body must be a JSON object")
-    return converted
-
-
-def _json_value(value: object) -> JsonValue:
-    if value is None or isinstance(value, bool | int | float | str):
-        return value
-    if isinstance(value, Enum):
-        return _json_value(value.value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: _json_value(getattr(value, field.name))
-            for field in fields(value)
-        }
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_json_value(item) for item in value]
-    return str(value)

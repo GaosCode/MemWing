@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from memwing.api.benchmark_admin import handle_benchmark_admin_request
+from memwing.api.control_http import ControlHttpServices, handle_control_http_request
 from memwing.api.env import load_app_env
 from memwing.api.openclaw_http import handle_openclaw_http_request
 from memwing.api.pipeline import (
@@ -16,7 +17,10 @@ from memwing.api.pipeline import (
 )
 from memwing.api.runtime_config import benchmark_admin_enabled_from_env
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.control_service import ControlService
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
+from memwing.application.scope_resolver import ScopeResolver
+from memwing.application.source_redaction_service import SourceRedactionService
 from memwing.bootstrap import MemWingApiRuntimeContext, postgres_runtime_context
 from memwing.ports.agent_runtime import AgentRuntimePort
 
@@ -31,7 +35,16 @@ def create_app(
     *,
     runtime_context_factory: RuntimeContextFactory = postgres_runtime_context,
 ) -> FastAPI:
-    state: dict[str, AgentRuntimePort | BenchmarkAdminService | PipelineReadinessService | None] = {}
+    state: dict[
+        str,
+        AgentRuntimePort
+        | BenchmarkAdminService
+        | PipelineReadinessService
+        | ControlService
+        | ScopeResolver
+        | SourceRedactionService
+        | None,
+    ] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -40,6 +53,9 @@ def create_app(
             state["runtime"] = runtime_context.runtime
             state["benchmark_admin"] = runtime_context.benchmark_admin
             state["pipeline_readiness"] = runtime_context.pipeline_readiness
+            state["control"] = runtime_context.control
+            state["control_scope_resolver"] = runtime_context.control_scope_resolver
+            state["source_redaction"] = runtime_context.source_redaction
             yield
             state.clear()
 
@@ -76,6 +92,93 @@ def create_app(
         response = await handle_pipeline_await_request(
             payload=payload,
             service=_pipeline_readiness_service(state.get("pipeline_readiness")),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.get("/v1/control/{control_path:path}")
+    async def control_get_route(control_path: str, request: Request) -> JSONResponse:
+        response = await handle_control_http_request(
+            method="GET",
+            path=f"/v1/control/{control_path}",
+            query=dict(request.query_params),
+            payload={},
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.patch("/v1/control/{control_path:path}")
+    async def control_patch_route(control_path: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="PATCH",
+            path=f"/v1/control/{control_path}",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/control/{control_path:path}")
+    async def control_post_route(control_path: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path=f"/v1/control/{control_path}",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.patch("/v1/memory/{memory_id}")
+    async def memory_patch_route(memory_id: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="PATCH",
+            path=f"/v1/memory/{memory_id}",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/memory/{memory_id}/{action}")
+    async def memory_action_route(memory_id: str, action: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path=f"/v1/memory/{memory_id}/{action}",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/source-events/{source_event_id}/purge")
+    async def source_purge_route(source_event_id: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path=f"/v1/source-events/{source_event_id}/purge",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/platforms/{platform}/push-candidates/{candidate_id}/send")
+    async def platform_push_send_route(
+        platform: str,
+        candidate_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path=f"/v1/platforms/{platform}/push-candidates/{candidate_id}/send",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
         )
         return JSONResponse(status_code=response.status_code, content=response.body)
 
@@ -126,6 +229,25 @@ def _pipeline_readiness_service(value: object) -> PipelineReadinessService:
     if isinstance(value, PipelineReadinessService):
         return value
     raise TypeError("pipeline readiness service is not configured")
+
+
+def _control_http_services(
+    state: Mapping[str, object],
+) -> ControlHttpServices:
+    control = state.get("control")
+    scope_resolver = state.get("control_scope_resolver")
+    source_redaction = state.get("source_redaction")
+    if not isinstance(control, ControlService):
+        raise TypeError("control service is not configured")
+    if not isinstance(scope_resolver, ScopeResolver):
+        raise TypeError("control scope resolver is not configured")
+    if source_redaction is not None and not isinstance(source_redaction, SourceRedactionService):
+        raise TypeError("source redaction service has invalid type")
+    return ControlHttpServices(
+        control=control,
+        scope_resolver=scope_resolver,
+        source_redaction=source_redaction,
+    )
 
 
 app = create_app()
