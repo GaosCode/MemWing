@@ -413,6 +413,7 @@ def test_cli_memwing_openclaw_plugin_retrieval_uses_memwing_search_with_prefligh
 def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp_path: Path) -> None:
     class FakeMemWingAdapter:
         def __init__(self, _config):
+            self.config = _config
             self.records = [{"endpoint": "/v1/openclaw/events/ingest", "status_code": 202}]
 
         def health(self):
@@ -497,6 +498,12 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
 
+        def drain_benchmark_pipeline(self, scope, *, max_rounds, batch_size):
+            self.records.append(
+                {"kind": "benchmark_drain", "endpoint": "/v1/memwing/admin/benchmark/drain"}
+            )
+            return {"drained": True}
+
         def pipeline_await(self, *, scope, source_event_ids, profile):
             assert scope.payload() == {
                 "project_memory_space_id": "project_001",
@@ -504,14 +511,15 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
                 "thread_id": "benchmark_thread",
             }
             assert source_event_ids == ["source_event_001"]
-            assert profile == "write-evaluate"
+            assert profile == "full-derived"
             self.records.append(
                 {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
             )
             return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
 
-        def memory_search_details(self, question, *, max_results):
-            assert max_results == 5
+        def memory_search_details(self, question, *, max_results, scope=None):
+            assert max_results == 20
+            assert scope is not None
             self.records.append(
                 {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
             )
@@ -521,7 +529,14 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
                     {
                         "rank": 1,
                         "score": 0.91,
-                        "source": "memory_item",
+                        "source": "graph_backend",
+                        "snippet": question,
+                        "source_event_ids": [],
+                    },
+                    {
+                        "rank": 2,
+                        "score": 0.9,
+                        "source": "evidence_index",
                         "snippet": question,
                         "source_event_ids": ["source_event_001"],
                     }
@@ -617,19 +632,34 @@ def test_cli_memwing_write_evaluate_can_select_explicit_ingest_run(
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
 
+        def drain_benchmark_pipeline(self, scope, *, max_rounds, batch_size):
+            self.records.append(
+                {"kind": "benchmark_drain", "endpoint": "/v1/memwing/admin/benchmark/drain"}
+            )
+            return {"drained": True}
+
         def pipeline_await(self, *, scope, source_event_ids, profile):
             assert source_event_ids == ["source_event_old"]
-            assert profile == "write-evaluate"
+            assert profile == "full-derived"
             self.records.append(
                 {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
             )
             return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
 
-        def memory_search_details(self, question, *, max_results):
-            assert max_results == 5
+        def memory_search_details(self, question, *, max_results, scope=None):
+            assert max_results == 20
+            assert scope is not None
             return MemorySearchDetails(
                 contexts=[f"MemWing memory: {question}"],
-                results=[{"rank": 1, "source_event_ids": ["source_event_old"], "snippet": question}],
+                results=[
+                    {"rank": 1, "source": "graph_backend", "source_event_ids": [], "snippet": question},
+                    {
+                        "rank": 2,
+                        "source": "evidence_index",
+                        "source_event_ids": ["source_event_old"],
+                        "snippet": question,
+                    },
+                ],
                 latency_ms=7,
                 raw={"trace_id": "trace_search", "results": []},
             )
@@ -1100,16 +1130,23 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
 
+        def drain_benchmark_pipeline(self, scope, *, max_rounds, batch_size):
+            self.records.append(
+                {"kind": "benchmark_drain", "endpoint": "/v1/memwing/admin/benchmark/drain"}
+            )
+            return {"drained": True}
+
         def pipeline_await(self, *, scope, source_event_ids, profile):
             assert source_event_ids == ["source_event_001"]
-            assert profile == "write-evaluate"
+            assert profile == "full-derived"
             self.records.append(
                 {"kind": "pipeline_await", "endpoint": "/v1/memwing/pipeline/await", "status_code": 200}
             )
             return {"ready": True, "profile": profile, "derived": {"memory_items": {"count": 1}}}
 
-        def memory_search_details(self, question, *, max_results):
-            assert max_results == 5
+        def memory_search_details(self, question, *, max_results, scope=None):
+            assert max_results == 20
+            assert scope is not None
             self.records.append(
                 {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
             )
@@ -1119,7 +1156,14 @@ def test_cli_memwing_openclaw_plugin_evaluate_uses_memwing_search_not_files(
                     {
                         "rank": 1,
                         "score": 0.91,
-                        "source": "memory_item",
+                        "source": "graph_backend",
+                        "snippet": question,
+                        "source_event_ids": [],
+                    },
+                    {
+                        "rank": 2,
+                        "score": 0.9,
+                        "source": "evidence_index",
                         "snippet": question,
                         "source_event_ids": ["source_event_001"],
                     }
@@ -1394,6 +1438,10 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
                 for message in case.seed_messages
             ]
 
+        def drain_benchmark_pipeline(self, scope, *, max_rounds, batch_size):
+            self.calls.append(("drain", scope.project_memory_space_id, max_rounds, batch_size))
+            return {"drained": True}
+
         def pipeline_await(
             self,
             *,
@@ -1422,7 +1470,14 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
             self.calls.append(("search", question, scope.project_memory_space_id))
             return MemorySearchDetails(
                 contexts=[f"context for {source_event_id}"],
-                results=[{"content": "hit", "source_event_ids": [source_event_id]}],
+                results=[
+                    {"content": "graph hit", "source": "graph_backend", "source_event_ids": []},
+                    {
+                        "content": "evidence hit",
+                        "source": "evidence_index",
+                        "source_event_ids": [source_event_id],
+                    },
+                ],
                 latency_ms=5,
                 raw={"results": [{"source_event_ids": [source_event_id]}]},
             )
@@ -1489,20 +1544,22 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
     assert adapter.calls == [
         ("cleanup", "benchmark:run1:bs001"),
         ("ingest", "bs001", "run1", "benchmark:run1:bs001"),
+        ("drain", "benchmark:run1:bs001", 50, 10),
         (
             "await",
             "benchmark:run1:bs001",
             ("source_event:bs001_s1",),
-            "retrieval-evaluate",
+            "full-derived",
         ),
         ("search", "云帆负责人是谁？", "benchmark:run1:bs001"),
         ("cleanup", "benchmark:run1:lt001"),
         ("ingest", "lt001", "run1", "benchmark:run1:lt001"),
+        ("drain", "benchmark:run1:lt001", 50, 10),
         (
             "await",
             "benchmark:run1:lt001",
             ("source_event:lt001_s1",),
-            "retrieval-evaluate",
+            "full-derived",
         ),
         ("search", "青石项目验收人是谁？", "benchmark:run1:lt001"),
     ]

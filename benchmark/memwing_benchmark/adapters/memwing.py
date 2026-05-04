@@ -239,17 +239,25 @@ class MemWingAdapter:
         self,
         scope: MemWingCaseScope,
         *,
+        max_rounds: int | None = None,
+        batch_size: int | None = None,
         outbox_job_types: list[str] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"scope": scope.payload()}
         request_fields = ["scope"]
+        if max_rounds is not None:
+            payload["max_rounds"] = max_rounds
+            request_fields.append("max_rounds")
+        if batch_size is not None:
+            payload["batch_size"] = batch_size
+            request_fields.append("batch_size")
         if outbox_job_types is not None:
             payload["outbox_job_types"] = outbox_job_types
             request_fields.append("outbox_job_types")
         body, _latency_ms = self._post_json(
             endpoint=DRAIN_BENCHMARK_PIPELINE_ENDPOINT,
             payload=payload,
-            timeout_seconds=self.config.ingest_timeout_seconds,
+            timeout_seconds=self.config.poll_timeout_seconds + self.config.search_timeout_seconds,
             request_fields=request_fields,
         )
         return body

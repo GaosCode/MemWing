@@ -64,6 +64,8 @@ MEMWING_PLUGIN_ENABLED_CONFIG_PATH = "plugins.entries.memwing.enabled"
 MEMWING_PLUGIN_CONVERSATION_ACCESS_CONFIG_PATH = (
     "plugins.entries.memwing.hooks.allowConversationAccess"
 )
+MEMWING_FULL_DERIVED_READINESS_PROFILE = "full-derived"
+MEMWING_REAL_SEARCH_MAX_RESULTS = 20
 
 
 @app.callback(invoke_without_command=True)
@@ -622,6 +624,7 @@ def _memwing_pipeline_run_config(*, pg_preseed_per_case: bool) -> dict[str, str]
         return {}
     return {
         "memory_pipeline": "real_ingest_per_case",
+        "readiness_profile": MEMWING_FULL_DERIVED_READINESS_PROFILE,
         "graph_backend": "graphiti",
         "evidence_backend": "qdrant",
     }
@@ -1365,16 +1368,30 @@ def _run_memwing_real_ingest_retrieval_case(
         case_id=case.case_id,
         expected_source_event_count=len(expected_source_event_ids),
     )
+    drain = adapter.drain_benchmark_pipeline(
+        scope,
+        max_rounds=50,
+        batch_size=max(10, len(expected_source_event_ids)),
+    )
+    raw_records.setdefault("memwing_pipeline_drains", []).append(
+        {
+            "case_id": case.case_id,
+            "scope": scope.payload(),
+            "response": drain,
+        }
+    )
+    if drain.get("drained") is not True:
+        raise BenchmarkError(f"MemWing pipeline drain did not finish: case_id={case.case_id}")
     readiness = adapter.pipeline_await(
         scope=scope,
         source_event_ids=expected_source_event_ids,
-        profile="retrieval-evaluate",
+        profile=MEMWING_FULL_DERIVED_READINESS_PROFILE,
     )
     raw_records.setdefault("memwing_pipeline_awaits", []).append(
         {
             "case_id": case.case_id,
             "scope": scope.payload(),
-            "profile": "retrieval-evaluate",
+            "profile": MEMWING_FULL_DERIVED_READINESS_PROFILE,
             "response": readiness,
         }
     )
@@ -1389,7 +1406,11 @@ def _run_memwing_real_ingest_retrieval_case(
             case_id=case.case_id,
             probe_id=probe.id,
         )
-        details = adapter.memory_search_details(probe.question, max_results=5, scope=scope)
+        details = adapter.memory_search_details(
+            probe.question,
+            max_results=MEMWING_REAL_SEARCH_MAX_RESULTS,
+            scope=scope,
+        )
         _debug(
             raw_records,
             "MemWing benchmark search 完成",
@@ -1399,6 +1420,11 @@ def _run_memwing_real_ingest_retrieval_case(
             latency_ms=details.latency_ms,
         )
         search_raw = _memory_search_raw(MemorySearchOutcome(details=details))
+        _require_memwing_real_search_components(
+            search_raw=search_raw,
+            case_id=case.case_id,
+            probe_id=probe.id,
+        )
         raw_records.setdefault("memory_searches", []).append(
             {
                 "mode": "memwing_real_ingest_retrieval",
@@ -1691,8 +1717,18 @@ def _run_memwing_write_evaluate_batch(
         search_latencies: list[int] = []
         search_errors: list[str] = []
         for item in case.expected_memory_items:
-            search = _safe_memory_search(adapter, item.fact)
+            search = _safe_memory_search(
+                adapter,
+                item.fact,
+                max_results=MEMWING_REAL_SEARCH_MAX_RESULTS,
+                scope=ingest_record.scope,
+            )
             search_raw = _memory_search_raw(search)
+            _require_memwing_real_search_components(
+                search_raw=search_raw,
+                case_id=case.case_id,
+                probe_id=item.id,
+            )
             if search.error:
                 search_errors.append(search.error)
             search_latencies.append(search.details.latency_ms)
@@ -1796,17 +1832,34 @@ def _await_memwing_write_evaluate_readiness(
         ingest_run_id=ingest_record.run_id,
         ingest_selection=ingest_record.selection,
     )
+    drain = adapter.drain_benchmark_pipeline(
+        ingest_record.scope,
+        max_rounds=50,
+        batch_size=max(10, len(ingest_record.source_event_ids)),
+    )
+    raw_records.setdefault("memwing_pipeline_drains", []).append(
+        {
+            "case_id": case.case_id,
+            "scope": ingest_record.scope.payload(),
+            "ingest_run_id": ingest_record.run_id,
+            "response": drain,
+        }
+    )
+    if drain.get("drained") is not True:
+        raise BenchmarkError(
+            f"MemWing write-evaluate pipeline drain did not finish: case_id={case.case_id}"
+        )
     readiness = adapter.pipeline_await(
         scope=ingest_record.scope,
         source_event_ids=ingest_record.source_event_ids,
-        profile="write-evaluate",
+        profile=MEMWING_FULL_DERIVED_READINESS_PROFILE,
     )
     raw_records.setdefault("memwing_pipeline_awaits", []).append(
         {
             "case_id": case.case_id,
             "scope": ingest_record.scope.payload(),
             "source_event_ids": ingest_record.source_event_ids,
-            "profile": "write-evaluate",
+            "profile": MEMWING_FULL_DERIVED_READINESS_PROFILE,
             "ingest_run_id": ingest_record.run_id,
             "ingest_run_dir": str(ingest_record.run_dir),
             "ingest_selection": ingest_record.selection,
@@ -3393,9 +3446,21 @@ def _noise_memories(case: BenchmarkCase) -> list[GoldMemory]:
     ]
 
 
-def _safe_memory_search(adapter: Any, question: str) -> MemorySearchOutcome:
+def _safe_memory_search(
+    adapter: Any,
+    question: str,
+    *,
+    max_results: int = 5,
+    scope: MemWingCaseScope | None = None,
+) -> MemorySearchOutcome:
     try:
-        return MemorySearchOutcome(details=adapter.memory_search_details(question, max_results=5))
+        if scope is None:
+            return MemorySearchOutcome(
+                details=adapter.memory_search_details(question, max_results=max_results)
+            )
+        return MemorySearchOutcome(
+            details=adapter.memory_search_details(question, max_results=max_results, scope=scope)
+        )
     except Exception as exc:
         return MemorySearchOutcome(
             details=MemorySearchDetails(contexts=[], results=[], latency_ms=0, raw=None),
@@ -3431,6 +3496,39 @@ def _source_mix(results: list[dict[str, Any]]) -> dict[str, int]:
             source = "unknown"
         mix[source] = mix.get(source, 0) + 1
     return mix
+
+
+def _require_memwing_real_search_components(
+    *,
+    search_raw: dict[str, Any],
+    case_id: str,
+    probe_id: str,
+) -> None:
+    error = search_raw.get("memory_search_error")
+    if isinstance(error, str) and error:
+        raise BenchmarkError(
+            "MemWing real pipeline search failed: "
+            f"case_id={case_id} probe_id={probe_id} error={error}"
+        )
+    warnings = search_raw.get("memory_search_warnings")
+    if isinstance(warnings, list) and warnings:
+        raise BenchmarkError(
+            "MemWing real pipeline search returned backend warnings: "
+            f"case_id={case_id} probe_id={probe_id}"
+        )
+    source_mix = search_raw.get("memory_search_source_mix")
+    if not isinstance(source_mix, dict):
+        source_mix = {}
+    derived_hits = sum(
+        source_mix.get(source, 0)
+        for source in ("graph_backend", "evidence_index")
+        if isinstance(source_mix.get(source), int)
+    )
+    if derived_hits <= 0:
+        raise BenchmarkError(
+            "MemWing real pipeline search did not return graph or evidence results: "
+            f"case_id={case_id} probe_id={probe_id}"
+        )
 
 
 def _int_dict(value: object) -> dict[str, int]:

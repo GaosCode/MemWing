@@ -8,6 +8,8 @@ import math
 import os
 import signal
 import shlex
+import sys
+import tempfile
 from typing import Literal, Protocol
 
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
@@ -273,38 +275,71 @@ class SubprocessOpenClawRuntimeTransport:
         timeout_seconds: float,
     ) -> OpenClawCommandResult:
         process_env = None if env is None else {**os.environ, **env}
+        _debug_log(f"OpenClaw subprocess start: cmd={command[0]} cwd={cwd} timeout={timeout_seconds}s")
+
+        def _run_sync() -> tuple[int, bytes, bytes]:
+            import subprocess as _subprocess
+
+            # Use a temp file for stdout to avoid pipe hang on macOS Python 3.13
+            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+                stdout_path = tmp.name
+
+            try:
+                with open(stdout_path, "wb") as out_fh:
+                    proc = _subprocess.Popen(
+                        tuple(command),
+                        cwd=cwd,
+                        env=process_env,
+                        stdin=_subprocess.DEVNULL,
+                        stdout=out_fh,
+                        stderr=_subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    _debug_log(f"OpenClaw pid={proc.pid} waiting (max {timeout_seconds:.0f}s)...")
+                    try:
+                        proc.wait(timeout=timeout_seconds)
+                    except _subprocess.TimeoutExpired:
+                        _debug_log(f"OpenClaw pid={proc.pid} TIMEOUT, killing...")
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            proc.kill()
+                        proc.wait()
+                        raise LLMProviderError("OpenClaw runtime model run timed out")
+
+                with open(stdout_path, "rb") as in_fh:
+                    stdout_bytes = in_fh.read()
+            finally:
+                try:
+                    os.unlink(stdout_path)
+                except OSError:
+                    pass
+
+            _debug_log(f"OpenClaw pid={proc.pid} done rc={proc.returncode} out_len={len(stdout_bytes)}")
+            return proc.returncode, stdout_bytes, b""
+
         try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                env=process_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
+            returncode, stdout_bytes, stderr_bytes = await asyncio.to_thread(_run_sync)
+        except LLMProviderError:
+            raise
         except OSError as exc:
+            _debug_log(f"OpenClaw OSError: {exc}")
             raise LLMProviderError("OpenClaw runtime command failed to start") from exc
 
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout_seconds,
-            )
-        except TimeoutError as exc:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError:
-                process.kill()
-            await process.communicate()
-            raise LLMProviderError("OpenClaw runtime model run timed out") from exc
-
         return OpenClawCommandResult(
-            returncode=process.returncode,
+            returncode=returncode,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
         )
+
+
+_DEBUG_OPENCLAW = os.environ.get("MEMWING_DEBUG_OPENCLAW") == "1"
+
+
+def _debug_log(msg: str) -> None:
+    if not _DEBUG_OPENCLAW:
+        return
+    print(f"[openclaw-runtime] {msg}", file=sys.stderr, flush=True)
 
 
 def _validate_runtime_config(config: OpenClawRuntimeConfig) -> None:

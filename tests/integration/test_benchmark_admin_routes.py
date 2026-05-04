@@ -108,6 +108,8 @@ def test_benchmark_admin_cleanup_ingest_drain_readiness_route(monkeypatch) -> No
     assert drain.json()["outbox"]["succeeded"] == 4
     assert drain.json()["evidence_indexed"]["source_events"] == 1
     assert drain.json()["pending"] == {"outbox_jobs": 0, "graph_write_jobs": 0}
+    assert drain.json()["drained"] is True
+    assert drain.json()["iterations"] >= 1
     assert drain.json()["trace_id"].startswith("benchmark_drain:")
     assert legacy_drain.status_code == 400
     assert readiness.status_code == 200

@@ -237,5 +237,7 @@ def _drain_body(result: BenchmarkDrainResult, scope: BenchmarkScope) -> JsonObje
             "outbox_jobs": result.pending_outbox_jobs,
             "graph_write_jobs": result.pending_graph_write_jobs,
         },
+        "iterations": result.iterations,
+        "drained": result.drained,
         "trace_id": f"benchmark_drain:{scope.project_memory_space_id}",
     }

@@ -41,6 +41,7 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
     assert [call[0] for call in adapter.calls] == [
         "cleanup_benchmark_scope",
         "ingest_seed_messages",
+        "drain_benchmark_pipeline",
         "pipeline_await",
         "memory_search_details",
     ]
@@ -49,16 +50,15 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
     assert raw_records["memwing_ingest"]
     assert raw_records["memwing_pipeline_awaits"]
     assert raw_records["memory_searches"][0]["mode"] == "memwing_real_ingest_retrieval"
-    assert results[0].retrieval_source_mix == {"evidence_index": 1}
-    assert results[0].memory_search_warnings == [
-        {"branch": "graph_backend", "reason_code": "timeout"}
-    ]
+    assert results[0].retrieval_source_mix == {"evidence_index": 1, "graph_backend": 1}
+    assert results[0].memory_search_warnings == []
     assert results[0].readiness_summary["ready"] is True
 
 
 def test_real_ingest_run_config_records_backend_semantics() -> None:
     assert _memwing_pipeline_run_config(pg_preseed_per_case=True) == {
         "memory_pipeline": "real_ingest_per_case",
+        "readiness_profile": "full-derived",
         "graph_backend": "graphiti",
         "evidence_backend": "qdrant",
     }
@@ -95,6 +95,7 @@ def test_real_ingest_pipeline_fails_when_readiness_times_out() -> None:
     assert [call[0] for call in adapter.calls] == [
         "cleanup_benchmark_scope",
         "ingest_seed_messages",
+        "drain_benchmark_pipeline",
         "pipeline_await",
     ]
 
@@ -126,6 +127,10 @@ class RecordingAdapter:
             for message in case.seed_messages
         ]
 
+    def drain_benchmark_pipeline(self, scope, *, max_rounds, batch_size):
+        self.calls.append(("drain_benchmark_pipeline", scope.project_memory_space_id, max_rounds, batch_size))
+        return {"drained": True}
+
     def pipeline_await(
         self,
         *,
@@ -155,13 +160,19 @@ class RecordingAdapter:
             results=[
                 {
                     "rank": 1,
+                    "source": "graph_backend",
+                    "snippet": "云帆看板改造项目负责人确定为沈南。",
+                    "source_event_ids": [],
+                },
+                {
+                    "rank": 2,
                     "source": "evidence_index",
                     "snippet": "云帆看板改造项目负责人确定为沈南。",
                     "source_event_ids": ["source_event:bs001_s1"],
-                }
+                },
             ],
             latency_ms=5,
-            raw={"results": [], "warnings": [{"branch": "graph_backend", "reason_code": "timeout"}]},
+            raw={"results": [], "warnings": []},
         )
 
 
