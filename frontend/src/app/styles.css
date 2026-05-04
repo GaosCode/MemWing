@@ -558,10 +558,10 @@ kbd {
 }
 
 .inspector-floating-handle {
-  position: absolute;
+  position: fixed;
   right: 12px;
-  top: var(--inspector-handle-top, 58%);
-  z-index: 12;
+  top: 50%;
+  z-index: 70;
   width: 44px;
   height: 132px;
   border: 1px solid rgba(0, 118, 72, 0.24);
@@ -573,8 +573,9 @@ kbd {
   cursor: grab;
   display: grid;
   place-items: center;
-  transform: translateY(-50%);
-  transition: border-color 140ms ease-out, background 140ms ease-out, box-shadow 140ms ease-out, transform 140ms ease-out;
+  transform: var(--inspector-handle-transform, translateY(-50%));
+  transition: border-color 140ms ease-out, background 140ms ease-out, box-shadow 140ms ease-out;
+  touch-action: none;
   user-select: none;
 }
 
@@ -593,7 +594,7 @@ kbd {
   background: rgba(255, 255, 255, 0.74);
   box-shadow: 0 22px 56px rgba(32, 35, 31, 0.18);
   outline: 0;
-  transform: translateY(-50%) translateX(-2px);
+  transform: var(--inspector-handle-hover-transform, translateY(-50%) translateX(-2px));
 }
 
 .inspector-floating-handle:active {

@@ -49,17 +49,43 @@ export function SplitSurface({
   onReopenInspector?: () => void;
 }) {
   const { dictionary } = useI18n();
-  const surfaceRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const handleDragState = useRef<{ startX: number; startY: number; startTop: number; moved: boolean } | null>(null);
-  const [handleTop, setHandleTop] = useState(58);
+  const handleRef = useRef<HTMLDivElement>(null);
+  const [handleTopPx, setHandleTopPx] = useState<number | null>(null);
   const clampedWidth = clampInspectorWidth(inspectorWidth);
   const surfaceStyle = {
     "--inspector-panel-width": `${clampedWidth}px`,
   } as CSSProperties;
-  const handleStyle = {
-    "--inspector-handle-top": `${handleTop}%`,
-  } as CSSProperties;
+  const handleStyle = (handleTopPx === null
+    ? { top: "50%" }
+    : {
+        top: `${handleTopPx}px`,
+        "--inspector-handle-transform": "none",
+        "--inspector-handle-hover-transform": "translateX(-2px)",
+      }) as CSSProperties;
+
+  useEffect(() => {
+    if (handleTopPx === null) {
+      return undefined;
+    }
+
+    function clampHandleToViewport() {
+      const handle = handleRef.current;
+      if (!handle) {
+        return;
+      }
+
+      const handleHeight = handle.getBoundingClientRect().height;
+      setHandleTopPx((currentTop) => (
+        currentTop === null ? currentTop : clampHandleTop(currentTop, handleHeight)
+      ));
+    }
+
+    clampHandleToViewport();
+    window.addEventListener("resize", clampHandleToViewport);
+    return () => window.removeEventListener("resize", clampHandleToViewport);
+  }, [handleTopPx, inspectorOpen]);
 
   function changeWidth(nextWidth: number) {
     onInspectorWidthChange?.(clampInspectorWidth(nextWidth));
@@ -97,39 +123,51 @@ export function SplitSurface({
     }
   }
 
-  function changeHandleTop(nextTop: number) {
-    setHandleTop(Math.min(84, Math.max(18, nextTop)));
+  function clampHandleTop(top: number, handleHeight: number) {
+    const maxTop = Math.max(0, window.innerHeight - handleHeight);
+    return Math.min(maxTop, Math.max(0, top));
+  }
+
+  function moveHandleBy(deltaY: number) {
+    const handle = handleRef.current;
+    if (!handle) {
+      return;
+    }
+
+    const rect = handle.getBoundingClientRect();
+    setHandleTopPx(clampHandleTop(rect.top + deltaY, rect.height));
   }
 
   function handleHandlePointerDown(event: PointerEvent<HTMLDivElement>) {
-    handleDragState.current = { startX: event.clientX, startY: event.clientY, startTop: handleTop, moved: false };
+    const rect = event.currentTarget.getBoundingClientRect();
+    handleDragState.current = { startX: event.clientX, startY: event.clientY, startTop: rect.top, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
 
   function handleHandlePointerMove(event: PointerEvent<HTMLDivElement>) {
     const currentDrag = handleDragState.current;
-    const surface = surfaceRef.current;
-    if (!currentDrag || !surface) {
+    if (!currentDrag) {
       return;
     }
 
-    const surfaceHeight = surface.getBoundingClientRect().height || 1;
-    const delta = ((event.clientY - currentDrag.startY) / surfaceHeight) * 100;
     const movedDistance = Math.hypot(event.clientX - currentDrag.startX, event.clientY - currentDrag.startY);
-    if (movedDistance > 4) {
-      currentDrag.moved = true;
+    if (movedDistance <= 4 && !currentDrag.moved) {
+      return;
     }
-    changeHandleTop(currentDrag.startTop + delta);
+
+    currentDrag.moved = true;
+    const handleHeight = event.currentTarget.getBoundingClientRect().height;
+    setHandleTopPx(clampHandleTop(currentDrag.startTop + event.clientY - currentDrag.startY, handleHeight));
   }
 
-  function clearHandleDrag(event: PointerEvent<HTMLDivElement>) {
+  function clearHandleDrag(event: PointerEvent<HTMLDivElement>, shouldOpenOnClick = true) {
     const currentDrag = handleDragState.current;
     handleDragState.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!currentDrag?.moved) {
+    if (shouldOpenOnClick && !currentDrag?.moved) {
       onReopenInspector?.();
     }
   }
@@ -140,17 +178,17 @@ export function SplitSurface({
       event.preventDefault();
     }
     if (event.key === "ArrowUp") {
-      changeHandleTop(handleTop - 5);
+      moveHandleBy(-16);
       event.preventDefault();
     }
     if (event.key === "ArrowDown") {
-      changeHandleTop(handleTop + 5);
+      moveHandleBy(16);
       event.preventDefault();
     }
   }
 
   return (
-    <div ref={surfaceRef} className={`split-surface split-surface--${inspectorOpen ? "open" : "closed"}`} style={surfaceStyle}>
+    <div className={`split-surface split-surface--${inspectorOpen ? "open" : "closed"}`} style={surfaceStyle}>
       <section className="work-area">{main}</section>
       {inspectorOpen ? (
         <>
@@ -175,6 +213,7 @@ export function SplitSurface({
         </>
       ) : (
         <div
+          ref={handleRef}
           className="inspector-floating-handle"
           role="button"
           aria-label={dictionary.common.openInspector}
@@ -185,7 +224,7 @@ export function SplitSurface({
           onPointerDown={handleHandlePointerDown}
           onPointerMove={handleHandlePointerMove}
           onPointerUp={clearHandleDrag}
-          onPointerCancel={clearHandleDrag}
+          onPointerCancel={(event) => clearHandleDrag(event, false)}
         >
           <span>{dictionary.common.inspector}</span>
         </div>
