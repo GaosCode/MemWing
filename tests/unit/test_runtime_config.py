@@ -7,7 +7,9 @@ from memwing.api.runtime_config import (
     database_url_from_env,
     evidence_backend_from_env,
     evidence_vector_size_from_env,
+    feishu_push_config_from_env,
     graph_backend_from_env,
+    graph_write_timeout_seconds_from_env,
     graphiti_neo4j_password_from_env,
     qdrant_collection_from_env,
     qdrant_url_from_env,
@@ -20,6 +22,7 @@ def test_runtime_config_reads_graph_and_evidence_defaults() -> None:
     assert qdrant_url_from_env({}) == "http://127.0.0.1:6333"
     assert qdrant_collection_from_env({}) == "memwing_evidence"
     assert evidence_vector_size_from_env({}) == 1536
+    assert graph_write_timeout_seconds_from_env({}) == 180
     assert graphiti_neo4j_password_from_env({"MEMWING_GRAPHITI_NEO4J_PASSWORD": "   "}) is None
 
 
@@ -51,10 +54,66 @@ def test_runtime_config_rejects_invalid_evidence_vector_size(raw_value: str) -> 
         evidence_vector_size_from_env({"MEMWING_EVIDENCE_VECTOR_SIZE": raw_value})
 
 
+@pytest.mark.parametrize("raw_value", ["0", "-1", "bad"])
+def test_runtime_config_rejects_invalid_graph_write_timeout(raw_value: str) -> None:
+    with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS"):
+        graph_write_timeout_seconds_from_env({"MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS": raw_value})
+
+
 def test_benchmark_admin_enabled_requires_literal_true() -> None:
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "true"}) is True
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "1"}) is False
     assert benchmark_admin_enabled_from_env({}) is False
+
+
+def test_feishu_push_config_requires_explicit_enablement() -> None:
+    assert feishu_push_config_from_env({}) is None
+    assert feishu_push_config_from_env({"MEMWING_FEISHU_PUSH_ENABLED": "1"}) is None
+
+
+def test_feishu_push_config_reads_required_values() -> None:
+    config = feishu_push_config_from_env(
+        {
+            "MEMWING_FEISHU_PUSH_ENABLED": "true",
+            "MEMWING_FEISHU_APP_ID": " cli_001 ",
+            "MEMWING_FEISHU_APP_SECRET": " secret ",
+            "MEMWING_FEISHU_RECEIVE_ID_TYPE": " chat_id ",
+            "MEMWING_FEISHU_API_BASE_URL": " https://open.feishu.cn/open-apis/ ",
+            "MEMWING_FEISHU_TIMEOUT_SECONDS": " 5 ",
+        }
+    )
+
+    assert config is not None
+    assert config.app_id == "cli_001"
+    assert config.app_secret == "secret"
+    assert config.receive_id_type == "chat_id"
+    assert config.api_base_url == "https://open.feishu.cn/open-apis/"
+    assert config.timeout_seconds == 5
+
+
+def test_feishu_push_config_rejects_missing_or_invalid_values() -> None:
+    with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_FEISHU_APP_ID"):
+        feishu_push_config_from_env({"MEMWING_FEISHU_PUSH_ENABLED": "true"})
+
+    with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_FEISHU_RECEIVE_ID_TYPE"):
+        feishu_push_config_from_env(
+            {
+                "MEMWING_FEISHU_PUSH_ENABLED": "true",
+                "MEMWING_FEISHU_APP_ID": "cli_001",
+                "MEMWING_FEISHU_APP_SECRET": "secret",
+                "MEMWING_FEISHU_RECEIVE_ID_TYPE": "department_id",
+            }
+        )
+
+    with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_FEISHU_TIMEOUT_SECONDS"):
+        feishu_push_config_from_env(
+            {
+                "MEMWING_FEISHU_PUSH_ENABLED": "true",
+                "MEMWING_FEISHU_APP_ID": "cli_001",
+                "MEMWING_FEISHU_APP_SECRET": "secret",
+                "MEMWING_FEISHU_TIMEOUT_SECONDS": "0",
+            }
+        )
 
 
 def test_load_app_env_reads_dotenv_from_current_working_tree(tmp_path, monkeypatch) -> None:

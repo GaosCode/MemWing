@@ -519,6 +519,16 @@ class MemoryGraphLinkRepositoryPort(Protocol):
     async def list_by_memory(self, memory_id: str) -> tuple[MemoryGraphLink, ...]:
         ...
 
+    async def list_by_backend_objects(
+        self,
+        *,
+        project_memory_space_id: str,
+        backend: str,
+        backend_object_type: str,
+        backend_object_ids: tuple[str, ...],
+    ) -> tuple[MemoryGraphLink, ...]:
+        ...
+
 
 class ForgettingReviewCandidateRepositoryPort(Protocol):
     async def upsert(

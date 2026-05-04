@@ -258,6 +258,35 @@ class PostgresMemoryGraphLinkRepository:
         )
         return tuple(memory_graph_link_from_row(row) for row in rows)
 
+    async def list_by_backend_objects(
+        self,
+        *,
+        project_memory_space_id: str,
+        backend: str,
+        backend_object_type: str,
+        backend_object_ids: tuple[str, ...],
+    ) -> tuple[MemoryGraphLink, ...]:
+        if not backend_object_ids:
+            return ()
+        rows = await self._executor.fetch(
+            """
+            SELECT *
+            FROM memory_graph_links
+            WHERE project_memory_space_id = %(project_memory_space_id)s
+              AND backend = %(backend)s
+              AND backend_object_type = %(backend_object_type)s
+              AND backend_object_id = ANY(%(backend_object_ids)s)
+            ORDER BY backend_object_id, source_event_id, id
+            """,
+            {
+                "project_memory_space_id": project_memory_space_id,
+                "backend": backend,
+                "backend_object_type": backend_object_type,
+                "backend_object_ids": list(backend_object_ids),
+            },
+        )
+        return tuple(memory_graph_link_from_row(row) for row in rows)
+
 
 def _graph_write_job_params(job: GraphWriteJob) -> dict[str, object]:
     return {

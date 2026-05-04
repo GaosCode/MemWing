@@ -135,6 +135,7 @@ def current_truth_to_access_result(
     *,
     limit: int,
     cursor: str | None = None,
+    sort: str = "authority",
 ) -> MemoryAccessSearchResult:
     items = (
         *current.current_facts,
@@ -143,6 +144,8 @@ def current_truth_to_access_result(
     )
     if not items:
         items = current.raw_events
+    if sort == "relevance":
+        items = _sort_scored_results_for_relevance(items)
     results, next_cursor = paginate_items(
         tuple(memory_search_item_to_access_item(item) for item in items),
         limit=limit,
@@ -162,6 +165,27 @@ def current_truth_to_access_result(
             for warning in current.warnings
         ),
     )
+
+
+def _sort_scored_results_for_relevance(
+    items: tuple[MemorySearchResultItem, ...],
+) -> tuple[MemorySearchResultItem, ...]:
+    return tuple(
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda pair: _relevance_sort_key(pair[0], pair[1]),
+        )
+    )
+
+
+def _relevance_sort_key(
+    index: int,
+    item: MemorySearchResultItem,
+) -> tuple[int, float, int]:
+    if item.score is None:
+        return (1, 0, index)
+    return (0, -item.score, index)
 
 
 async def search_graph_history(

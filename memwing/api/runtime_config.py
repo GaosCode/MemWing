@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 import os
 
 from memwing.api.openclaw_mock_runtime import OpenClawMockRuntime
@@ -9,6 +10,15 @@ from memwing.ports.agent_runtime import AgentRuntimePort
 
 class OpenClawRuntimeUnavailableError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class FeishuPushConfig:
+    app_id: str
+    app_secret: str
+    receive_id_type: str
+    api_base_url: str
+    timeout_seconds: float
 
 
 def resolve_openclaw_runtime(
@@ -50,6 +60,21 @@ def graphiti_neo4j_password_from_env(env: Mapping[str, str] | None = None) -> st
     return _optional_env(env, "MEMWING_GRAPHITI_NEO4J_PASSWORD")
 
 
+def graph_write_timeout_seconds_from_env(env: Mapping[str, str] | None = None) -> float:
+    raw_value = _optional_env(env, "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS") or "180"
+    try:
+        timeout_seconds = float(raw_value)
+    except ValueError as exc:
+        raise OpenClawRuntimeUnavailableError(
+            "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS must be a positive number"
+        ) from exc
+    if timeout_seconds <= 0:
+        raise OpenClawRuntimeUnavailableError(
+            "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS must be a positive number"
+        )
+    return timeout_seconds
+
+
 def evidence_backend_from_env(env: Mapping[str, str] | None = None) -> str:
     backend = _optional_env(env, "MEMWING_EVIDENCE_BACKEND") or "disabled"
     if backend not in {"disabled", "qdrant"}:
@@ -87,6 +112,47 @@ def evidence_vector_size_from_env(env: Mapping[str, str] | None = None) -> int:
 def benchmark_admin_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
     value = _optional_env(env, "MEMWING_BENCHMARK_ADMIN_ENABLED")
     return value is not None and value.casefold() == "true"
+
+
+def feishu_push_config_from_env(env: Mapping[str, str] | None = None) -> FeishuPushConfig | None:
+    enabled = _optional_env(env, "MEMWING_FEISHU_PUSH_ENABLED")
+    if enabled is None or enabled.casefold() != "true":
+        return None
+
+    app_id = _required_env(env, "MEMWING_FEISHU_APP_ID")
+    app_secret = _required_env(env, "MEMWING_FEISHU_APP_SECRET")
+    receive_id_type = _optional_env(env, "MEMWING_FEISHU_RECEIVE_ID_TYPE") or "chat_id"
+    if receive_id_type not in {"open_id", "user_id", "union_id", "email", "chat_id"}:
+        raise OpenClawRuntimeUnavailableError(
+            "MEMWING_FEISHU_RECEIVE_ID_TYPE must be open_id, user_id, union_id, email, or chat_id"
+        )
+    timeout_seconds = _positive_float_env(env, "MEMWING_FEISHU_TIMEOUT_SECONDS", "10")
+    return FeishuPushConfig(
+        app_id=app_id,
+        app_secret=app_secret,
+        receive_id_type=receive_id_type,
+        api_base_url=_optional_env(env, "MEMWING_FEISHU_API_BASE_URL")
+        or "https://open.feishu.cn/open-apis",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _required_env(env: Mapping[str, str] | None, name: str) -> str:
+    value = _optional_env(env, name)
+    if value is None:
+        raise OpenClawRuntimeUnavailableError(f"{name} is required when Feishu push is enabled")
+    return value
+
+
+def _positive_float_env(env: Mapping[str, str] | None, name: str, default: str) -> float:
+    raw_value = _optional_env(env, name) or default
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise OpenClawRuntimeUnavailableError(f"{name} must be a positive number") from exc
+    if value <= 0:
+        raise OpenClawRuntimeUnavailableError(f"{name} must be a positive number")
+    return value
 
 
 def _optional_env(env: Mapping[str, str] | None, name: str) -> str | None:

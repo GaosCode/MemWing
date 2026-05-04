@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime
 
 from memwing.api.platform import PlatformRef, PushCandidate
+from memwing.core.types import JsonObject
 from memwing.infrastructure.platforms.feishu_connector import (
     FeishuAuditRecord,
     compute_feishu_signature,
@@ -44,6 +45,8 @@ def build_push_candidate() -> PushCandidate:
             thread_id="om_root",
             message_id=None,
         ),
+        title="Memory review",
+        kind="decision_card",
         content="Review this candidate.",
         trace_id="trace_001",
     )
@@ -102,8 +105,13 @@ class RecordingReplayProtector:
 
 class FakePushSender:
     def __init__(self) -> None:
-        self.sent: list[tuple[str, str, str]] = []
+        self.sent: list[tuple[str, JsonObject, str]] = []
 
-    def send_text(self, platform_ref: PlatformRef, content: str, trace_id: str) -> str:
-        self.sent.append((platform_ref.channel_id, content, trace_id))
+    def send_interactive_message(
+        self,
+        platform_ref: PlatformRef,
+        payload: JsonObject,
+        trace_id: str,
+    ) -> str:
+        self.sent.append((platform_ref.channel_id, payload, trace_id))
         return "sent_001"

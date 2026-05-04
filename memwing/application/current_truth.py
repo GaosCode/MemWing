@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
@@ -56,8 +57,8 @@ class CurrentTruthModule:
         graph_backend: GraphBackendPort | None = None,
         evidence_index: EvidenceIndexPort | None = None,
         now: Callable[[], datetime] | None = None,
-        graph_timeout: timedelta = timedelta(seconds=2),
-        evidence_timeout: timedelta = timedelta(seconds=2),
+        graph_timeout: timedelta = timedelta(seconds=30),
+        evidence_timeout: timedelta = timedelta(seconds=30),
         local_timeout: timedelta = timedelta(seconds=2),
     ) -> None:
         self._unit_of_work = unit_of_work
@@ -129,7 +130,53 @@ class CurrentTruthModule:
                 reason_code=failure.reason_code,
                 message=failure.safe_message,
             )
+        result = await self._attach_graph_source_event_ids(result, query.scope)
         return result, None
+
+    async def _attach_graph_source_event_ids(
+        self,
+        result: MemorySearchResult,
+        scope: EffectiveScope,
+    ) -> MemorySearchResult:
+        graph_items = tuple(item for item in result.results if item.source == "graph_backend")
+        edge_ids = tuple(
+            item.id
+            for item in graph_items
+            if item.metadata.get("backend") == "graphiti"
+            and not item.source_event_ids
+        )
+        if not edge_ids:
+            return result
+        async with self._unit_of_work.transaction() as tx:
+            links = await tx.memory_graph_links.list_by_backend_objects(
+                project_memory_space_id=scope.project_memory_space_id,
+                backend="graphiti",
+                backend_object_type="fact",
+                backend_object_ids=edge_ids,
+            )
+        source_ids_by_edge: dict[str, tuple[str, ...]] = {}
+        memory_ids_by_edge: dict[str, tuple[str, ...]] = {}
+        for edge_id in edge_ids:
+            edge_links = tuple(link for link in links if link.backend_object_id == edge_id)
+            source_ids_by_edge[edge_id] = tuple(
+                dict.fromkeys(link.source_event_id for link in edge_links)
+            )
+            memory_ids_by_edge[edge_id] = tuple(dict.fromkeys(link.memory_id for link in edge_links))
+        enriched = tuple(
+            replace(
+                item,
+                source_event_ids=source_ids_by_edge[item.id],
+                memory_item_ids=memory_ids_by_edge[item.id],
+            )
+            if item.id in source_ids_by_edge and source_ids_by_edge[item.id]
+            else item
+            for item in result.results
+        )
+        return replace(
+            result,
+            results=enriched,
+            contexts=tuple(item.text for item in enriched),
+        )
 
     async def _evidence(
         self,

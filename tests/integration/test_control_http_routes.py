@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -19,8 +19,10 @@ from memwing.core.models import (
     MemoryStatus,
     PageMemory,
     PageMemoryTopic,
+    PushCandidate,
     SourceEvent,
 )
+from memwing.core.platform import PlatformSendResult
 from memwing.core.runtime import AgentContextResult, AgentRuntimeStatusResult, RememberEventResult
 from memwing.core.scope import ProjectMemorySpace
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -103,12 +105,65 @@ def test_control_http_edits_pages_and_purges_sources() -> None:
     assert purge_response.json()["item"]["affected_memory_item_ids"] == ["memory_001"]
 
 
-def _context(store: InMemoryDataStore):
+def test_control_http_reads_source_events() -> None:
+    store = _store()
+    _seed_memory(store)
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        list_response = client.get(
+            "/v1/control/source-events",
+            params={"project_memory_space_id": "project_001", "limit": "20"},
+        )
+        detail_response = client.get(
+            "/v1/control/source-events/source_001",
+            params={"project_memory_space_id": "project_001"},
+        )
+
+    assert list_response.status_code == 200
+    assert list_response.json()["items"][0]["id"] == "source_001"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["source_event"]["content_preview"] == "Source content."
+    assert detail_response.json()["memory_item_ids"] == ["memory_001"]
+
+
+def test_control_http_sends_approved_push_candidate_to_platform() -> None:
+    store = _store()
+    connector = _RecordingPlatformConnector()
+    _seed_approved_push(store)
+    app = create_app(runtime_context_factory=_context(store, platform_connectors={"feishu": connector}))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/platforms/feishu/push-candidates/push_001/send",
+            params={"project_memory_space_id": "project_001"},
+            json=_envelope("send-push-001"),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["status"] == "sent"
+    assert connector.sent == (
+        (
+            "push_001",
+            "oc_group_001",
+            "Push content.",
+            "trace_send-push-001",
+            "Push title",
+            "decision_card",
+        ),
+    )
+
+
+def _context(
+    store: InMemoryDataStore,
+    *,
+    platform_connectors: Mapping[str, object] | None = None,
+):
     @asynccontextmanager
     async def factory() -> AsyncIterator[MemWingApiRuntimeContext]:
         yield MemWingApiRuntimeContext(
             runtime=_FakeRuntime(),
-            control=ControlService(store, now=lambda: NOW),
+            control=ControlService(store, now=lambda: NOW, platform_connectors=platform_connectors),
             control_scope_resolver=ScopeResolver(store),
             source_redaction=SourceRedactionService(store, now=lambda: NOW),
         )
@@ -145,6 +200,29 @@ def _seed_page(store: InMemoryDataStore) -> None:
     async def seed() -> None:
         async with store.transaction() as tx:
             await tx.memory_pages.upsert(_page())
+
+    asyncio.run(seed())
+
+
+def _seed_approved_push(store: InMemoryDataStore) -> None:
+    import asyncio
+
+    async def seed() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                _source_event(
+                    metadata={
+                        "source_ref": {
+                            "kind": "platform",
+                            "platform": "feishu",
+                            "tenant_id": "tenant_001",
+                            "channel_id": "oc_group_001",
+                            "thread_id": "thread_001",
+                        }
+                    }
+                )
+            )
+            await tx.push_candidates.upsert(_push_candidate())
 
     asyncio.run(seed())
 
@@ -187,7 +265,7 @@ def _memory_item() -> MemoryItem:
     )
 
 
-def _source_event() -> SourceEvent:
+def _source_event(metadata: dict[str, object] | None = None) -> SourceEvent:
     return SourceEvent(
         id="source_001",
         project_memory_space_id="project_001",
@@ -202,13 +280,36 @@ def _source_event() -> SourceEvent:
         source_url=None,
         event_time=NOW - timedelta(days=1),
         raw_payload_hash="hash_source_001",
-        metadata={},
+        metadata=metadata or {},
         purged_at=None,
         purged_by=None,
         purge_reason=None,
         purge_level="none",
         graph_backend_raw_retained=False,
         created_at=NOW - timedelta(days=1),
+    )
+
+
+def _push_candidate() -> PushCandidate:
+    return PushCandidate(
+        id="push_001",
+        project_memory_space_id="project_001",
+        group_id="group_001",
+        thread_id="thread_001",
+        shared_group_id=None,
+        type="decision_card",
+        title="Push title",
+        content="Push content.",
+        memory_item_ids=("memory_001",),
+        source_event_ids=("source_001",),
+        trigger_reason="manual_test",
+        trigger_source="memory_item",
+        priority=100,
+        expires_at=None,
+        status="approved",
+        cooldown_key="decision_card:memory_001",
+        created_at=NOW - timedelta(days=1),
+        updated_at=NOW - timedelta(days=1),
     )
 
 
@@ -242,6 +343,36 @@ def _envelope(idempotency_key: str) -> dict[str, str]:
         "idempotency_key": idempotency_key,
         "trace_id": f"trace_{idempotency_key}",
     }
+
+
+class _RecordingPlatformConnector:
+    def __init__(self) -> None:
+        self.sent: tuple[tuple[str, str, str, str, str | None, str | None], ...] = ()
+
+    async def verify_request(self, raw_request):
+        raise AssertionError("verify_request should not be called")
+
+    async def normalize_event(self, raw_event):
+        raise AssertionError("normalize_event should not be called")
+
+    async def send_candidate(self, candidate) -> PlatformSendResult:
+        self.sent = (
+            *self.sent,
+            (
+                candidate.id,
+                candidate.platform_ref.channel_id,
+                candidate.content,
+                candidate.trace_id,
+                candidate.title,
+                candidate.kind,
+            ),
+        )
+        return PlatformSendResult(
+            candidate_id=candidate.id,
+            delivered=True,
+            trace_id=candidate.trace_id,
+            provider_message_id="sent_001",
+        )
 
 
 class _FakeRuntime(AgentRuntimePort):

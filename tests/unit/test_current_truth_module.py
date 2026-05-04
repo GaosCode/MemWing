@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from memwing.application.current_truth import CurrentTruthModule
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import (
+    MemoryGraphLink,
     MemoryDisplayType,
     MemoryItem,
     MemoryRoute,
@@ -112,6 +113,46 @@ def test_current_truth_raw_event_fallback_ignores_unavailable_memory_items() -> 
 
     for item in unavailable_items:
         asyncio.run(scenario(item))
+
+
+def test_current_truth_enriches_graph_results_with_memwing_source_links() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_graph_links.upsert(
+                MemoryGraphLink(
+                    id="graph_link_001",
+                    backend="graphiti",
+                    memory_id="memory_001",
+                    source_event_id="source_001",
+                    project_memory_space_id="project_001",
+                    backend_space_id="project_001",
+                    backend_object_type="fact",
+                    backend_object_id="edge_001",
+                    link_type="fact",
+                    created_at=NOW,
+                )
+            )
+
+        result = await CurrentTruthModule(
+            store,
+            graph_backend=LinkedGraphBackend(),
+            now=lambda: NOW,
+        ).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert result.current_facts[0].id == "edge_001"
+        assert result.current_facts[0].source_event_ids == ("source_001",)
+        assert result.current_facts[0].memory_item_ids == ("memory_001",)
+
+    asyncio.run(scenario())
 
 
 def test_current_truth_branch_timeouts_return_warnings_without_empty_success_lie() -> None:
@@ -242,6 +283,36 @@ class HangingEvidenceIndex:
 
     async def search(self, query: MemorySearchQuery) -> MemorySearchResult:
         await asyncio.Event().wait()
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class LinkedGraphBackend:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
+        item = MemorySearchResultItem(
+            id="edge_001",
+            text="Skyline is current in graph.",
+            score=0.9,
+            source="graph_backend",
+            source_event_ids=(),
+            memory_item_ids=(),
+            valid_from=NOW,
+            valid_to=None,
+            metadata={"backend": "graphiti", "backend_object_type": "entity_edge"},
+        )
+        return MemorySearchResult(
+            contexts=(item.text,),
+            results=(item,),
+            next_cursor=None,
+            trace_id="graph_current",
+        )
+
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: object) -> object:
+        raise NotImplementedError
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError

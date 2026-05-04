@@ -111,6 +111,7 @@ class MemoryAccessService:
                 current,
                 limit=query.limit,
                 cursor=query.cursor,
+                sort=query.sort,
             )
             await record_recall_events(
                 self._unit_of_work,

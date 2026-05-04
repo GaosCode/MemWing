@@ -341,6 +341,26 @@ class InMemoryMemoryGraphLinkRepository:
             if link.memory_id == memory_id
         )
 
+    async def list_by_backend_objects(
+        self,
+        *,
+        project_memory_space_id: str,
+        backend: str,
+        backend_object_type: str,
+        backend_object_ids: tuple[str, ...],
+    ) -> tuple[MemoryGraphLink, ...]:
+        object_ids = set(backend_object_ids)
+        if not object_ids:
+            return ()
+        return tuple(
+            link
+            for link in self._tx.state.memory_graph_links.values()
+            if link.project_memory_space_id == project_memory_space_id
+            and link.backend == backend
+            and link.backend_object_type == backend_object_type
+            and link.backend_object_id in object_ids
+        )
+
 
 def _is_graph_job_claimable(job: GraphWriteJob, now: datetime) -> bool:
     if job.status == "pending" and job.next_run_at <= now:

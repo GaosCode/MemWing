@@ -137,6 +137,8 @@ class ControlPushServiceMixin:
             PlatformPushCandidate(
                 id=candidate.id,
                 platform_ref=platform_ref,
+                title=candidate.title,
+                kind=candidate.type,
                 content=candidate.content,
                 trace_id=trace_id,
             )

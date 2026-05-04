@@ -160,6 +160,16 @@ async def _dispatch_get(
                 trace_id=trace_id,
             )
         )
+    if path == "/v1/control/source-events":
+        return json_object(
+            await services.control.list_source_events(
+                scope=scope,
+                limit=limit,
+                cursor=cursor,
+                sort=sort,
+                trace_id=trace_id,
+            )
+        )
     if path == "/v1/control/settings":
         return json_object(await services.control.get_settings(scope=scope, trace_id=trace_id))
     parts = _path_parts(path)
@@ -185,6 +195,14 @@ async def _dispatch_get(
                 page_id=parts[3],
                 scope=scope,
                 limit=limit,
+                trace_id=trace_id,
+            )
+        )
+    if len(parts) == 4 and parts[:3] == ("v1", "control", "source-events"):
+        return json_object(
+            await services.control.get_source_event_detail(
+                source_event_id=parts[3],
+                scope=scope,
                 trace_id=trace_id,
             )
         )

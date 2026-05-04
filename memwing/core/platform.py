@@ -115,11 +115,17 @@ class PushCandidate:
     platform_ref: PlatformRef
     content: str
     trace_id: str
+    title: str | None = None
+    kind: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", require_text(self.id, "id"))
         object.__setattr__(self, "content", require_text(self.content, "content"))
         object.__setattr__(self, "trace_id", require_text(self.trace_id, "trace_id"))
+        if self.title is not None:
+            object.__setattr__(self, "title", require_text(self.title, "title"))
+        if self.kind is not None:
+            object.__setattr__(self, "kind", require_text(self.kind, "kind"))
 
 
 @dataclass(frozen=True, slots=True)
