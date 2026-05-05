@@ -221,6 +221,26 @@ def test_graphiti_adapter_ordered_batch_uses_stable_uuid_and_previous_episode_co
     assert graphiti.add_episode_calls[0]["uuid"] != graphiti.add_episode_calls[1]["uuid"]
 
 
+def test_graphiti_adapter_reuses_stable_episode_uuid_for_job_retry() -> None:
+    graphiti = FakeGraphiti()
+    adapter = GraphitiAdapter(graphiti)
+    request = GraphWriteRequest(
+        job=_graph_job(),
+        memory_item=_memory_item(),
+        source_events=(_source_event(),),
+    )
+
+    async def scenario():
+        first = await adapter.ingest_graph_job(request)
+        retry = await adapter.ingest_graph_job(request)
+        return first, retry
+
+    first, retry = asyncio.run(scenario())
+
+    assert graphiti.add_episode_calls[0]["uuid"] == graphiti.add_episode_calls[1]["uuid"]
+    assert first.backend_episode_refs == retry.backend_episode_refs
+
+
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     graphiti = FakeGraphiti()
     adapter = GraphitiAdapter(graphiti)
