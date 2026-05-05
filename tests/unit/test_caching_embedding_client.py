@@ -48,6 +48,48 @@ def test_caching_embedding_client_deduplicates_batch_misses_and_preserves_order(
     assert client.metrics.bypasses == 1
 
 
+def test_caching_embedding_client_merges_lineage_for_equal_inputs() -> None:
+    store = InMemoryDataStore()
+    provider = FakeEmbeddingClient({"alpha": (1.0, 0.0)})
+    client = CachingEmbeddingModelClient(
+        store,
+        provider,
+        runtime="openclaw",
+        model="embedding-model",
+        transport="local",
+        now=lambda: NOW,
+    )
+
+    async def scenario() -> None:
+        await client.embed_batch(
+            ("alpha", "alpha"),
+            cache_contexts=(_context("source_001"), _context("source_002")),
+        )
+        await client.embed_batch(("alpha",), cache_contexts=(_context("source_003"),))
+
+        async with store.transaction() as tx:
+            rows = []
+            for source_event_id in ("source_001", "source_002", "source_003"):
+                rows.append(
+                    await tx.model_result_cache.list_by_source_event(
+                        project_memory_space_id="project_001",
+                        source_event_id=source_event_id,
+                    )
+                )
+
+        assert tuple(tuple(row.source_event_ids for row in rows_for_source) for rows_for_source in rows) == (
+            (("source_001", "source_002", "source_003"),),
+            (("source_001", "source_002", "source_003"),),
+            (("source_001", "source_002", "source_003"),),
+        )
+
+    asyncio.run(scenario())
+
+    assert provider.batch_calls == (("alpha",),)
+    assert client.metrics.misses == 1
+    assert client.metrics.hits == 1
+
+
 class FakeEmbeddingClient:
     def __init__(self, vectors: dict[str, tuple[float, ...]]) -> None:
         self._vectors = vectors

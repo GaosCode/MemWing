@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 import uuid
@@ -72,6 +72,12 @@ class ValidatedLLMJsonCache:
         if hit is None:
             self.metrics.misses += 1
             return None
+        merged_source_event_ids = _merge_source_event_ids(hit.source_event_ids, source_event_ids)
+        if merged_source_event_ids != hit.source_event_ids:
+            async with self._unit_of_work.transaction() as tx:
+                await tx.model_result_cache.put(
+                    replace(hit, source_event_ids=merged_source_event_ids)
+                )
         self.metrics.hits += 1
         return hit.value_json
 
@@ -148,3 +154,10 @@ class ValidatedLLMJsonCache:
             input_hash=sha256(input_text.encode("utf-8")).hexdigest(),
             schema_hash=schema_hash or self._schema_hash,
         )
+
+
+def _merge_source_event_ids(
+    first: tuple[str, ...],
+    second: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(sorted({*first, *second}))

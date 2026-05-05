@@ -193,6 +193,7 @@ def test_postgres_model_result_cache_repository_executes_key_and_lineage_paths()
     queries = "\n".join(call[1] for call in connection.calls)
     assert "INSERT INTO model_result_cache" in queries
     assert "ON CONFLICT" in queries
+    assert "array_agg(DISTINCT source_event_id ORDER BY source_event_id)" in queries
     assert "hit_count = model_result_cache.hit_count + 1" in queries
     assert "%(source_event_id)s = ANY(source_event_ids)" in queries
     assert "status = 'invalidated'" in queries

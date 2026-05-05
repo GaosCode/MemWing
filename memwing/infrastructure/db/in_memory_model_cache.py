@@ -33,7 +33,15 @@ class InMemoryModelResultCacheRepository:
     async def put(self, entry: ModelResultCacheEntry) -> ModelResultCacheEntry:
         existing_id = self._tx.state.model_result_cache_by_key.get(entry.key)
         if existing_id is not None:
-            entry = replace(entry, id=existing_id)
+            existing = self._tx.state.model_result_cache[existing_id]
+            entry = replace(
+                entry,
+                id=existing_id,
+                source_event_ids=_merge_source_event_ids(
+                    existing.source_event_ids,
+                    entry.source_event_ids,
+                ),
+            )
         self._tx.state.model_result_cache[entry.id] = entry
         self._tx.state.model_result_cache_by_key[entry.key] = entry.id
         return entry
@@ -75,3 +83,10 @@ class InMemoryModelResultCacheRepository:
             )
             count += 1
         return count
+
+
+def _merge_source_event_ids(
+    first: tuple[str, ...],
+    second: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(sorted({*first, *second}))

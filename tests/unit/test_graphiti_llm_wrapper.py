@@ -103,6 +103,50 @@ def test_graphiti_llm_wrapper_caches_validated_graphiti_extraction_by_context() 
     assert wrapper.cache_metrics.provider_calls == 1
 
 
+def test_graphiti_llm_wrapper_merges_cache_hit_source_lineage() -> None:
+    store = InMemoryDataStore()
+    fake = FakeLLMClient('{"ok": true, "count": 2}')
+    wrapper = GraphitiMemWingLLMClient(
+        fake,
+        cache_unit_of_work=store,
+        cache_runtime="test",
+        cache_model="fake-model",
+        cache_transport="local",
+    )
+    messages = [Message(role="user", content="Alice owns the roadmap.")]
+
+    async def scenario() -> None:
+        with graphiti_model_cache_context(
+            project_memory_space_id="project_001",
+            source_event_ids=("source_001",),
+        ):
+            await wrapper.generate_response(messages, response_model=ExtractedPayload)
+        with graphiti_model_cache_context(
+            project_memory_space_id="project_001",
+            source_event_ids=("source_002",),
+        ):
+            await wrapper.generate_response(messages, response_model=ExtractedPayload)
+
+        async with store.transaction() as tx:
+            by_first_source = await tx.model_result_cache.list_by_source_event(
+                project_memory_space_id="project_001",
+                source_event_id="source_001",
+            )
+            by_second_source = await tx.model_result_cache.list_by_source_event(
+                project_memory_space_id="project_001",
+                source_event_id="source_002",
+            )
+
+        assert by_first_source[0].source_event_ids == ("source_001", "source_002")
+        assert by_second_source[0].source_event_ids == ("source_001", "source_002")
+
+    asyncio.run(scenario())
+
+    assert len(fake.requests) == 1
+    assert wrapper.cache_metrics.misses == 1
+    assert wrapper.cache_metrics.hits == 1
+
+
 def test_graphiti_llm_wrapper_combines_non_system_messages_in_order() -> None:
     fake = FakeLLMClient('{"ok": true}')
     wrapper = GraphitiMemWingLLMClient(fake)

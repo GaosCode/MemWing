@@ -109,7 +109,12 @@ class PostgresModelResultCacheRepository:
                 schema_hash
             )
             DO UPDATE SET
-                source_event_ids = EXCLUDED.source_event_ids,
+                source_event_ids = (
+                    SELECT array_agg(DISTINCT source_event_id ORDER BY source_event_id)
+                    FROM unnest(
+                        model_result_cache.source_event_ids || EXCLUDED.source_event_ids
+                    ) AS source_event_id
+                ),
                 value_json = EXCLUDED.value_json,
                 embedding_vector = EXCLUDED.embedding_vector,
                 status = EXCLUDED.status,
