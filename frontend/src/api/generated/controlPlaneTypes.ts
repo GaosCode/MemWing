@@ -162,6 +162,62 @@ export type ControlSettingsDto = {
   trace_id: string;
 };
 
+export type ControlScopeThreadDto = {
+  thread_id: string;
+  memory_count: number;
+  source_event_count: number;
+  updated_at: string | null;
+};
+
+export type ControlScopeGroupDto = {
+  group_id: string;
+  safe_mode_enabled: boolean;
+  shared_group_id: string | null;
+  memory_count: number;
+  source_event_count: number;
+  threads: ControlScopeThreadDto[];
+};
+
+export type ControlScopeDirectoryItemDto = {
+  project_memory_space_id: string;
+  name: string;
+  kind: string;
+  default_safe_mode_enabled: boolean;
+  memory_count: number;
+  source_event_count: number;
+  page_count: number;
+  updated_at: string | null;
+  groups: ControlScopeGroupDto[];
+};
+
+export type ControlScopeDirectoryResponseDto = {
+  items: ControlScopeDirectoryItemDto[];
+  next_cursor: string | null;
+  trace_id: string;
+};
+
+export type ControlResolvedScopeDto = {
+  project_memory_space_id: string;
+  group_ids: string[] | null;
+  thread_id: string | null;
+  shared_group_id: string | null;
+  safe_mode_enabled: boolean;
+  cross_group_allowed: boolean;
+};
+
+export type ControlScopeProjectDto = {
+  project_memory_space_id: string;
+  name: string;
+  kind: string;
+};
+
+export type ControlScopeResolveResponseDto = {
+  requested_scope: ControlScopeParams;
+  effective_scope: ControlResolvedScopeDto;
+  project: ControlScopeProjectDto;
+  trace_id: string;
+};
+
 export type ControlIntegrationDto = {
   name: string;
   configured: boolean;

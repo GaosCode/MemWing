@@ -7,6 +7,8 @@ import {
   parseControlPageDetailMutation,
   parseControlPageList,
   parseControlPushCandidateMutation,
+  parseControlScopeDirectory,
+  parseControlScopeResolve,
   parseControlSettings,
   parseControlSourceEventDetail,
   parseControlSourceEventList,
@@ -17,7 +19,9 @@ import {
   type ControlPageDetailDto,
   type ControlPageListResponseDto,
   type ControlPushCandidateDto,
+  type ControlScopeDirectoryResponseDto,
   type ControlScopeParams,
+  type ControlScopeResolveResponseDto,
   type ControlSettingsDto,
   type ControlSourceEventDetailDto,
   type ControlSourceEventListResponseDto,
@@ -63,6 +67,19 @@ export type RememberEventResponseDto = {
 export type ManualMemoryCreateResult = RememberEventResponseDto & {
   visibleMemoryId: string | null;
 };
+
+export async function listControlScopes(includeBenchmark: boolean): Promise<ControlScopeDirectoryResponseDto> {
+  const params = new URLSearchParams();
+  if (includeBenchmark) {
+    params.set("include_benchmark", "true");
+  }
+  const suffix = params.toString();
+  return parseControlScopeDirectory(await getUnscopedJson(`/v1/control/scopes${suffix ? `?${suffix}` : ""}`));
+}
+
+export async function resolveControlScope(scope: ControlScopeParams): Promise<ControlScopeResolveResponseDto> {
+  return parseControlScopeResolve(await getUnscopedJson(`/v1/control/scopes/resolve?${scopeSearchParams(scope).toString()}`));
+}
 
 export async function listControlMemories(scope: ControlScopeParams): Promise<MemoryListResponseDto> {
   return parseControlMemoryListResponse(await getJson("/v1/control/memories", scope));
@@ -218,6 +235,11 @@ export async function getControlSettings(scope: ControlScopeParams): Promise<Con
 export async function getControlIntegrations(): Promise<ControlIntegrationsResponseDto> {
   const response = await fetch(`${API_BASE}/v1/control/integrations`);
   return parseControlIntegrations(await responseJson(response));
+}
+
+async function getUnscopedJson(path: string): Promise<unknown> {
+  const response = await fetch(`${API_BASE}${path}`);
+  return responseJson(response);
 }
 
 async function getJson(path: string, scope: ControlScopeParams): Promise<unknown> {

@@ -24,6 +24,14 @@ import type {
   ControlPageTopicDto,
   ControlPageVersionDto,
   ControlPushCandidateDto,
+  ControlResolvedScopeDto,
+  ControlScopeDirectoryItemDto,
+  ControlScopeDirectoryResponseDto,
+  ControlScopeGroupDto,
+  ControlScopeParams,
+  ControlScopeProjectDto,
+  ControlScopeResolveResponseDto,
+  ControlScopeThreadDto,
   ControlSettingsDto,
   ControlSourceEventDetailDto,
   ControlSourceEventDto,
@@ -46,7 +54,14 @@ export type {
   ControlPageTopicDto,
   ControlPageVersionDto,
   ControlPushCandidateDto,
+  ControlResolvedScopeDto,
+  ControlScopeDirectoryItemDto,
+  ControlScopeDirectoryResponseDto,
+  ControlScopeGroupDto,
   ControlScopeParams,
+  ControlScopeProjectDto,
+  ControlScopeResolveResponseDto,
+  ControlScopeThreadDto,
   ControlSettingsDto,
   ControlSourceEventDetailDto,
   ControlSourceEventDto,
@@ -212,6 +227,135 @@ export function parseControlSettings(input: unknown): ControlSettingsDto {
     shared_group_id: requireOptionalText(object.shared_group_id, "shared_group_id"),
     settings_mutation_supported: requireBoolean(object.settings_mutation_supported, "settings_mutation_supported"),
     trace_id: requireText(object.trace_id, "trace_id"),
+  };
+}
+
+export function parseControlScopeDirectory(input: unknown): ControlScopeDirectoryResponseDto {
+  const object = requireRecord(input, "control scope directory");
+  requireExactFields(object, ["items", "next_cursor", "trace_id"], "control scope directory");
+  const items = object.items;
+  if (!Array.isArray(items)) {
+    throw new Error("items must be an array");
+  }
+  return {
+    items: items.map(parseControlScopeDirectoryItem),
+    next_cursor: requireOptionalText(object.next_cursor, "next_cursor"),
+    trace_id: requireText(object.trace_id, "trace_id"),
+  };
+}
+
+export function parseControlScopeResolve(input: unknown): ControlScopeResolveResponseDto {
+  const object = requireRecord(input, "control scope resolve");
+  requireExactFields(object, ["requested_scope", "effective_scope", "project", "trace_id"], "control scope resolve");
+  return {
+    requested_scope: parseControlScopeParams(object.requested_scope),
+    effective_scope: parseControlResolvedScope(object.effective_scope),
+    project: parseControlScopeProject(object.project),
+    trace_id: requireText(object.trace_id, "trace_id"),
+  };
+}
+
+function parseControlScopeDirectoryItem(input: unknown): ControlScopeDirectoryItemDto {
+  const object = requireRecord(input, "control scope directory item");
+  requireExactFields(
+    object,
+    [
+      "project_memory_space_id",
+      "name",
+      "kind",
+      "default_safe_mode_enabled",
+      "memory_count",
+      "source_event_count",
+      "page_count",
+      "updated_at",
+      "groups",
+    ],
+    "control scope directory item",
+  );
+  const groups = object.groups;
+  if (!Array.isArray(groups)) {
+    throw new Error("groups must be an array");
+  }
+  return {
+    project_memory_space_id: requireText(object.project_memory_space_id, "project_memory_space_id"),
+    name: requireText(object.name, "name"),
+    kind: requireText(object.kind, "kind"),
+    default_safe_mode_enabled: requireBoolean(object.default_safe_mode_enabled, "default_safe_mode_enabled"),
+    memory_count: requireInteger(object.memory_count, "memory_count"),
+    source_event_count: requireInteger(object.source_event_count, "source_event_count"),
+    page_count: requireInteger(object.page_count, "page_count"),
+    updated_at: requireOptionalText(object.updated_at, "updated_at"),
+    groups: groups.map(parseControlScopeGroup),
+  };
+}
+
+function parseControlScopeGroup(input: unknown): ControlScopeGroupDto {
+  const object = requireRecord(input, "control scope group");
+  requireExactFields(
+    object,
+    ["group_id", "safe_mode_enabled", "shared_group_id", "memory_count", "source_event_count", "threads"],
+    "control scope group",
+  );
+  const threads = object.threads;
+  if (!Array.isArray(threads)) {
+    throw new Error("threads must be an array");
+  }
+  return {
+    group_id: requireText(object.group_id, "group_id"),
+    safe_mode_enabled: requireBoolean(object.safe_mode_enabled, "safe_mode_enabled"),
+    shared_group_id: requireOptionalText(object.shared_group_id, "shared_group_id"),
+    memory_count: requireInteger(object.memory_count, "memory_count"),
+    source_event_count: requireInteger(object.source_event_count, "source_event_count"),
+    threads: threads.map(parseControlScopeThread),
+  };
+}
+
+function parseControlScopeThread(input: unknown): ControlScopeThreadDto {
+  const object = requireRecord(input, "control scope thread");
+  requireExactFields(object, ["thread_id", "memory_count", "source_event_count", "updated_at"], "control scope thread");
+  return {
+    thread_id: requireText(object.thread_id, "thread_id"),
+    memory_count: requireInteger(object.memory_count, "memory_count"),
+    source_event_count: requireInteger(object.source_event_count, "source_event_count"),
+    updated_at: requireOptionalText(object.updated_at, "updated_at"),
+  };
+}
+
+function parseControlScopeParams(input: unknown): ControlScopeParams {
+  const object = requireRecord(input, "control scope params");
+  requireExactFields(object, ["project_memory_space_id", "group_id", "thread_id", "shared_group_id"], "control scope params");
+  return {
+    project_memory_space_id: requireText(object.project_memory_space_id, "project_memory_space_id"),
+    group_id: requireOptionalText(object.group_id, "group_id") ?? undefined,
+    thread_id: requireOptionalText(object.thread_id, "thread_id") ?? undefined,
+    shared_group_id: requireOptionalText(object.shared_group_id, "shared_group_id") ?? undefined,
+  };
+}
+
+function parseControlResolvedScope(input: unknown): ControlResolvedScopeDto {
+  const object = requireRecord(input, "control resolved scope");
+  requireExactFields(
+    object,
+    ["project_memory_space_id", "group_ids", "thread_id", "shared_group_id", "safe_mode_enabled", "cross_group_allowed"],
+    "control resolved scope",
+  );
+  return {
+    project_memory_space_id: requireText(object.project_memory_space_id, "project_memory_space_id"),
+    group_ids: object.group_ids === null ? null : requireTextArray(object.group_ids, "group_ids"),
+    thread_id: requireOptionalText(object.thread_id, "thread_id"),
+    shared_group_id: requireOptionalText(object.shared_group_id, "shared_group_id"),
+    safe_mode_enabled: requireBoolean(object.safe_mode_enabled, "safe_mode_enabled"),
+    cross_group_allowed: requireBoolean(object.cross_group_allowed, "cross_group_allowed"),
+  };
+}
+
+function parseControlScopeProject(input: unknown): ControlScopeProjectDto {
+  const object = requireRecord(input, "control scope project");
+  requireExactFields(object, ["project_memory_space_id", "name", "kind"], "control scope project");
+  return {
+    project_memory_space_id: requireText(object.project_memory_space_id, "project_memory_space_id"),
+    name: requireText(object.name, "name"),
+    kind: requireText(object.kind, "kind"),
   };
 }
 

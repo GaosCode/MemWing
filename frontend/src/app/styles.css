@@ -2151,6 +2151,23 @@ button.board-card {
   width: 100%;
 }
 
+.compact-table--worker .compact-row--with-actions {
+  grid-template-columns:
+    minmax(220px, 1.25fr)
+    minmax(104px, 0.42fr)
+    minmax(220px, 0.9fr)
+    minmax(110px, 0.42fr)
+    minmax(120px, 0.52fr)
+    minmax(72px, 0.28fr)
+    minmax(88px, 0.34fr);
+}
+
+.compact-table--worker .compact-row > span,
+.compact-table--worker .compact-row > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .compact-row--with-actions button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -2518,6 +2535,113 @@ blockquote {
   border-bottom: 0;
 }
 
+.settings-scope-panel {
+  margin: 0 28px 18px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 16px 0;
+  display: grid;
+  gap: 14px;
+}
+
+.settings-scope-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-scope-panel__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.settings-scope-panel__header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.settings-scope-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(130px, 1fr)) max-content;
+  gap: 8px;
+}
+
+.settings-switch {
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-switch__track {
+  width: 46px;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 140ms ease-out, border-color 140ms ease-out;
+}
+
+.settings-switch__thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transform: translateX(0);
+  transition: transform 140ms ease-out, background 140ms ease-out;
+}
+
+.settings-switch input:checked + .settings-switch__track {
+  border-color: var(--accent);
+  background: rgba(47, 111, 94, 0.18);
+}
+
+.settings-switch input:checked + .settings-switch__track .settings-switch__thumb {
+  background: var(--accent);
+  transform: translateX(20px);
+}
+
+.settings-switch:has(input:focus-visible) .settings-switch__track {
+  outline: 2px solid rgba(47, 111, 94, 0.28);
+  outline-offset: 2px;
+}
+
+.settings-scope-form input {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: var(--surface-muted);
+}
+
+.settings-scope-form button {
+  height: 38px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+}
+
 .settings-grid {
   padding: 0 28px 28px;
   display: grid;
@@ -2531,7 +2655,7 @@ blockquote {
   padding: 12px 0;
   background: transparent;
   display: grid;
-  grid-template-columns: minmax(240px, 0.52fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(360px, 0.72fr) minmax(0, 1fr) auto;
   gap: 24px;
   align-items: center;
   text-align: left;
@@ -2539,6 +2663,7 @@ blockquote {
 }
 
 .settings-section > div {
+  min-width: 0;
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -2546,13 +2671,23 @@ blockquote {
 }
 
 .settings-section h2 {
+  flex: 0 0 auto;
   margin: 0;
   font-size: 16px;
+  white-space: nowrap;
 }
 
 .settings-section p {
+  min-width: 0;
   color: var(--text-secondary);
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-section .status-pill {
+  min-width: 0;
+  max-width: 240px;
+  overflow-wrap: anywhere;
 }
 
 .settings-section:not(:disabled):hover {

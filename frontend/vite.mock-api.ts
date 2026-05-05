@@ -76,6 +76,7 @@ export function memwingMockApiPlugin(): Plugin {
           .then((payload) => {
             const memoryId = segment(path, 3);
             const pushCandidateId = segment(path, 4);
+            const includeBenchmarkScopes = url.searchParams.get("include_benchmark") === "true";
             const body = routeMockApi({
               method: request.method ?? "GET",
               path,
@@ -89,6 +90,7 @@ export function memwingMockApiPlugin(): Plugin {
               settings,
               integrations,
               sourceEvent,
+              includeBenchmarkScopes,
             });
             sendJson(response, body.status, body.payload);
           })
@@ -111,6 +113,7 @@ function routeMockApi(input: {
   settings: JsonObject;
   integrations: JsonObject;
   sourceEvent: JsonObject;
+  includeBenchmarkScopes: boolean;
 }): { status: number; payload: JsonObject } {
   const {
     method,
@@ -125,6 +128,7 @@ function routeMockApi(input: {
     settings,
     integrations,
     sourceEvent,
+    includeBenchmarkScopes,
   } = input;
 
   if (method === "POST" && path === "/v1/control/memories/manual") {
@@ -165,6 +169,33 @@ function routeMockApi(input: {
   }
   if (method === "GET" && path === "/v1/control/settings") {
     return ok(settings);
+  }
+  if (method === "GET" && path === "/v1/control/scopes") {
+    return ok(mockScopeDirectory(memoryList, includeBenchmarkScopes));
+  }
+  if (method === "GET" && path === "/v1/control/scopes/resolve") {
+    return ok({
+      requested_scope: {
+        project_memory_space_id: "project_001",
+        group_id: "group_product",
+        thread_id: "thread_planning",
+        shared_group_id: null,
+      },
+      effective_scope: {
+        project_memory_space_id: "project_001",
+        group_ids: null,
+        thread_id: "thread_planning",
+        shared_group_id: null,
+        safe_mode_enabled: false,
+        cross_group_allowed: true,
+      },
+      project: {
+        project_memory_space_id: "project_001",
+        name: "Mock Project",
+        kind: "project",
+      },
+      trace_id: "mock_scope_resolve",
+    });
   }
   if (method === "GET" && path === "/v1/control/integrations") {
     return ok(integrations);
@@ -336,6 +367,70 @@ function mockMaintenance(memory: MemoryFixtureItem): JsonObject {
     push_candidates_next_cursor: null,
     next_cursor: null,
     trace_id: "mock_maintenance",
+  };
+}
+
+function mockScopeDirectory(memoryList: MemoryListFixture, includeBenchmarkScopes: boolean): JsonObject {
+  const groups = Array.from(new Set(memoryList.items.map((item) => item.group_id).filter(Boolean)));
+  const projectScope = {
+    project_memory_space_id: "project_001",
+    name: "Mock Project",
+    kind: "project",
+    default_safe_mode_enabled: false,
+    memory_count: memoryList.items.length,
+    source_event_count: memoryList.items.length,
+    page_count: 1,
+    updated_at: mockTime,
+    groups: groups.map((groupId) => ({
+      group_id: groupId,
+      safe_mode_enabled: false,
+      shared_group_id: null,
+      memory_count: memoryList.items.filter((item) => item.group_id === groupId).length,
+      source_event_count: memoryList.items.filter((item) => item.group_id === groupId).length,
+      threads: Array.from(new Set(
+        memoryList.items
+          .filter((item) => item.group_id === groupId)
+          .map((item) => item.thread_id)
+          .filter(Boolean),
+      )).map((threadId) => ({
+        thread_id: threadId,
+        memory_count: memoryList.items.filter((item) => item.thread_id === threadId).length,
+        source_event_count: memoryList.items.filter((item) => item.thread_id === threadId).length,
+        updated_at: mockTime,
+      })),
+    })),
+  };
+  const benchmarkScope = {
+    project_memory_space_id: "benchmark:mock-run:bs001",
+    name: "Benchmark benchmark:mock-run:bs001",
+    kind: "benchmark",
+    default_safe_mode_enabled: false,
+    memory_count: 4,
+    source_event_count: 13,
+    page_count: 1,
+    updated_at: mockTime,
+    groups: [
+      {
+        group_id: "benchmark:bs001",
+        safe_mode_enabled: true,
+        shared_group_id: null,
+        memory_count: 4,
+        source_event_count: 13,
+        threads: [
+          {
+            thread_id: "benchmark:bs001",
+            memory_count: 4,
+            source_event_count: 13,
+            updated_at: mockTime,
+          },
+        ],
+      },
+    ],
+  };
+  return {
+    items: includeBenchmarkScopes ? [benchmarkScope, projectScope] : [projectScope],
+    next_cursor: null,
+    trace_id: "mock_scopes",
   };
 }
 

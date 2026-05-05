@@ -5,7 +5,7 @@ import { AppShell, type TopbarScopeOptions } from "./AppShell";
 import { maintenanceKey, useControlPlaneData } from "./useControlPlaneData";
 import { controlScope } from "./controlScope";
 import { Button, SplitSurface } from "../shared/components/ui";
-import type { ControlPageDto, ControlScopeParams } from "../api/generated/controlPlane";
+import type { ControlPageDto, ControlScopeDirectoryResponseDto, ControlScopeParams } from "../api/generated/controlPlane";
 import type { ManualMemoryCreateResult, ManualMemoryInput } from "../shared/api/controlPlaneClient";
 import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
 import { InboxPage } from "../features/inbox/InboxPage";
@@ -20,14 +20,17 @@ import { ProjectInspectorDetail } from "../features/project/ProjectInspectorDeta
 import { ProjectPage } from "../features/project/ProjectPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
+const BENCHMARK_SCOPE_MODE_STORAGE_KEY = "memwing.control.includeBenchmarkScopes";
+
 export function App() {
   const [activeNav, setActiveNav] = useState<NavKey>("inbox");
   const [detailMode, setDetailMode] = useState<DetailMode>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(400);
   const [scope, setScope] = useState<ControlScopeParams>(() => ({ ...controlScope }));
+  const [includeBenchmarkScopes, setIncludeBenchmarkScopes] = useState(readStoredBenchmarkScopeMode);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
-  const control = useControlPlaneData(scope);
+  const control = useControlPlaneData(scope, { includeBenchmarkScopes });
 
   const visibleMemories = useMemo(
     () => filterMemoriesBySearch(control.memories, globalSearchQuery),
@@ -38,8 +41,14 @@ export function App() {
     [control.maintenanceItems, globalSearchQuery],
   );
   const scopeOptions = useMemo(
-    () => buildScopeOptions(scope, control.memories, control.selectedPage, control.settings?.project_memory_space_id ?? null),
-    [control.memories, control.selectedPage, control.settings?.project_memory_space_id, scope],
+    () => buildScopeOptions(
+      scope,
+      control.memories,
+      control.selectedPage,
+      control.settings?.project_memory_space_id ?? null,
+      control.scopeDirectory,
+    ),
+    [control.memories, control.scopeDirectory, control.selectedPage, control.settings?.project_memory_space_id, scope],
   );
   const searchResultCount = useMemo(() => {
     if (globalSearchQuery.trim().length === 0) {
@@ -223,8 +232,18 @@ export function App() {
       );
     }
 
-    return <SettingsPage settings={control.settings} integrations={control.integrations} onRefresh={() => void control.refreshSettings()} />;
-  }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth, visibleMaintenanceItems, visibleMemories]);
+    return (
+      <SettingsPage
+        settings={control.settings}
+        integrations={control.integrations}
+        scope={scope}
+        includeBenchmarkScopes={includeBenchmarkScopes}
+        onBenchmarkScopeModeChange={setBenchmarkScopeMode}
+        onResolveScope={resolveManualScope}
+        onRefresh={() => void control.refreshSettings()}
+      />
+    );
+  }, [activeNav, control, detailMode, includeBenchmarkScopes, inspectorOpen, inspectorWidth, scope, visibleMaintenanceItems, visibleMemories]);
 
   async function submitManualMemory(input: ManualMemoryInput): Promise<ManualMemoryCreateResult> {
     const result = await control.runManualMemoryCreate(input);
@@ -233,6 +252,18 @@ export function App() {
     setInspectorOpen(result.visibleMemoryId !== null);
     setGlobalSearchQuery("");
     return result;
+  }
+
+  async function resolveManualScope(scopeHint: ControlScopeParams) {
+    const resolved = await control.resolveScopeHint(scopeHint);
+    setScope(resolved.requested_scope);
+  }
+
+  function setBenchmarkScopeMode(next: boolean) {
+    setIncludeBenchmarkScopes(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(BENCHMARK_SCOPE_MODE_STORAGE_KEY, next ? "1" : "0");
+    }
   }
 
   return (
@@ -255,23 +286,40 @@ export function App() {
   );
 }
 
+function readStoredBenchmarkScopeMode() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(BENCHMARK_SCOPE_MODE_STORAGE_KEY) === "1";
+}
+
 function buildScopeOptions(
   scope: ControlScopeParams,
   memories: MemoryItem[],
   selectedPage: ControlPageDto | null,
   settingsWorkspaceId: string | null,
+  scopeDirectory: ControlScopeDirectoryResponseDto | null,
 ): TopbarScopeOptions {
+  const selectedDirectoryItem = scopeDirectory?.items.find(
+    (item) => item.project_memory_space_id === scope.project_memory_space_id,
+  ) ?? null;
+  const selectedDirectoryGroup = selectedDirectoryItem?.groups.find(
+    (group) => group.group_id === scope.group_id,
+  ) ?? null;
   return {
     workspaces: uniqueText([
+      ...(scopeDirectory?.items.map((item) => item.project_memory_space_id) ?? []),
       scope.project_memory_space_id,
       settingsWorkspaceId,
       selectedPage?.project_memory_space_id ?? null,
     ]),
     groups: uniqueText([
+      ...(selectedDirectoryItem?.groups.map((group) => group.group_id) ?? []),
       ...memories.map((memory) => memory.groupId),
       selectedPage?.group_id ?? null,
     ]),
     threads: uniqueText([
+      ...(selectedDirectoryGroup?.threads.map((thread) => thread.thread_id) ?? []),
       ...memories.map((memory) => memory.threadId),
       selectedPage?.thread_id ?? null,
     ]),

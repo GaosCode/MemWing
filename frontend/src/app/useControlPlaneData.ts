@@ -15,8 +15,10 @@ import {
   getControlSourceEvent,
   listControlMemories,
   listControlPages,
+  listControlScopes,
   mutateMemoryLifecycle,
   rebuildControlPage,
+  resolveControlScope,
   restoreControlPageVersion,
   retryControlJob,
   sendFeishuPushCandidate,
@@ -26,6 +28,7 @@ import type {
   ControlIntegrationsResponseDto,
   ControlPageDetailDto,
   ControlPageDto,
+  ControlScopeDirectoryResponseDto,
   ControlSettingsDto,
   ControlSourceEventDetailDto,
   ControlScopeParams,
@@ -43,9 +46,13 @@ export function maintenanceKey(item: MaintenanceItem) {
 
 type RefreshOptions = {
   showLoading?: boolean;
+  resetSelection?: boolean;
 };
 
-export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
+export function useControlPlaneData(
+  scope: ControlScopeParams = controlScope,
+  controlOptions: { includeBenchmarkScopes?: boolean } = {},
+) {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [memoryDetails, setMemoryDetails] = useState<Record<string, MemoryDetailDto>>({});
   const [maintenanceItems, setMaintenanceItems] = useState<MaintenanceItem[]>([]);
@@ -54,6 +61,7 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
   const [selectedPageDetail, setSelectedPageDetail] = useState<ControlPageDetailDto | null>(null);
   const [sourceEventDetails, setSourceEventDetails] = useState<Record<string, ControlSourceEventDetailDto>>({});
   const [settings, setSettings] = useState<ControlSettingsDto | null>(null);
+  const [scopeDirectory, setScopeDirectory] = useState<ControlScopeDirectoryResponseDto | null>(null);
   const [integrations, setIntegrations] = useState<ControlIntegrationsResponseDto | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [selectedMaintenance, setSelectedMaintenance] = useState<MaintenanceItem | null>(null);
@@ -63,14 +71,26 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
   useEffect(() => {
     setMemoryDetails({});
     setSourceEventDetails({});
-    void refreshControlPlane();
-  }, [scope.group_id, scope.project_memory_space_id, scope.shared_group_id, scope.thread_id]);
+    setSelectedMemoryId(null);
+    setSelectedMaintenance(null);
+    setSelectedPageId(null);
+    setSelectedPageDetail(null);
+    void refreshControlPlane({ resetSelection: true });
+  }, [
+    controlOptions.includeBenchmarkScopes,
+    scope.group_id,
+    scope.project_memory_space_id,
+    scope.shared_group_id,
+    scope.thread_id,
+  ]);
 
   useEffect(() => {
-    if (selectedMemoryId !== null && memoryDetails[selectedMemoryId] === undefined) {
+    const selectedMemoryStillVisible = selectedMemoryId !== null
+      && memories.some((memory) => memory.id === selectedMemoryId);
+    if (selectedMemoryStillVisible && selectedMemoryId !== null && memoryDetails[selectedMemoryId] === undefined) {
       void loadMemoryDetail(selectedMemoryId);
     }
-  }, [memoryDetails, selectedMemoryId]);
+  }, [memories, memoryDetails, selectedMemoryId]);
 
   const selectedMemory = useMemo(
     () => memories.find((memory) => memory.id === selectedMemoryId) ?? memories[0] ?? null,
@@ -91,6 +111,7 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
     selectedPageDetail,
     sourceEventDetails,
     settings,
+    scopeDirectory,
     integrations,
     loading,
     loadError,
@@ -105,6 +126,7 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
     runPageRestore,
     runMaintenanceAction,
     runManualMemoryCreate,
+    resolveScopeHint,
     loadSourceEventDetail,
   };
 
@@ -113,24 +135,27 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
     if (showLoading) {
       setLoading(true);
     }
-      setLoadError(null);
+    setLoadError(null);
     try {
-      const [memoryList, maintenance, pageList, nextSettings, nextIntegrations] = await Promise.all([
+      const [memoryList, maintenance, pageList, nextSettings, nextIntegrations, nextScopeDirectory] = await Promise.all([
         listControlMemories(scope),
         getControlMaintenance(scope),
         listControlPages(scope),
         getControlSettings(scope),
         getControlIntegrations(),
+        listControlScopes(Boolean(controlOptions.includeBenchmarkScopes)),
       ]);
       const nextMemories = memoryList.items.map(memoryListItemToViewModel);
       const nextMaintenanceItems = controlMaintenanceToItems(maintenance);
-      const nextPage = pageList.items.find((page) => page.id === selectedPageId) ?? pageList.items[0] ?? null;
+      const retainedPageId = options.resetSelection === true ? null : selectedPageId;
+      const nextPage = pageList.items.find((page) => page.id === retainedPageId) ?? pageList.items[0] ?? null;
       const nextPageDetail = nextPage !== null ? await getControlPage(scope, nextPage.id) : null;
       setMemories(nextMemories);
       setMaintenanceItems(nextMaintenanceItems);
       setPages(pageList.items);
       setSettings(nextSettings);
       setIntegrations(nextIntegrations);
+      setScopeDirectory(nextScopeDirectory);
       setSelectedMemoryId((current) => (
         current !== null && nextMemories.some((memory) => memory.id === current)
           ? current
@@ -239,12 +264,18 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
   }
 
   async function refreshSettings() {
-    const [nextSettings, nextIntegrations] = await Promise.all([
+    const [nextSettings, nextIntegrations, nextScopeDirectory] = await Promise.all([
       getControlSettings(scope),
       getControlIntegrations(),
+      listControlScopes(Boolean(controlOptions.includeBenchmarkScopes)),
     ]);
     setSettings(nextSettings);
     setIntegrations(nextIntegrations);
+    setScopeDirectory(nextScopeDirectory);
+  }
+
+  async function resolveScopeHint(scopeHint: ControlScopeParams) {
+    return resolveControlScope(scopeHint);
   }
 
   async function loadMemoryDetail(memoryId: string) {
