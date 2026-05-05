@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+import logging
 
 import pytest
 
@@ -69,6 +70,41 @@ def test_graph_write_worker_ingests_job_writes_links_and_audit() -> None:
         assert "Decision source text." not in (store.audit_events[-1].reason_text or "")
 
     asyncio.run(scenario())
+
+
+def test_graph_write_worker_logs_model_cache_metrics(caplog: pytest.LogCaptureFixture) -> None:
+    store = InMemoryDataStore()
+
+    class MetricsGraphBackend(FakeGraphBackend):
+        def cache_metrics_snapshot(self) -> dict[str, int]:
+            return {
+                "embedding_hits": 2,
+                "embedding_misses": 1,
+                "llm_hits": 1,
+                "llm_provider_calls": 1,
+            }
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.memory_items.upsert(memory_item())
+            await tx.graph_write_jobs.enqueue(graph_job())
+
+        backend = MetricsGraphBackend(successful_graph_result())
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=backend,
+            worker_id="graph_worker_001",
+        )
+
+        with caplog.at_level(logging.INFO, logger="memwing.workers.graph_write_worker"):
+            await worker.run_once(now=NOW)
+
+    asyncio.run(scenario())
+
+    assert "graph_write.cache_metrics" in caplog.text
+    assert "embedding_hits=2" in caplog.text
+    assert "llm_provider_calls=1" in caplog.text
 
 
 def test_graph_write_worker_processes_same_serialization_key_batch() -> None:

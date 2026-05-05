@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import logging
 import uuid
 
 from memwing.application.failure_semantics import FailureClassification, classify_failure
@@ -15,6 +16,9 @@ from memwing.core.models import AuditEvent, GraphWriteJob
 from memwing.ports.event_store import EventStoreUnitOfWorkPort, OutboxLockOwnershipError
 from memwing.ports.graph_backend import GraphBackendPort
 from memwing.ports.lifecycle_transition import LifecycleTransitionPort
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,7 @@ class GraphWriteWorker:
         max_global_concurrency: int = 16,
     ) -> None:
         self._unit_of_work = unit_of_work
+        self._graph_backend = graph_backend
         self._worker_id = worker_id
         self._lock_duration = lock_duration
         self._retry_delay = retry_delay
@@ -94,6 +99,7 @@ class GraphWriteWorker:
             retried += item_result.retried
             dead_lettered += item_result.dead_lettered
 
+        self._log_cache_metrics()
         return GraphWriteWorkerResult(
             claimed=len(claimed),
             succeeded=succeeded,
@@ -104,6 +110,13 @@ class GraphWriteWorker:
     def _claim_limit(self, limit: int | None) -> int:
         requested = self._batch_size if limit is None else limit
         return max(0, min(requested, self._max_global_concurrency))
+
+    def _log_cache_metrics(self) -> None:
+        snapshot = _cache_metrics_snapshot(self._graph_backend)
+        if not snapshot:
+            return
+        formatted = " ".join(f"{key}={snapshot[key]}" for key in sorted(snapshot))
+        logger.info("graph_write.cache_metrics %s", formatted)
 
     async def _record_batch_item(
         self,
@@ -221,6 +234,16 @@ def _safe_error_summary(exc: Exception) -> str:
     if isinstance(exc, GraphWriteProcessorInputError):
         return str(exc)
     return exc.__class__.__name__
+
+
+def _cache_metrics_snapshot(graph_backend: GraphBackendPort) -> dict[str, int]:
+    snapshot = getattr(graph_backend, "cache_metrics_snapshot", None)
+    if snapshot is None:
+        return {}
+    metrics = snapshot()
+    if not isinstance(metrics, dict):
+        return {}
+    return {key: value for key, value in metrics.items() if isinstance(key, str) and isinstance(value, int)}
 
 
 def _audit_event(
