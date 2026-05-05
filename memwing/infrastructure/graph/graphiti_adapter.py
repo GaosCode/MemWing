@@ -84,6 +84,10 @@ class GraphitiAdapter:
         return await self._ingest_one(request, previous_episode_uuid=None)
 
     async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        bulk_ingest = getattr(self._graphiti, "add_episode_bulk_semantic", None)
+        if bulk_ingest is not None:
+            return await self._ingest_graph_jobs_bulk(request, bulk_ingest=bulk_ingest)
+
         items: list[GraphWriteBatchItemResult] = []
         previous_episode_uuid: str | None = None
         blocked_reason: str | None = None
@@ -133,6 +137,59 @@ class GraphitiAdapter:
             )
         return GraphWriteBatchResult(items=tuple(items))
 
+    async def _ingest_graph_jobs_bulk(
+        self,
+        request: GraphWriteBatchRequest,
+        *,
+        bulk_ingest: object,
+    ) -> GraphWriteBatchResult:
+        ordered_requests = tuple(sorted(request.requests, key=_graph_write_request_order))
+        if not ordered_requests:
+            return GraphWriteBatchResult(items=())
+        for graph_request in ordered_requests:
+            if not graph_request.source_events:
+                raise ValueError("GraphitiAdapter requires at least one source event")
+
+        try:
+            raw_episodes = [_raw_episode(graph_request) for graph_request in ordered_requests]
+            results = await bulk_ingest(
+                raw_episodes,
+                group_id=_graphiti_group_id(ordered_requests[0].job.project_memory_space_id),
+            )
+        except Exception as exc:
+            return _blocked_batch_results(
+                ordered_requests,
+                error_type=exc.__class__.__name__,
+                first_reason="graphiti_ordered_episode_failed",
+                blocked_reason="graphiti_ordered_episode_blocked",
+            )
+
+        if len(results) != len(ordered_requests):
+            return _blocked_batch_results(
+                ordered_requests,
+                error_type="GraphitiBulkResultCountMismatch",
+                first_reason="graphiti_ordered_episode_failed",
+                blocked_reason="graphiti_ordered_episode_blocked",
+            )
+
+        items: list[GraphWriteBatchItemResult] = []
+        for graph_request, result in zip(ordered_requests, results, strict=True):
+            graph_result = _graph_write_result_from_graphiti_result(
+                result,
+                source_event_ids=graph_request.memory_item.source_event_ids,
+            )
+            items.append(
+                GraphWriteBatchItemResult(
+                    job_id=graph_request.job.id,
+                    result=graph_result,
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+            )
+        return GraphWriteBatchResult(items=tuple(items))
+
     async def _ingest_one(
         self,
         request: GraphWriteRequest,
@@ -156,15 +213,9 @@ class GraphitiAdapter:
             uuid=_stable_graphiti_episode_uuid(request),
             previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
         )
-        episode_refs = _episode_refs(result)
-        edges = _edges(result)
-        facts = tuple(_edge_to_fact(edge, request.memory_item.source_event_ids) for edge in edges)
-        return GraphWriteResult(
-            backend="graphiti",
-            facts=facts,
-            invalidated_facts=tuple(fact for fact in facts if fact.invalidated_at is not None),
-            backend_episode_refs=episode_refs,
-            backend_fact_refs=tuple(fact.fact_id for fact in facts),
+        return _graph_write_result_from_graphiti_result(
+            result,
+            source_event_ids=request.memory_item.source_event_ids,
         )
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
@@ -221,6 +272,45 @@ def _edge_to_fact(edge: object, source_event_ids: tuple[str, ...]) -> GraphFact:
     )
 
 
+def _graph_write_result_from_graphiti_result(
+    result: object,
+    *,
+    source_event_ids: tuple[str, ...],
+) -> GraphWriteResult:
+    episode_refs = _episode_refs(result)
+    edges = _edges(result)
+    facts = tuple(_edge_to_fact(edge, source_event_ids) for edge in edges)
+    return GraphWriteResult(
+        backend="graphiti",
+        facts=facts,
+        invalidated_facts=tuple(fact for fact in facts if fact.invalidated_at is not None),
+        backend_episode_refs=episode_refs,
+        backend_fact_refs=tuple(fact.fact_id for fact in facts),
+    )
+
+
+def _blocked_batch_results(
+    requests: tuple[GraphWriteRequest, ...],
+    *,
+    error_type: str,
+    first_reason: str,
+    blocked_reason: str,
+) -> GraphWriteBatchResult:
+    items: list[GraphWriteBatchItemResult] = []
+    for index, request in enumerate(requests):
+        items.append(
+            GraphWriteBatchItemResult(
+                job_id=request.job.id,
+                result=None,
+                error_type=error_type if index == 0 else "GraphitiOrderedBatchBlocked",
+                error_message=None,
+                reason_code=first_reason if index == 0 else blocked_reason,
+                retryable=True,
+            )
+        )
+    return GraphWriteBatchResult(items=tuple(items))
+
+
 def _episode_refs(result: object) -> tuple[str, ...]:
     episode = getattr(result, "episode", None)
     if episode is None:
@@ -257,6 +347,27 @@ def _stable_graphiti_episode_uuid(request: GraphWriteRequest) -> str:
         )
     )
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+
+def _raw_episode(request: GraphWriteRequest) -> object:
+    vendored_parent = Path(__file__).resolve().parent
+    if str(vendored_parent) not in sys.path:
+        sys.path.insert(0, str(vendored_parent))
+    from graphiti_core.nodes import EpisodeType
+    from graphiti_core.utils.bulk_utils import RawEpisode
+
+    return RawEpisode(
+        name=request.memory_item.title,
+        uuid=_stable_graphiti_episode_uuid(request),
+        content=request.memory_item.content,
+        source_description="MemWing graph write job",
+        source=EpisodeType.message,
+        reference_time=(
+            request.memory_item.event_time
+            or request.source_events[0].event_time
+            or request.memory_item.created_at
+        ),
+    )
 
 
 def _edge_confidence(edge: object) -> float | None:

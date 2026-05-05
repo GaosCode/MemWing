@@ -128,6 +128,10 @@ class AddBulkEpisodeResults(BaseModel):
     community_edges: list[CommunityEdge]
 
 
+class AddSemanticBulkEpisodeResults(BaseModel):
+    items: list[AddEpisodeResults]
+
+
 class AddTripletResults(BaseModel):
     nodes: list[EntityNode]
     edges: list[EntityEdge]
@@ -1449,6 +1453,55 @@ class Graphiti:
                 bulk_span.set_status('error', str(e))
                 bulk_span.record_exception(e)
                 raise e
+
+    async def add_episode_bulk_semantic(
+        self,
+        bulk_episodes: list[RawEpisode],
+        group_id: str | None = None,
+        update_communities: bool = False,
+        entity_types: dict[str, type[BaseModel]] | None = None,
+        excluded_entity_types: list[str] | None = None,
+        edge_types: dict[str, type[BaseModel]] | None = None,
+        edge_type_map: dict[tuple[str, str], list[str]] | None = None,
+        custom_extraction_instructions: str | None = None,
+        previous_episode_uuids: list[str] | None = None,
+        saga: str | SagaNode | None = None,
+    ) -> list[AddEpisodeResults]:
+        """Add episodes in order while preserving ``add_episode`` semantics.
+
+        This MemWing patch intentionally prioritizes Current Truth parity over
+        maximum bulk throughput. Each RawEpisode is still processed through
+        ``add_episode`` so edge invalidation, timestamp extraction, stable UUID
+        handling, and per-episode results remain identical to the single episode
+        path. The returned episode UUID advances the previous episode context
+        for the next item in the ordered batch.
+        """
+        results: list[AddEpisodeResults] = []
+        previous_episode_uuid = previous_episode_uuids[-1] if previous_episode_uuids else None
+
+        for raw_episode in bulk_episodes:
+            result = await self.add_episode(
+                name=raw_episode.name,
+                episode_body=raw_episode.content,
+                source_description=raw_episode.source_description,
+                reference_time=raw_episode.reference_time,
+                source=raw_episode.source,
+                group_id=group_id,
+                uuid=raw_episode.uuid,
+                update_communities=update_communities,
+                entity_types=entity_types,
+                excluded_entity_types=excluded_entity_types,
+                previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
+                edge_types=edge_types,
+                edge_type_map=edge_type_map,
+                custom_extraction_instructions=custom_extraction_instructions,
+                saga=saga,
+                saga_previous_episode_uuid=previous_episode_uuid,
+            )
+            results.append(result)
+            previous_episode_uuid = result.episode.uuid
+
+        return results
 
     @handle_multiple_group_ids
     async def build_communities(

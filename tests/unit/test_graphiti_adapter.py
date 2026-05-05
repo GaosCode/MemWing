@@ -93,6 +93,30 @@ class FakeGraphiti:
         ]
 
 
+class FakeSemanticBulkGraphiti(FakeGraphiti):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bulk_calls = 0
+        self.raw_episode_uuids: list[str] = []
+
+    async def add_episode_bulk_semantic(self, bulk_episodes, **kwargs):
+        self.bulk_calls += 1
+        self.raw_episode_uuids = [episode.uuid for episode in bulk_episodes]
+        return [
+            FakeAddEpisodeResult(
+                episode=FakeEpisode(uuid=episode.uuid),
+                edges=[
+                    FakeEdge(
+                        uuid=f"edge_{index}",
+                        fact=episode.content,
+                        episodes=[episode.uuid],
+                    )
+                ],
+            )
+            for index, episode in enumerate(bulk_episodes, start=1)
+        ]
+
+
 class FakeLLMClient:
     async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
         return LLMModelResponse(text='{"ok":true}', provider="fake", model="fake")
@@ -239,6 +263,50 @@ def test_graphiti_adapter_reuses_stable_episode_uuid_for_job_retry() -> None:
 
     assert graphiti.add_episode_calls[0]["uuid"] == graphiti.add_episode_calls[1]["uuid"]
     assert first.backend_episode_refs == retry.backend_episode_refs
+
+
+def test_graphiti_adapter_uses_semantic_bulk_when_available() -> None:
+    graphiti = FakeSemanticBulkGraphiti()
+    adapter = GraphitiAdapter(graphiti)
+    first_job = _graph_job("graph_job_001", memory_id="memory_001", source_event_id="source_001")
+    second_job = _graph_job("graph_job_002", memory_id="memory_002", source_event_id="source_002")
+
+    async def scenario():
+        return await adapter.ingest_graph_jobs(
+            GraphWriteBatchRequest(
+                requests=(
+                    GraphWriteRequest(
+                        job=second_job,
+                        memory_item=_memory_item(
+                            memory_id="memory_002",
+                            source_event_id="source_002",
+                            content="Second decision.",
+                        ),
+                        source_events=(_source_event("source_002"),),
+                    ),
+                    GraphWriteRequest(
+                        job=first_job,
+                        memory_item=_memory_item(
+                            memory_id="memory_001",
+                            source_event_id="source_001",
+                            content="First decision.",
+                        ),
+                        source_events=(_source_event("source_001"),),
+                    ),
+                )
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert graphiti.bulk_calls == 1
+    assert graphiti.add_episode_calls == []
+    assert tuple(item.job_id for item in result.items) == ("graph_job_001", "graph_job_002")
+    assert all(item.result is not None for item in result.items)
+    assert tuple(item.result.backend_episode_refs[0] for item in result.items if item.result) == (
+        graphiti.raw_episode_uuids[0],
+        graphiti.raw_episode_uuids[1],
+    )
 
 
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:

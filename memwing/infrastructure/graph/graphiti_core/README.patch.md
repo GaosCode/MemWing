@@ -42,6 +42,11 @@ vendored source can retain its internal imports without mechanical rewriting.
 - Patched `Graphiti.add_episode(uuid=...)` to create a new `EpisodicNode`
   with the caller-provided UUID when no existing episode is found. MemWing uses
   this for stable episode IDs across Graph Write Job retries.
+- Added `Graphiti.add_episode_bulk_semantic()` for MemWing ordered batch writes.
+  This semantic bulk path processes each `RawEpisode` through `add_episode`,
+  advances previous episode UUID context between items, and preserves single
+  episode Current Truth semantics including edge invalidation, timestamp
+  extraction, stable UUID handling, and per-episode results.
 
 ## Upgrade Procedure
 
