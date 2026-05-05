@@ -2162,6 +2162,10 @@ button.board-card {
     minmax(88px, 0.34fr);
 }
 
+.compact-table--worker .compact-row:not(.compact-row--head) {
+  align-items: start;
+}
+
 .compact-table--worker .compact-row > span,
 .compact-table--worker .compact-row > strong {
   min-width: 0;
@@ -2664,8 +2668,9 @@ blockquote {
 
 .settings-section > div {
   min-width: 0;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 240px);
+  justify-content: start;
   gap: 12px;
   align-items: center;
 }
@@ -2686,7 +2691,7 @@ blockquote {
 
 .settings-section .status-pill {
   min-width: 0;
-  max-width: 240px;
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 
