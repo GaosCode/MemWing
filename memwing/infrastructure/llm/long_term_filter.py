@@ -4,7 +4,8 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -19,10 +20,17 @@ from memwing.core.models import (
     SourceEvent,
 )
 from memwing.core.scope import EffectiveScope
+from memwing.infrastructure.llm.caching_llm import ValidatedLLMJsonCache, ValidatedLLMJsonCacheMetrics
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError
 from memwing.infrastructure.llm.structured_output import parse_json_object
+from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.llm_filter import LongTermFilterPort, LongTermFilterRequest
-from memwing.ports.model_runtime import LLMModelClient, LLMModelRequest
+from memwing.ports.model_runtime import (
+    LLMModelClient,
+    LLMModelRequest,
+    MemWingModelRuntime,
+    MemWingModelTransport,
+)
 
 
 class _LongTermFilterItemOutput(BaseModel):
@@ -48,8 +56,37 @@ class _LongTermFilterOutput(BaseModel):
 class MemWingLongTermFilterAdapter(LongTermFilterPort):
     _MAX_ATTEMPTS = 2
 
-    def __init__(self, client: LLMModelClient) -> None:
+    def __init__(
+        self,
+        client: LLMModelClient,
+        *,
+        cache_unit_of_work: EventStoreUnitOfWorkPort | None = None,
+        cache_runtime: MemWingModelRuntime | None = None,
+        cache_model: str | None = None,
+        cache_transport: MemWingModelTransport | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self._client = client
+        self._cache = (
+            ValidatedLLMJsonCache(
+                cache_unit_of_work,
+                role="long_term_filter",
+                runtime=cache_runtime,
+                model=cache_model,
+                transport=cache_transport,
+                prompt_hash="long_term_filter_prompt:v1",
+                schema_hash="long_term_filter_schema:v1",
+                now=now or (lambda: datetime.now(UTC)),
+            )
+            if cache_unit_of_work is not None
+            and cache_runtime is not None
+            and cache_model is not None
+            and cache_transport is not None
+            else None
+        )
+        self.cache_metrics = (
+            self._cache.metrics if self._cache is not None else ValidatedLLMJsonCacheMetrics()
+        )
 
     async def filter_events(
         self,
@@ -62,12 +99,23 @@ class MemWingLongTermFilterAdapter(LongTermFilterPort):
         )
         last_error: LLMOutputSchemaError | None = None
         last_text: str | None = None
+        user_prompt = _long_term_filter_user_prompt(request)
+        source_event_ids = tuple(event.id for event in request.source_events)
+        if self._cache is not None:
+            cached = await self._cache.get(
+                project_memory_space_id=request.scope.project_memory_space_id,
+                source_event_ids=source_event_ids,
+                input_text=user_prompt,
+            )
+            if cached is not None:
+                return tuple(_to_filter_item(item) for item in _validate_parsed_output(cached).items)
+
         for attempt in range(self._MAX_ATTEMPTS):
             response = await self._client.complete(
                 LLMModelRequest(
                     system_prompt=_LONG_TERM_FILTER_SYSTEM_PROMPT,
                     user_prompt=(
-                        _long_term_filter_user_prompt(request)
+                        user_prompt
                         if attempt == 0
                         else _long_term_filter_repair_prompt(
                             request=request,
@@ -76,11 +124,29 @@ class MemWingLongTermFilterAdapter(LongTermFilterPort):
                         )
                     ),
                     trace_id=request.trace_id,
+                    cache_context=(
+                        self._cache.context(
+                            project_memory_space_id=request.scope.project_memory_space_id,
+                            source_event_ids=source_event_ids,
+                        )
+                        if self._cache is not None and attempt == 0
+                        else None
+                    ),
                 )
             )
+            if self._cache is not None:
+                self._cache.metrics.provider_calls += 1
             last_text = response.text
             try:
-                return tuple(_to_filter_item(item) for item in _validate_output(response.text).items)
+                validated = _validate_output(response.text)
+                if self._cache is not None and attempt == 0:
+                    await self._cache.put(
+                        project_memory_space_id=request.scope.project_memory_space_id,
+                        source_event_ids=source_event_ids,
+                        input_text=user_prompt,
+                        value_json=validated.model_dump(mode="json"),
+                    )
+                return tuple(_to_filter_item(item) for item in validated.items)
             except LLMOutputSchemaError as exc:
                 last_error = exc
 
@@ -92,6 +158,10 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORE
 
 def _validate_output(text: str) -> _LongTermFilterOutput:
     parsed = _parse_json_object(text, source="LongTermFilter LLM")
+    return _validate_parsed_output(parsed)
+
+
+def _validate_parsed_output(parsed: dict[str, Any]) -> _LongTermFilterOutput:
     _fill_item_defaults(parsed)
     try:
         return _LongTermFilterOutput.model_validate(parsed)

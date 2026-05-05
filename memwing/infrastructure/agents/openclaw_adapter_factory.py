@@ -38,6 +38,7 @@ from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedd
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
 from memwing.infrastructure.graph.graphiti_reranker import GraphitiNoProviderReranker
 from memwing.infrastructure.llm.model_config import MemWingModelConfigResolver
+from memwing.infrastructure.llm.caching_embedding import CachingEmbeddingModelClient
 from memwing.infrastructure.llm.long_term_filter import MemWingLongTermFilterAdapter
 from memwing.infrastructure.llm.openclaw_runtime import (
     OpenClawRuntimeConfig,
@@ -196,8 +197,6 @@ async def create_worker_runner_from_env(
     max_size: int = 10,
     worker_id: str = "memwing_worker",
 ) -> MemWingWorkerRuntimeHandle:
-    graph_backend = _graph_backend_from_env(env)
-    evidence_index = _evidence_index_from_env(env)
     connection = await PooledPostgresConnection.connect(
         database_url_from_env(env),
         min_size=min_size,
@@ -206,18 +205,20 @@ async def create_worker_runner_from_env(
     try:
         store = PostgresDataStore(connection)
         resolver = MemWingModelConfigResolver.from_env(env)
+        graph_backend = _graph_backend_from_env(env, store=store)
+        evidence_index = _evidence_index_from_env(env, store=store)
         scope_resolver = ScopeResolver(store)
         lifecycle_transition = LifecycleTransitionService(store)
         long_term_filter = LongTermFilterService(
             store,
-            MemWingLongTermFilterAdapter(_llm_client_for_role(resolver, "long_term_filter")),
+            _long_term_filter_adapter(resolver, store),
             lifecycle_transition=lifecycle_transition,
         )
         page_memory_worker = PageMemoryWorker(
             store,
             PageMemoryService(
                 store,
-                MemWingPageMemorySynthesisAdapter(_llm_client_for_role(resolver, "page_memory")),
+                _page_memory_synthesis_adapter(resolver, store),
             ),
             scope_resolver=scope_resolver,
         )
@@ -258,12 +259,23 @@ async def create_worker_runner_from_env(
     )
 
 
-def _graph_backend_from_env(env: Mapping[str, str] | None) -> GraphBackendPort | None:
+def _graph_backend_from_env(
+    env: Mapping[str, str] | None,
+    *,
+    store: EventStoreUnitOfWorkPort | None = None,
+) -> GraphBackendPort | None:
     if graph_backend_from_env(env) == "disabled":
         return None
     resolver = MemWingModelConfigResolver.from_env(env)
     llm_client = _llm_client_for_role(resolver, "graphiti_extraction")
     embedding_client = _embedding_client_for_role(resolver, "graphiti_embedding")
+    if store is not None:
+        embedding_client = _caching_embedding_client_for_role(
+            store,
+            resolver,
+            "graphiti_embedding",
+            embedding_client,
+        )
     return GraphitiAdapter.from_clients(
         GraphitiConnectionConfig(
             uri=graphiti_neo4j_uri_from_env(env),
@@ -276,11 +288,22 @@ def _graph_backend_from_env(env: Mapping[str, str] | None) -> GraphBackendPort |
     )
 
 
-def _evidence_index_from_env(env: Mapping[str, str] | None) -> EvidenceIndexPort | None:
+def _evidence_index_from_env(
+    env: Mapping[str, str] | None,
+    *,
+    store: EventStoreUnitOfWorkPort | None = None,
+) -> EvidenceIndexPort | None:
     if evidence_backend_from_env(env) == "disabled":
         return None
     resolver = MemWingModelConfigResolver.from_env(env)
     embedding_client = _embedding_client_for_role(resolver, "evidence_embedding")
+    if store is not None:
+        embedding_client = _caching_embedding_client_for_role(
+            store,
+            resolver,
+            "evidence_embedding",
+            embedding_client,
+        )
     return QdrantEvidenceIndex.from_config(
         QdrantEvidenceConfig(
             url=qdrant_url_from_env(env),
@@ -305,14 +328,14 @@ def _benchmark_admin_service(
     lifecycle_transition = LifecycleTransitionService(store)
     long_term_filter = LongTermFilterService(
         store,
-        MemWingLongTermFilterAdapter(_llm_client_for_role(resolver, "long_term_filter")),
+        _long_term_filter_adapter(resolver, store),
         lifecycle_transition=lifecycle_transition,
     )
     page_memory_worker = PageMemoryWorker(
         store,
         PageMemoryService(
             store,
-            MemWingPageMemorySynthesisAdapter(_llm_client_for_role(resolver, "page_memory")),
+            _page_memory_synthesis_adapter(resolver, store),
         ),
         scope_resolver=scope_resolver,
     )
@@ -365,6 +388,50 @@ def _embedding_client_for_role(
     if selection.runtime == "openclaw":
         return OpenClawRuntimeEmbeddingClient(OpenClawRuntimeConfig.from_env_model_selection(selection))
     raise ValueError(f"{role} requires openclaw embedding runtime")
+
+
+def _long_term_filter_adapter(
+    resolver: MemWingModelConfigResolver,
+    store: EventStoreUnitOfWorkPort,
+) -> MemWingLongTermFilterAdapter:
+    selection = resolver.selection_for("long_term_filter")
+    return MemWingLongTermFilterAdapter(
+        _llm_client_for_role(resolver, "long_term_filter"),
+        cache_unit_of_work=store,
+        cache_runtime=selection.runtime,
+        cache_model=selection.model or "openclaw",
+        cache_transport=selection.transport or "local",
+    )
+
+
+def _page_memory_synthesis_adapter(
+    resolver: MemWingModelConfigResolver,
+    store: EventStoreUnitOfWorkPort,
+) -> MemWingPageMemorySynthesisAdapter:
+    selection = resolver.selection_for("page_memory")
+    return MemWingPageMemorySynthesisAdapter(
+        _llm_client_for_role(resolver, "page_memory"),
+        cache_unit_of_work=store,
+        cache_runtime=selection.runtime,
+        cache_model=selection.model or "openclaw",
+        cache_transport=selection.transport or "local",
+    )
+
+
+def _caching_embedding_client_for_role(
+    store: EventStoreUnitOfWorkPort,
+    resolver: MemWingModelConfigResolver,
+    role: MemWingModelRole,
+    provider: EmbeddingModelClient,
+) -> EmbeddingModelClient:
+    selection = resolver.selection_for(role)
+    return CachingEmbeddingModelClient(
+        store,
+        provider,
+        runtime=selection.runtime,
+        model=selection.model or "openclaw",
+        transport=selection.transport or "local",
+    )
 
 
 async def _close_optional(value: object) -> None:

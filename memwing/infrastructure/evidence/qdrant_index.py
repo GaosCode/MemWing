@@ -12,7 +12,7 @@ from qdrant_client.http import models
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import SourceEvent
 from memwing.core.scope import EffectiveScope
-from memwing.ports.model_runtime import EmbeddingModelClient
+from memwing.ports.model_runtime import EmbeddingModelClient, ModelCacheContext
 
 
 class QdrantEvidenceClient(Protocol):
@@ -118,7 +118,12 @@ class QdrantEvidenceIndex:
         )
         if not indexable:
             return
-        vectors = await self._embedding_client.embed_batch(tuple(text for _, text in indexable))
+        vectors = await self._embedding_client.embed_batch(
+            tuple(text for _, text in indexable),
+            cache_contexts=tuple(
+                _embedding_cache_context(source_event) for source_event, _text in indexable
+            ),
+        )
         if len(vectors) != len(indexable):
             raise ValueError("embedding batch result count does not match source event count")
         points: list[models.PointStruct] = []
@@ -208,6 +213,17 @@ def _source_event_payload(
         "text": chunk_text,
         "chunk_index": 0,
     }
+
+
+def _embedding_cache_context(source_event: SourceEvent) -> ModelCacheContext:
+    return ModelCacheContext(
+        project_memory_space_id=source_event.project_memory_space_id,
+        source_event_ids=(source_event.id,),
+        role="evidence_embedding",
+        prompt_hash="none",
+        schema_hash="evidence_embedding:v1",
+        cache_policy="required",
+    )
 
 
 def _scope_filter(scope: EffectiveScope) -> models.Filter:

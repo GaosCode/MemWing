@@ -30,6 +30,9 @@ def test_qdrant_evidence_index_upserts_source_event_payload() -> None:
         assert point.payload["source_kind"] == "openclaw"
         assert point.payload["redacted"] is False
         assert point.payload["text"] == "负责人是沈南。"
+        assert index._embedding_client.batch_contexts[0][0].project_memory_space_id == "project_001"
+        assert index._embedding_client.batch_contexts[0][0].source_event_ids == ("source_event_001",)
+        assert index._embedding_client.batch_contexts[0][0].role == "evidence_embedding"
 
     asyncio.run(run())
 
@@ -65,6 +68,7 @@ def test_qdrant_evidence_index_search_filters_by_effective_scope() -> None:
         assert result.results[0].source == "evidence_index"
         assert result.results[0].source_event_ids == ("source_event_001",)
         assert result.results[0].score == 0.87
+        assert index._embedding_client.embed_contexts == (None,)
         query_filter = client.query_filters[0]
         conditions = {condition.key: condition for condition in query_filter.must}
         assert conditions["project_memory_space_id"].match.value == "project_001"
@@ -98,11 +102,20 @@ def test_qdrant_evidence_index_marks_source_redacted_by_scope() -> None:
 class FakeEmbeddingClient:
     def __init__(self, vector: tuple[float, ...]) -> None:
         self.vector = vector
+        self.embed_contexts = ()
+        self.batch_contexts = []
 
-    async def embed(self, input: str) -> tuple[float, ...]:
+    async def embed(self, input: str, *, cache_context=None) -> tuple[float, ...]:
+        self.embed_contexts = (*self.embed_contexts, cache_context)
         return self.vector
 
-    async def embed_batch(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+    async def embed_batch(
+        self,
+        inputs: tuple[str, ...],
+        *,
+        cache_contexts=None,
+    ) -> tuple[tuple[float, ...], ...]:
+        self.batch_contexts.append(cache_contexts)
         return tuple(self.vector for _input in inputs)
 
 

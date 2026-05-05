@@ -8,6 +8,7 @@ import pytest
 
 from memwing.core.models import MemoryDisplayType, MemoryItem, MemoryRoute, MemoryStatus, SourceEvent
 from memwing.core.scope import EffectiveScope
+from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError
 from memwing.infrastructure.llm.long_term_filter import MemWingLongTermFilterAdapter
 from memwing.ports.llm_filter import LongTermFilterRequest
@@ -67,6 +68,42 @@ def test_long_term_filter_adapter_allows_empty_candidate_list() -> None:
     adapter = MemWingLongTermFilterAdapter(FakeLLMClient('{"items":[]}'))
 
     assert asyncio.run(adapter.filter_events(_request())) == ()
+
+
+def test_long_term_filter_adapter_caches_validated_json_by_source_lineage() -> None:
+    llm = FakeLLMClient(
+        """
+        {
+          "items": [
+            {
+              "title": "Skyline codename",
+              "content": "The project codename is Skyline.",
+              "route": "graph",
+              "display_type": "note",
+              "source_event_ids": ["event_001"],
+              "reason": "Durable project fact.",
+              "confidence": 0.98
+            }
+          ]
+        }
+        """
+    )
+    adapter = MemWingLongTermFilterAdapter(
+        llm,
+        cache_unit_of_work=InMemoryDataStore(),
+        cache_runtime="openclaw",
+        cache_model="filter-model",
+        cache_transport="local",
+        now=lambda: datetime(2026, 5, 5, tzinfo=UTC),
+    )
+
+    first = asyncio.run(adapter.filter_events(_request()))
+    second = asyncio.run(adapter.filter_events(_request()))
+
+    assert first == second
+    assert len(llm.requests) == 1
+    assert adapter.cache_metrics.hits == 1
+    assert adapter.cache_metrics.misses == 1
 
 
 def test_long_term_filter_adapter_fills_compact_item_defaults() -> None:

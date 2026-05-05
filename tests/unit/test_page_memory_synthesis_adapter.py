@@ -7,6 +7,7 @@ import pytest
 
 from memwing.core.models import SourceEvent
 from memwing.core.scope import EffectiveScope
+from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError
 from memwing.infrastructure.llm.page_memory_synthesis import MemWingPageMemorySynthesisAdapter
 from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
@@ -61,6 +62,40 @@ def test_page_memory_synthesis_adapter_rejects_malformed_json() -> None:
 
     with pytest.raises(LLMOutputSchemaError, match="did not match schema"):
         asyncio.run(adapter.synthesize(_request()))
+
+
+def test_page_memory_synthesis_adapter_caches_validated_json_by_source_lineage() -> None:
+    llm = FakeLLMClient(
+        """
+        {
+          "title": "Skyline project",
+          "brief": "Skyline is the current project codename.",
+          "topics": [
+            {
+              "title": "Project codename",
+              "summary": "The durable codename is Skyline.",
+              "source_event_ids": ["event_001"]
+            }
+          ]
+        }
+        """
+    )
+    adapter = MemWingPageMemorySynthesisAdapter(
+        llm,
+        cache_unit_of_work=InMemoryDataStore(),
+        cache_runtime="openclaw",
+        cache_model="page-model",
+        cache_transport="local",
+        now=lambda: datetime(2026, 5, 5, tzinfo=UTC),
+    )
+
+    first = asyncio.run(adapter.synthesize(_request()))
+    second = asyncio.run(adapter.synthesize(_request()))
+
+    assert first == second
+    assert len(llm.requests) == 1
+    assert adapter.cache_metrics.hits == 1
+    assert adapter.cache_metrics.misses == 1
 
 
 def test_page_memory_synthesis_adapter_repairs_schema_once() -> None:
