@@ -2153,13 +2153,16 @@ button.board-card {
 
 .compact-table--worker .compact-row--with-actions {
   grid-template-columns:
-    minmax(220px, 1.25fr)
-    minmax(104px, 0.42fr)
-    minmax(220px, 0.9fr)
-    minmax(110px, 0.42fr)
-    minmax(120px, 0.52fr)
-    minmax(72px, 0.28fr)
-    minmax(88px, 0.34fr);
+    minmax(260px, 1fr)
+    140px
+    250px
+    130px
+    140px
+    88px
+    110px;
+  justify-content: stretch;
+  justify-items: start;
+  column-gap: 28px;
 }
 
 .compact-table--worker .compact-row:not(.compact-row--head) {
@@ -2191,6 +2194,7 @@ button.board-card {
   border: 0;
   background: transparent;
   padding: 0;
+  justify-self: start;
 }
 
 .inspector-panel {
