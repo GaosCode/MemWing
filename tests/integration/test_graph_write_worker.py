@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
 
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
@@ -57,5 +58,62 @@ def test_graph_write_worker_ingests_job_writes_links_and_audit() -> None:
         assert store.audit_events[-1].input_ref == "graph_job_001"
         assert store.audit_events[-1].output_ref == "memory_graph_links:2"
         assert "Decision source text." not in (store.audit_events[-1].reason_text or "")
+
+    asyncio.run(scenario())
+
+
+def test_graph_write_worker_processes_same_serialization_key_batch() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        second_source = replace(
+            source_event(),
+            id="source_002",
+            raw_payload_hash="hash_002",
+            runtime_event_idempotency_key="runtime-key-002",
+        )
+        second_memory = replace(
+            memory_item(),
+            id="memory_002",
+            source_event_ids=("source_002",),
+            primary_source_event_id="source_002",
+        )
+        second_job = replace(
+            graph_job(),
+            id="graph_job_002",
+            memory_id="memory_002",
+            source_event_ids=("source_002",),
+            idempotency_key="graph:memory_002",
+        )
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.source_events.insert_if_absent(second_source)
+            await tx.memory_items.upsert(memory_item())
+            await tx.memory_items.upsert(second_memory)
+            await tx.graph_write_jobs.enqueue(graph_job())
+            await tx.graph_write_jobs.enqueue(second_job)
+
+        backend = FakeGraphBackend(successful_graph_result())
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=backend,
+            worker_id="graph_worker_001",
+            batch_size=8,
+        )
+
+        result = await worker.run_once(now=NOW)
+
+        assert result.claimed == 2
+        assert result.succeeded == 2
+        assert result.retried == 0
+        assert result.dead_lettered == 0
+        assert tuple(request.job.id for request in backend.requests) == (
+            "graph_job_001",
+            "graph_job_002",
+        )
+        assert [event.stage for event in store.audit_events[-2:]] == [
+            "graph_write.succeeded",
+            "graph_write.succeeded",
+        ]
 
     asyncio.run(scenario())

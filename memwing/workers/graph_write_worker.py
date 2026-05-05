@@ -6,6 +6,7 @@ import uuid
 
 from memwing.application.failure_semantics import FailureClassification, classify_failure
 from memwing.application.graph_write_processor import (
+    GraphWriteBatchProcessingItemResult,
     GraphWriteProcessingResult,
     GraphWriteProcessor,
     GraphWriteProcessorInputError,
@@ -35,11 +36,17 @@ class GraphWriteWorker:
         lock_duration: timedelta = timedelta(minutes=5),
         retry_delay: timedelta = timedelta(minutes=1),
         backend_timeout: timedelta = timedelta(seconds=30),
+        batch_size: int = 8,
+        max_project_concurrency: int = 1,
+        max_global_concurrency: int = 16,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._worker_id = worker_id
         self._lock_duration = lock_duration
         self._retry_delay = retry_delay
+        self._batch_size = batch_size
+        self._max_project_concurrency = max_project_concurrency
+        self._max_global_concurrency = max_global_concurrency
         self._processor = GraphWriteProcessor(
             unit_of_work,
             graph_backend=graph_backend,
@@ -53,17 +60,19 @@ class GraphWriteWorker:
         self,
         *,
         now: datetime | None = None,
-        limit: int = 1,
+        limit: int | None = None,
         project_memory_space_id: str | None = None,
     ) -> GraphWriteWorkerResult:
         run_at = now or datetime.now(UTC)
+        claim_limit = self._claim_limit(limit)
         async with self._unit_of_work.transaction() as tx:
             if project_memory_space_id is None:
                 claimed = await tx.graph_write_jobs.claim_pending(
                     now=run_at,
                     worker_id=self._worker_id,
                     lock_duration=self._lock_duration,
-                    limit=limit,
+                    limit=claim_limit,
+                    max_project_concurrency=self._max_project_concurrency,
                 )
             else:
                 claimed = await tx.graph_write_jobs.claim_pending_for_project(
@@ -71,40 +80,19 @@ class GraphWriteWorker:
                     now=run_at,
                     worker_id=self._worker_id,
                     lock_duration=self._lock_duration,
-                    limit=limit,
+                    limit=claim_limit,
+                    max_project_concurrency=self._max_project_concurrency,
                 )
 
         succeeded = 0
         retried = 0
         dead_lettered = 0
-        for job in claimed:
-            try:
-                completion_at = now or datetime.now(UTC)
-                processing_result = await self._processor.process(job, now=completion_at)
-                await self._record_success(
-                    job=job,
-                    processing_result=processing_result,
-                    now=completion_at,
-                )
-            except OutboxLockOwnershipError as exc:
-                completion_at = now or datetime.now(UTC)
-                await self._record_lock_ownership_failure(job=job, exc=exc, now=completion_at)
-                raise
-            except Exception as exc:
-                completion_at = now or datetime.now(UTC)
-                failure = classify_failure(exc, audit_stage="graph_write.failed")
-                updated = await self._record_failure(
-                    job=job,
-                    error=_safe_error_summary(exc),
-                    failure=failure,
-                    now=completion_at,
-                )
-                if updated.status == "dead_letter":
-                    dead_lettered += 1
-                else:
-                    retried += 1
-            else:
-                succeeded += 1
+        completion_at = now or datetime.now(UTC)
+        for item in await self._processor.process_batch(claimed, now=completion_at):
+            item_result = await self._record_batch_item(item=item, now=completion_at)
+            succeeded += item_result.succeeded
+            retried += item_result.retried
+            dead_lettered += item_result.dead_lettered
 
         return GraphWriteWorkerResult(
             claimed=len(claimed),
@@ -112,6 +100,37 @@ class GraphWriteWorker:
             retried=retried,
             dead_lettered=dead_lettered,
         )
+
+    def _claim_limit(self, limit: int | None) -> int:
+        requested = self._batch_size if limit is None else limit
+        return max(0, min(requested, self._max_global_concurrency))
+
+    async def _record_batch_item(
+        self,
+        *,
+        item: GraphWriteBatchProcessingItemResult,
+        now: datetime,
+    ) -> GraphWriteWorkerResult:
+        if item.error is None:
+            if item.result is None:
+                raise RuntimeError("graph batch item succeeded without a processing result")
+            await self._record_success(job=item.job, processing_result=item.result, now=now)
+            return GraphWriteWorkerResult(claimed=0, succeeded=1, retried=0, dead_lettered=0)
+
+        if isinstance(item.error, OutboxLockOwnershipError):
+            await self._record_lock_ownership_failure(job=item.job, exc=item.error, now=now)
+            raise item.error
+
+        failure = classify_failure(item.error, audit_stage="graph_write.failed")
+        updated = await self._record_failure(
+            job=item.job,
+            error=_safe_error_summary(item.error),
+            failure=failure,
+            now=now,
+        )
+        if updated.status == "dead_letter":
+            return GraphWriteWorkerResult(claimed=0, succeeded=0, retried=0, dead_lettered=1)
+        return GraphWriteWorkerResult(claimed=0, succeeded=0, retried=1, dead_lettered=0)
 
     async def _record_success(
         self,

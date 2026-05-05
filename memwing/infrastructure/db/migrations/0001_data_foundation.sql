@@ -374,6 +374,7 @@ CREATE TABLE IF NOT EXISTS memory_page_versions (
 CREATE TABLE IF NOT EXISTS graph_write_jobs (
     id text PRIMARY KEY,
     backend text NOT NULL,
+    serialization_key text,
     project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
     thread_id text,
     saga_id text,
@@ -396,6 +397,16 @@ CREATE TABLE IF NOT EXISTS graph_write_jobs (
     UNIQUE (idempotency_key)
 );
 
+ALTER TABLE graph_write_jobs
+    ADD COLUMN IF NOT EXISTS serialization_key text;
+
+UPDATE graph_write_jobs
+SET serialization_key = 'backend:' || backend || ':project:' || project_memory_space_id
+WHERE serialization_key IS NULL;
+
+ALTER TABLE graph_write_jobs
+    ALTER COLUMN serialization_key SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_lock
     ON graph_write_jobs (status, locked_at);
 
@@ -407,6 +418,12 @@ CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_run_priority
 
 CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_project_thread_saga
     ON graph_write_jobs (project_memory_space_id, thread_id, saga_id);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_status_serialization_lock
+    ON graph_write_jobs (status, serialization_key, lock_expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_project_status_serialization
+    ON graph_write_jobs (project_memory_space_id, status, serialization_key);
 
 CREATE INDEX IF NOT EXISTS idx_graph_write_jobs_memory
     ON graph_write_jobs (memory_id);

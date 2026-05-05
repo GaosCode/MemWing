@@ -51,7 +51,7 @@ class MemWingWorkerRunner:
         *,
         now: datetime | None = None,
         outbox_limit: int = 20,
-        graph_limit: int = 20,
+        graph_limit: int | None = None,
         lane: PipelineWorkerLane = PipelineWorkerLane.ALL,
     ) -> MemWingWorkerRunResult:
         run_at = now or datetime.now(UTC)
@@ -65,7 +65,7 @@ class MemWingWorkerRunner:
         interval_seconds: float,
         idle_interval_seconds: float | None = None,
         outbox_limit: int = 20,
-        graph_limit: int = 20,
+        graph_limit: int | None = None,
         lane: PipelineWorkerLane = PipelineWorkerLane.ALL,
     ) -> None:
         idle_interval = interval_seconds if idle_interval_seconds is None else idle_interval_seconds
@@ -134,7 +134,7 @@ class MemWingWorkerRunner:
         *,
         interval_seconds: float,
         idle_interval_seconds: float,
-        graph_limit: int,
+        graph_limit: int | None,
     ) -> None:
         while True:
             graph = await self._run_graph_once(
@@ -148,7 +148,7 @@ class MemWingWorkerRunner:
         self,
         *,
         now: datetime,
-        limit: int,
+        limit: int | None,
         lane: PipelineWorkerLane,
     ) -> DerivedOutboxWorkerResult:
         job_types = _outbox_job_types_for_lane(lane)

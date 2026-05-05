@@ -7,12 +7,18 @@ from hashlib import sha1
 from pathlib import Path
 import re
 import sys
+import uuid
 from typing import Protocol
 
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import GraphFact, GraphWriteResult
 from memwing.core.scope import EffectiveScope
-from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.graph_backend import (
+    GraphWriteBatchItemResult,
+    GraphWriteBatchRequest,
+    GraphWriteBatchResult,
+    GraphWriteRequest,
+)
 
 
 class GraphitiRuntime(Protocol):
@@ -75,6 +81,64 @@ class GraphitiAdapter:
         return await self._search(query, trace_suffix="history")
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        return await self._ingest_one(request, previous_episode_uuid=None)
+
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        items: list[GraphWriteBatchItemResult] = []
+        previous_episode_uuid: str | None = None
+        blocked_reason: str | None = None
+        for graph_request in sorted(request.requests, key=_graph_write_request_order):
+            if blocked_reason is not None:
+                items.append(
+                    GraphWriteBatchItemResult(
+                        job_id=graph_request.job.id,
+                        result=None,
+                        error_type="GraphitiOrderedBatchBlocked",
+                        error_message=None,
+                        reason_code=blocked_reason,
+                        retryable=True,
+                    )
+                )
+                continue
+            try:
+                result = await self._ingest_one(
+                    graph_request,
+                    previous_episode_uuid=previous_episode_uuid,
+                )
+            except Exception as exc:
+                items.append(
+                    GraphWriteBatchItemResult(
+                        job_id=graph_request.job.id,
+                        result=None,
+                        error_type=exc.__class__.__name__,
+                        error_message=None,
+                        reason_code="graphiti_ordered_episode_failed",
+                        retryable=True,
+                    )
+                )
+                blocked_reason = "graphiti_ordered_episode_blocked"
+                continue
+
+            if result.backend_episode_refs:
+                previous_episode_uuid = result.backend_episode_refs[-1]
+            items.append(
+                GraphWriteBatchItemResult(
+                    job_id=graph_request.job.id,
+                    result=result,
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+            )
+        return GraphWriteBatchResult(items=tuple(items))
+
+    async def _ingest_one(
+        self,
+        request: GraphWriteRequest,
+        *,
+        previous_episode_uuid: str | None,
+    ) -> GraphWriteResult:
         if not request.source_events:
             raise ValueError("GraphitiAdapter requires at least one source event")
 
@@ -89,6 +153,8 @@ class GraphitiAdapter:
             source_description="MemWing graph write job",
             reference_time=reference_time,
             group_id=_graphiti_group_id(request.job.project_memory_space_id),
+            uuid=_stable_graphiti_episode_uuid(request),
+            previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
         )
         episode_refs = _episode_refs(result)
         edges = _edges(result)
@@ -170,6 +236,27 @@ def _edges(result: object) -> tuple[object, ...]:
     if edges is None:
         return tuple()
     return tuple(edges)
+
+
+def _graph_write_request_order(request: GraphWriteRequest) -> tuple[datetime, datetime, str]:
+    return (
+        request.memory_item.event_time or request.source_events[0].event_time,
+        request.job.created_at,
+        request.job.id,
+    )
+
+
+def _stable_graphiti_episode_uuid(request: GraphWriteRequest) -> str:
+    key = "|".join(
+        (
+            "graphiti",
+            request.job.project_memory_space_id,
+            request.memory_item.id,
+            str(request.memory_item.lifecycle_revision),
+            ",".join(request.job.source_event_ids),
+        )
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
 def _edge_confidence(edge: object) -> float | None:

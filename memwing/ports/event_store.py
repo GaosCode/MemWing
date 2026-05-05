@@ -448,6 +448,7 @@ class GraphWriteJobRepositoryPort(Protocol):
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         ...
 
@@ -459,6 +460,7 @@ class GraphWriteJobRepositoryPort(Protocol):
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         ...
 

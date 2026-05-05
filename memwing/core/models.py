@@ -382,6 +382,7 @@ class MemoryGraphLink:
 class GraphWriteJob:
     id: str
     backend: str
+    serialization_key: str
     project_memory_space_id: str
     thread_id: str | None
     saga_id: str | None
@@ -401,3 +402,7 @@ class GraphWriteJob:
     lock_expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+def graph_write_serialization_key(*, backend: str, project_memory_space_id: str) -> str:
+    return f"backend:{backend}:project:{project_memory_space_id}"

@@ -188,6 +188,12 @@ class PermanentFailureGraphBackend:
             "Provider returned invalid graph output.",
         )
 
+    async def ingest_graph_jobs(self, request):
+        raise ProviderPermanentFailure(
+            "provider_bad_output",
+            "Provider returned invalid graph output.",
+        )
+
     async def mark_source_redacted(self, source_event_id, scope):
         raise NotImplementedError
 
@@ -200,6 +206,12 @@ class TransientFailureGraphBackend:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request):
+        raise ProviderTransientFailure(
+            "provider_unavailable",
+            "Provider is temporarily unavailable.",
+        )
+
+    async def ingest_graph_jobs(self, request):
         raise ProviderTransientFailure(
             "provider_unavailable",
             "Provider is temporarily unavailable.",

@@ -70,7 +70,7 @@ def _parser(*, prog: str = "memwing-worker") -> argparse.ArgumentParser:
     )
     parser.add_argument("--worker-id", default="memwing_worker")
     parser.add_argument("--outbox-limit", type=int, default=20)
-    parser.add_argument("--graph-limit", type=int, default=20)
+    parser.add_argument("--graph-limit", type=int, default=None)
     parser.add_argument("--interval-seconds", type=float, default=1.0)
     parser.add_argument("--idle-interval-seconds", type=float, default=5.0)
     return parser

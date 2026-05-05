@@ -258,6 +258,7 @@ def graph_write_job_from_row(row: Row) -> GraphWriteJob:
     return GraphWriteJob(
         id=_text(row, "id"),
         backend=_text(row, "backend"),
+        serialization_key=_text(row, "serialization_key"),
         project_memory_space_id=_text(row, "project_memory_space_id"),
         thread_id=_optional_text(row, "thread_id"),
         saga_id=_optional_text(row, "saga_id"),

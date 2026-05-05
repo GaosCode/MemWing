@@ -39,6 +39,9 @@ vendored source can retain its internal imports without mechanical rewriting.
 - Created Kuzu FTS indices during `KuzuDriver.setup_schema()` because
   `Graphiti.add_episode()` performs edge search during first write and can
   reach FTS before callers have a separate migration hook.
+- Patched `Graphiti.add_episode(uuid=...)` to create a new `EpisodicNode`
+  with the caller-provided UUID when no existing episode is found. MemWing uses
+  this for stable episode IDs across Graph Write Job retries.
 
 ## Upgrade Procedure
 

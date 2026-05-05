@@ -455,16 +455,17 @@ RETURNING *
 
 _INSERT_GRAPH_WRITE_JOB_SQL = """
 INSERT INTO graph_write_jobs (
-    id, backend, project_memory_space_id, thread_id, saga_id, memory_id, source_event_ids,
-    route, status, idempotency_key, attempts, max_attempts, priority, next_run_at,
-    dead_letter_reason, last_error, locked_at, locked_by, lock_expires_at,
-    created_at, updated_at
+    id, backend, serialization_key, project_memory_space_id, thread_id, saga_id,
+    memory_id, source_event_ids, route, status, idempotency_key, attempts,
+    max_attempts, priority, next_run_at, dead_letter_reason, last_error,
+    locked_at, locked_by, lock_expires_at, created_at, updated_at
 ) VALUES (
-    %(id)s, %(backend)s, %(project_memory_space_id)s, %(thread_id)s,
-    %(saga_id)s, %(memory_id)s, %(source_event_ids)s, %(route)s, %(status)s,
-    %(idempotency_key)s, %(attempts)s, %(max_attempts)s, %(priority)s,
-    %(next_run_at)s, %(dead_letter_reason)s, %(last_error)s, %(locked_at)s,
-    %(locked_by)s, %(lock_expires_at)s, %(created_at)s, %(updated_at)s
+    %(id)s, %(backend)s, %(serialization_key)s, %(project_memory_space_id)s,
+    %(thread_id)s, %(saga_id)s, %(memory_id)s, %(source_event_ids)s,
+    %(route)s, %(status)s, %(idempotency_key)s, %(attempts)s,
+    %(max_attempts)s, %(priority)s, %(next_run_at)s, %(dead_letter_reason)s,
+    %(last_error)s, %(locked_at)s, %(locked_by)s, %(lock_expires_at)s,
+    %(created_at)s, %(updated_at)s
 )
 ON CONFLICT (idempotency_key) DO NOTHING
 RETURNING *
@@ -487,29 +488,31 @@ ORDER BY created_at ASC, id ASC
 """
 
 _CLAIM_GRAPH_WRITE_JOBS_SQL = """
-WITH candidates AS (
+WITH active_project_keys AS (
+    SELECT project_memory_space_id, COUNT(DISTINCT serialization_key) AS active_key_count
+    FROM graph_write_jobs
+    WHERE status = 'processing'
+      AND (lock_expires_at IS NULL OR lock_expires_at > %(now)s)
+    GROUP BY project_memory_space_id
+),
+claimable AS (
     SELECT
         job.id,
+        job.project_memory_space_id,
+        job.serialization_key,
         job.status,
         job.next_run_at,
         job.priority,
         job.created_at,
         ROW_NUMBER() OVER (
-            PARTITION BY job.project_memory_space_id
+            PARTITION BY job.serialization_key
             ORDER BY
                 CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
                 job.next_run_at,
                 job.priority DESC,
-                job.created_at
-        ) AS project_rank,
-        ROW_NUMBER() OVER (
-            PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id
-            ORDER BY
-                CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
-                job.next_run_at,
-                job.priority DESC,
-                job.created_at
-        ) AS group_rank
+                job.created_at,
+                job.id
+        ) AS key_rank
     FROM graph_write_jobs AS job
     WHERE (
             (job.status = 'pending' AND job.next_run_at <= %(now)s)
@@ -518,34 +521,50 @@ WITH candidates AS (
       AND NOT EXISTS (
           SELECT 1
           FROM graph_write_jobs AS active
-          WHERE active.project_memory_space_id = job.project_memory_space_id
-            AND active.thread_id IS NOT DISTINCT FROM job.thread_id
-            AND active.saga_id IS NOT DISTINCT FROM job.saga_id
+          WHERE active.serialization_key = job.serialization_key
             AND active.status = 'processing'
             AND (active.lock_expires_at IS NULL OR active.lock_expires_at > %(now)s)
       )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM graph_write_jobs AS project_active
-          WHERE project_active.project_memory_space_id = job.project_memory_space_id
-            AND project_active.status = 'processing'
-            AND (
-                project_active.lock_expires_at IS NULL
-                OR project_active.lock_expires_at > %(now)s
-            )
-      )
+),
+key_order AS (
+    SELECT
+        claimable.project_memory_space_id,
+        claimable.serialization_key,
+        MIN(CASE WHEN claimable.status = 'processing' THEN 0 ELSE 1 END) AS status_rank,
+        MIN(claimable.next_run_at) AS next_run_at,
+        MAX(claimable.priority) AS priority,
+        MIN(claimable.created_at) AS created_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY claimable.project_memory_space_id
+            ORDER BY
+                MIN(CASE WHEN claimable.status = 'processing' THEN 0 ELSE 1 END),
+                MIN(claimable.next_run_at),
+                MAX(claimable.priority) DESC,
+                MIN(claimable.created_at),
+                claimable.serialization_key
+        ) AS project_key_rank
+    FROM claimable
+    GROUP BY claimable.project_memory_space_id, claimable.serialization_key
+),
+eligible AS (
+    SELECT claimable.*
+    FROM claimable
+    INNER JOIN key_order
+        ON key_order.serialization_key = claimable.serialization_key
+    LEFT JOIN active_project_keys
+        ON active_project_keys.project_memory_space_id = claimable.project_memory_space_id
+    WHERE key_order.project_key_rank <= GREATEST(
+        %(max_project_concurrency)s - COALESCE(active_project_keys.active_key_count, 0),
+        0
+    )
 ),
 claim AS (
     SELECT job.id
     FROM graph_write_jobs AS job
-    INNER JOIN candidates ON candidates.id = job.id
-    WHERE candidates.project_rank = 1
-      AND candidates.group_rank = 1
+    INNER JOIN eligible ON eligible.id = job.id
     ORDER BY
-        CASE WHEN candidates.status = 'processing' THEN 0 ELSE 1 END,
-        candidates.next_run_at,
-        candidates.priority DESC,
-        candidates.created_at
+        eligible.serialization_key,
+        eligible.key_rank
     LIMIT %(limit)s
     FOR UPDATE SKIP LOCKED
 )
@@ -561,21 +580,32 @@ RETURNING job.*
 """
 
 _CLAIM_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL = """
-WITH candidates AS (
+WITH active_project_keys AS (
+    SELECT project_memory_space_id, COUNT(DISTINCT serialization_key) AS active_key_count
+    FROM graph_write_jobs
+    WHERE project_memory_space_id = %(project_memory_space_id)s
+      AND status = 'processing'
+      AND (lock_expires_at IS NULL OR lock_expires_at > %(now)s)
+    GROUP BY project_memory_space_id
+),
+claimable AS (
     SELECT
         job.id,
+        job.project_memory_space_id,
+        job.serialization_key,
         job.status,
         job.next_run_at,
         job.priority,
         job.created_at,
         ROW_NUMBER() OVER (
-            PARTITION BY job.project_memory_space_id, job.thread_id, job.saga_id
+            PARTITION BY job.serialization_key
             ORDER BY
                 CASE WHEN job.status = 'processing' THEN 0 ELSE 1 END,
                 job.next_run_at,
                 job.priority DESC,
-                job.created_at
-        ) AS group_rank
+                job.created_at,
+                job.id
+        ) AS key_rank
     FROM graph_write_jobs AS job
     WHERE job.project_memory_space_id = %(project_memory_space_id)s
       AND (
@@ -585,23 +615,46 @@ WITH candidates AS (
       AND NOT EXISTS (
           SELECT 1
           FROM graph_write_jobs AS active
-          WHERE active.project_memory_space_id = job.project_memory_space_id
-            AND active.thread_id IS NOT DISTINCT FROM job.thread_id
-            AND active.saga_id IS NOT DISTINCT FROM job.saga_id
+          WHERE active.serialization_key = job.serialization_key
             AND active.status = 'processing'
             AND (active.lock_expires_at IS NULL OR active.lock_expires_at > %(now)s)
       )
 ),
+key_order AS (
+    SELECT
+        claimable.project_memory_space_id,
+        claimable.serialization_key,
+        ROW_NUMBER() OVER (
+            PARTITION BY claimable.project_memory_space_id
+            ORDER BY
+                MIN(CASE WHEN claimable.status = 'processing' THEN 0 ELSE 1 END),
+                MIN(claimable.next_run_at),
+                MAX(claimable.priority) DESC,
+                MIN(claimable.created_at),
+                claimable.serialization_key
+        ) AS project_key_rank
+    FROM claimable
+    GROUP BY claimable.project_memory_space_id, claimable.serialization_key
+),
+eligible AS (
+    SELECT claimable.*
+    FROM claimable
+    INNER JOIN key_order
+        ON key_order.serialization_key = claimable.serialization_key
+    LEFT JOIN active_project_keys
+        ON active_project_keys.project_memory_space_id = claimable.project_memory_space_id
+    WHERE key_order.project_key_rank <= GREATEST(
+        %(max_project_concurrency)s - COALESCE(active_project_keys.active_key_count, 0),
+        0
+    )
+),
 claim AS (
     SELECT job.id
     FROM graph_write_jobs AS job
-    INNER JOIN candidates ON candidates.id = job.id
-    WHERE candidates.group_rank = 1
+    INNER JOIN eligible ON eligible.id = job.id
     ORDER BY
-        CASE WHEN candidates.status = 'processing' THEN 0 ELSE 1 END,
-        candidates.next_run_at,
-        candidates.priority DESC,
-        candidates.created_at
+        eligible.serialization_key,
+        eligible.key_rank
     LIMIT %(limit)s
     FOR UPDATE SKIP LOCKED
 )

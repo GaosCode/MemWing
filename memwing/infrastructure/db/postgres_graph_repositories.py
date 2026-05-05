@@ -85,6 +85,7 @@ class PostgresGraphWriteJobRepository:
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         rows = await self._executor.fetch(
             _CLAIM_GRAPH_WRITE_JOBS_SQL,
@@ -93,6 +94,7 @@ class PostgresGraphWriteJobRepository:
                 "worker_id": worker_id,
                 "lock_expires_at": now + lock_duration,
                 "limit": limit,
+                "max_project_concurrency": max_project_concurrency,
             },
         )
         return tuple(graph_write_job_from_row(row) for row in rows)
@@ -105,6 +107,7 @@ class PostgresGraphWriteJobRepository:
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         rows = await self._executor.fetch(
             _CLAIM_GRAPH_WRITE_JOBS_FOR_PROJECT_SQL,
@@ -114,6 +117,7 @@ class PostgresGraphWriteJobRepository:
                 "worker_id": worker_id,
                 "lock_expires_at": now + lock_duration,
                 "limit": limit,
+                "max_project_concurrency": max_project_concurrency,
             },
         )
         return tuple(graph_write_job_from_row(row) for row in rows)
@@ -292,6 +296,7 @@ def _graph_write_job_params(job: GraphWriteJob) -> dict[str, object]:
     return {
         "id": job.id,
         "backend": job.backend,
+        "serialization_key": job.serialization_key,
         "project_memory_space_id": job.project_memory_space_id,
         "thread_id": job.thread_id,
         "saga_id": job.saga_id,

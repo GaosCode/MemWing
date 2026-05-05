@@ -17,7 +17,12 @@ from memwing.core.models import (
 )
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
-from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.graph_backend import (
+    GraphWriteBatchItemResult,
+    GraphWriteBatchRequest,
+    GraphWriteBatchResult,
+    GraphWriteRequest,
+)
 from memwing.ports.lifecycle_transition import LifecycleTransitionRequest, LifecycleTransitionResult
 
 
@@ -122,6 +127,7 @@ def graph_job(
     return GraphWriteJob(
         id="graph_job_001",
         backend="graphiti",
+        serialization_key="backend:graphiti:project:project_001",
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
@@ -159,6 +165,22 @@ class FakeGraphBackend:
         self.requests = (*self.requests, request)
         return self._result
 
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        items = []
+        for item_request in request.requests:
+            result = await self.ingest_graph_job(item_request)
+            items.append(
+                GraphWriteBatchItemResult(
+                    job_id=item_request.job.id,
+                    result=result,
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+            )
+        return GraphWriteBatchResult(items=tuple(items))
+
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError
 
@@ -176,6 +198,9 @@ class FailingGraphBackend:
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
         raise RuntimeError(self._error)
 
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        raise RuntimeError(self._error)
+
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError
 
@@ -188,6 +213,9 @@ class HangingGraphBackend:
         raise NotImplementedError
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        await asyncio.Event().wait()
+
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
         await asyncio.Event().wait()
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
@@ -214,6 +242,22 @@ class ReclaimingGraphBackend:
                 limit=1,
             )
         return self._result
+
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        items = []
+        for item_request in request.requests:
+            result = await self.ingest_graph_job(item_request)
+            items.append(
+                GraphWriteBatchItemResult(
+                    job_id=item_request.job.id,
+                    result=result,
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+            )
+        return GraphWriteBatchResult(items=tuple(items))
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError

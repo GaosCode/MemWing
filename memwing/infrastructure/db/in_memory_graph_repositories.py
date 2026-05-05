@@ -60,17 +60,17 @@ class InMemoryGraphWriteJobRepository:
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         if limit <= 0:
             return ()
 
-        blocked_project_keys = {
-            job.project_memory_space_id
-            for job in self._tx.state.graph_write_jobs.values()
-            if _is_unexpired_processing_graph_job(job, now)
-        }
-        blocked_group_keys = {
-            _graph_job_group_key(job)
+        active_project_counts = _active_project_serialization_key_counts(
+            tuple(self._tx.state.graph_write_jobs.values()),
+            now,
+        )
+        blocked_serialization_keys = {
+            job.serialization_key
             for job in self._tx.state.graph_write_jobs.values()
             if _is_unexpired_processing_graph_job(job, now)
         }
@@ -78,27 +78,25 @@ class InMemoryGraphWriteJobRepository:
             job
             for job in self._tx.state.graph_write_jobs.values()
             if _is_graph_job_claimable(job, now)
-            and job.project_memory_space_id not in blocked_project_keys
-            and _graph_job_group_key(job) not in blocked_group_keys
+            and job.serialization_key not in blocked_serialization_keys
         ]
-        eligible.sort(
-            key=lambda job: (
-                0 if job.status == "processing" else 1,
-                job.next_run_at,
-                -job.priority,
-                job.created_at,
-            )
+        eligible = _eligible_graph_jobs_for_project_concurrency(
+            eligible,
+            active_project_counts=active_project_counts,
+            max_project_concurrency=max_project_concurrency,
         )
 
         claimed: list[GraphWriteJob] = []
-        claimed_project_keys: set[str] = set()
-        claimed_group_keys: set[tuple[str, str | None, str | None]] = set()
+        claimed_serialization_keys_by_project: dict[str, set[str]] = {}
         for job in eligible:
-            if job.project_memory_space_id in claimed_project_keys:
-                continue
-            group_key = _graph_job_group_key(job)
-            if group_key in claimed_group_keys:
-                continue
+            project_keys = claimed_serialization_keys_by_project.setdefault(
+                job.project_memory_space_id,
+                set(),
+            )
+            active_count = active_project_counts.get(job.project_memory_space_id, 0)
+            if job.serialization_key not in project_keys:
+                if active_count + len(project_keys) >= max_project_concurrency:
+                    continue
 
             updated = replace(
                 job,
@@ -110,8 +108,7 @@ class InMemoryGraphWriteJobRepository:
             )
             self._tx.state.graph_write_jobs[job.id] = updated
             claimed.append(updated)
-            claimed_project_keys.add(job.project_memory_space_id)
-            claimed_group_keys.add(group_key)
+            project_keys.add(job.serialization_key)
             if len(claimed) >= limit:
                 break
         return tuple(claimed)
@@ -124,38 +121,41 @@ class InMemoryGraphWriteJobRepository:
         worker_id: str,
         lock_duration: timedelta,
         limit: int,
+        max_project_concurrency: int = 1,
     ) -> tuple[GraphWriteJob, ...]:
         if limit <= 0:
             return ()
 
-        blocked_group_keys = {
-            _graph_job_group_key(job)
-            for job in self._tx.state.graph_write_jobs.values()
-            if job.project_memory_space_id == project_memory_space_id
-            and _is_unexpired_processing_graph_job(job, now)
-        }
-        eligible = [
+        project_jobs = tuple(
             job
             for job in self._tx.state.graph_write_jobs.values()
             if job.project_memory_space_id == project_memory_space_id
-            and _is_graph_job_claimable(job, now)
-            and _graph_job_group_key(job) not in blocked_group_keys
+        )
+        active_project_counts = _active_project_serialization_key_counts(project_jobs, now)
+        blocked_serialization_keys = {
+            job.serialization_key
+            for job in project_jobs
+            if _is_unexpired_processing_graph_job(job, now)
+        }
+        eligible = [
+            job
+            for job in project_jobs
+            if _is_graph_job_claimable(job, now)
+            and job.serialization_key not in blocked_serialization_keys
         ]
-        eligible.sort(
-            key=lambda job: (
-                0 if job.status == "processing" else 1,
-                job.next_run_at,
-                -job.priority,
-                job.created_at,
-            )
+        eligible = _eligible_graph_jobs_for_project_concurrency(
+            eligible,
+            active_project_counts=active_project_counts,
+            max_project_concurrency=max_project_concurrency,
         )
 
         claimed: list[GraphWriteJob] = []
-        claimed_group_keys: set[tuple[str, str | None, str | None]] = set()
+        claimed_serialization_keys: set[str] = set()
         for job in eligible:
-            group_key = _graph_job_group_key(job)
-            if group_key in claimed_group_keys:
-                continue
+            active_count = active_project_counts.get(project_memory_space_id, 0)
+            if job.serialization_key not in claimed_serialization_keys:
+                if active_count + len(claimed_serialization_keys) >= max_project_concurrency:
+                    continue
 
             updated = replace(
                 job,
@@ -167,7 +167,7 @@ class InMemoryGraphWriteJobRepository:
             )
             self._tx.state.graph_write_jobs[job.id] = updated
             claimed.append(updated)
-            claimed_group_keys.add(group_key)
+            claimed_serialization_keys.add(job.serialization_key)
             if len(claimed) >= limit:
                 break
         return tuple(claimed)
@@ -379,5 +379,49 @@ def _is_unexpired_processing_graph_job(job: GraphWriteJob, now: datetime) -> boo
     )
 
 
-def _graph_job_group_key(job: GraphWriteJob) -> tuple[str, str | None, str | None]:
-    return (job.project_memory_space_id, job.thread_id, job.saga_id)
+def _active_project_serialization_key_counts(
+    jobs: tuple[GraphWriteJob, ...],
+    now: datetime,
+) -> dict[str, int]:
+    keys_by_project: dict[str, set[str]] = {}
+    for job in jobs:
+        if not _is_unexpired_processing_graph_job(job, now):
+            continue
+        keys_by_project.setdefault(job.project_memory_space_id, set()).add(job.serialization_key)
+    return {project_id: len(keys) for project_id, keys in keys_by_project.items()}
+
+
+def _eligible_graph_jobs_for_project_concurrency(
+    jobs: list[GraphWriteJob],
+    *,
+    active_project_counts: dict[str, int],
+    max_project_concurrency: int,
+) -> list[GraphWriteJob]:
+    if max_project_concurrency <= 0:
+        return []
+
+    jobs.sort(key=_graph_claim_sort_key)
+    ordered_keys_by_project: dict[str, list[str]] = {}
+    for job in jobs:
+        keys = ordered_keys_by_project.setdefault(job.project_memory_space_id, [])
+        if job.serialization_key not in keys:
+            keys.append(job.serialization_key)
+
+    allowed_keys: set[str] = set()
+    for project_id, keys in ordered_keys_by_project.items():
+        remaining = max_project_concurrency - active_project_counts.get(project_id, 0)
+        if remaining > 0:
+            allowed_keys.update(keys[:remaining])
+
+    return [job for job in jobs if job.serialization_key in allowed_keys]
+
+
+def _graph_claim_sort_key(job: GraphWriteJob) -> tuple[str, int, datetime, int, datetime, str]:
+    return (
+        job.serialization_key,
+        0 if job.status == "processing" else 1,
+        job.next_run_at,
+        -job.priority,
+        job.created_at,
+        job.id,
+    )

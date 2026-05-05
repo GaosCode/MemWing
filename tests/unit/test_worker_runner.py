@@ -62,7 +62,7 @@ def test_worker_runner_graph_lane_skips_outbox() -> None:
 
         assert result.claimed == 1
         assert outbox_worker.calls == []
-        assert graph_worker.calls[-1]["limit"] == 20
+        assert graph_worker.calls[-1]["limit"] is None
 
     asyncio.run(run())
 

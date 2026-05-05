@@ -20,6 +20,26 @@ class GraphWriteRequest:
     source_events: tuple[SourceEvent, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class GraphWriteBatchRequest:
+    requests: tuple[GraphWriteRequest, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphWriteBatchItemResult:
+    job_id: str
+    result: GraphWriteResult | None
+    error_type: str | None
+    error_message: str | None
+    reason_code: str | None
+    retryable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GraphWriteBatchResult:
+    items: tuple[GraphWriteBatchItemResult, ...]
+
+
 @runtime_checkable
 class GraphBackendPort(Protocol):
     async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
@@ -29,6 +49,9 @@ class GraphBackendPort(Protocol):
         ...
 
     async def ingest_graph_job(self, request: GraphWriteRequest) -> GraphWriteResult:
+        ...
+
+    async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
         ...
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:

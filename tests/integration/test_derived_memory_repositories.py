@@ -364,6 +364,7 @@ def _graph_job() -> GraphWriteJob:
     return GraphWriteJob(
         id="graph_job_001",
         backend="graphiti",
+        serialization_key="backend:graphiti:project:project_001",
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,

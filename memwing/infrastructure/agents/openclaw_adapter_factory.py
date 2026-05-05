@@ -9,6 +9,9 @@ from memwing.api.runtime_config import (
     evidence_backend_from_env,
     evidence_vector_size_from_env,
     graph_backend_from_env,
+    graph_write_batch_size_from_env,
+    graph_write_max_global_concurrency_from_env,
+    graph_write_max_project_concurrency_from_env,
     graph_write_timeout_seconds_from_env,
     graphiti_neo4j_password_from_env,
     graphiti_neo4j_uri_from_env,
@@ -225,6 +228,9 @@ async def create_worker_runner_from_env(
                 lifecycle_transition=lifecycle_transition,
                 worker_id=f"{worker_id}:graph",
                 backend_timeout=timedelta(seconds=graph_write_timeout_seconds_from_env(env)),
+                batch_size=graph_write_batch_size_from_env(env),
+                max_project_concurrency=graph_write_max_project_concurrency_from_env(env),
+                max_global_concurrency=graph_write_max_global_concurrency_from_env(env),
             )
             if graph_backend is not None
             else None
@@ -318,6 +324,9 @@ def _benchmark_admin_service(
             worker_id="benchmark_graph_write",
             retry_delay=timedelta(0),
             backend_timeout=timedelta(seconds=graph_write_timeout_seconds_from_env(env)),
+            batch_size=graph_write_batch_size_from_env(env),
+            max_project_concurrency=graph_write_max_project_concurrency_from_env(env),
+            max_global_concurrency=graph_write_max_global_concurrency_from_env(env),
         )
         if graph_backend is not None
         else None

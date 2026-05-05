@@ -75,6 +75,18 @@ def graph_write_timeout_seconds_from_env(env: Mapping[str, str] | None = None) -
     return timeout_seconds
 
 
+def graph_write_batch_size_from_env(env: Mapping[str, str] | None = None) -> int:
+    return _positive_int_env(env, "MEMWING_GRAPH_WRITE_BATCH_SIZE", "8")
+
+
+def graph_write_max_project_concurrency_from_env(env: Mapping[str, str] | None = None) -> int:
+    return _positive_int_env(env, "MEMWING_GRAPH_WRITE_MAX_PROJECT_CONCURRENCY", "1")
+
+
+def graph_write_max_global_concurrency_from_env(env: Mapping[str, str] | None = None) -> int:
+    return _positive_int_env(env, "MEMWING_GRAPH_WRITE_MAX_GLOBAL_CONCURRENCY", "16")
+
+
 def evidence_backend_from_env(env: Mapping[str, str] | None = None) -> str:
     backend = _optional_env(env, "MEMWING_EVIDENCE_BACKEND") or "disabled"
     if backend not in {"disabled", "qdrant"}:
@@ -152,6 +164,17 @@ def _positive_float_env(env: Mapping[str, str] | None, name: str, default: str) 
         raise OpenClawRuntimeUnavailableError(f"{name} must be a positive number") from exc
     if value <= 0:
         raise OpenClawRuntimeUnavailableError(f"{name} must be a positive number")
+    return value
+
+
+def _positive_int_env(env: Mapping[str, str] | None, name: str, default: str) -> int:
+    raw_value = _optional_env(env, name) or default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise OpenClawRuntimeUnavailableError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise OpenClawRuntimeUnavailableError(f"{name} must be a positive integer")
     return value
 
 

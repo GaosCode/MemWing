@@ -15,6 +15,7 @@ from memwing.core.models import (
     MemoryStatus,
     PageMemoryScopeType,
     SourceEvent,
+    graph_write_serialization_key,
 )
 from memwing.core.scope import EffectiveScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
@@ -293,6 +294,10 @@ def _graph_write_job_from_memory_item(item: MemoryItem, *, now: datetime) -> Gra
     return GraphWriteJob(
         id=_uuid("graph_write_job", item.id),
         backend="graphiti",
+        serialization_key=graph_write_serialization_key(
+            backend="graphiti",
+            project_memory_space_id=item.project_memory_space_id,
+        ),
         project_memory_space_id=item.project_memory_space_id,
         thread_id=item.thread_id,
         saga_id=None,

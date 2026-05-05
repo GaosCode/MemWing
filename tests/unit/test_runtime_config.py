@@ -9,6 +9,9 @@ from memwing.api.runtime_config import (
     evidence_vector_size_from_env,
     feishu_push_config_from_env,
     graph_backend_from_env,
+    graph_write_batch_size_from_env,
+    graph_write_max_global_concurrency_from_env,
+    graph_write_max_project_concurrency_from_env,
     graph_write_timeout_seconds_from_env,
     graphiti_neo4j_password_from_env,
     qdrant_collection_from_env,
@@ -23,6 +26,9 @@ def test_runtime_config_reads_graph_and_evidence_defaults() -> None:
     assert qdrant_collection_from_env({}) == "memwing_evidence"
     assert evidence_vector_size_from_env({}) == 1536
     assert graph_write_timeout_seconds_from_env({}) == 180
+    assert graph_write_batch_size_from_env({}) == 8
+    assert graph_write_max_project_concurrency_from_env({}) == 1
+    assert graph_write_max_global_concurrency_from_env({}) == 16
     assert graphiti_neo4j_password_from_env({"MEMWING_GRAPHITI_NEO4J_PASSWORD": "   "}) is None
 
 
@@ -58,6 +64,40 @@ def test_runtime_config_rejects_invalid_evidence_vector_size(raw_value: str) -> 
 def test_runtime_config_rejects_invalid_graph_write_timeout(raw_value: str) -> None:
     with pytest.raises(OpenClawRuntimeUnavailableError, match="MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS"):
         graph_write_timeout_seconds_from_env({"MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS": raw_value})
+
+
+def test_runtime_config_reads_graph_write_batching_env_values() -> None:
+    env = {
+        "MEMWING_GRAPH_WRITE_BATCH_SIZE": " 4 ",
+        "MEMWING_GRAPH_WRITE_MAX_PROJECT_CONCURRENCY": " 2 ",
+        "MEMWING_GRAPH_WRITE_MAX_GLOBAL_CONCURRENCY": " 9 ",
+    }
+
+    assert graph_write_batch_size_from_env(env) == 4
+    assert graph_write_max_project_concurrency_from_env(env) == 2
+    assert graph_write_max_global_concurrency_from_env(env) == 9
+
+
+@pytest.mark.parametrize("name", [
+    "MEMWING_GRAPH_WRITE_BATCH_SIZE",
+    "MEMWING_GRAPH_WRITE_MAX_PROJECT_CONCURRENCY",
+    "MEMWING_GRAPH_WRITE_MAX_GLOBAL_CONCURRENCY",
+])
+@pytest.mark.parametrize("raw_value", ["0", "-1", "bad"])
+def test_runtime_config_rejects_invalid_graph_write_batching_values(
+    name: str,
+    raw_value: str,
+) -> None:
+    readers = {
+        "MEMWING_GRAPH_WRITE_BATCH_SIZE": graph_write_batch_size_from_env,
+        "MEMWING_GRAPH_WRITE_MAX_PROJECT_CONCURRENCY": (
+            graph_write_max_project_concurrency_from_env
+        ),
+        "MEMWING_GRAPH_WRITE_MAX_GLOBAL_CONCURRENCY": graph_write_max_global_concurrency_from_env,
+    }
+
+    with pytest.raises(OpenClawRuntimeUnavailableError, match=name):
+        readers[name]({name: raw_value})
 
 
 def test_benchmark_admin_enabled_requires_literal_true() -> None:

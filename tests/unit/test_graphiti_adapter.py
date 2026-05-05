@@ -24,7 +24,7 @@ from memwing.infrastructure.graph.graphiti_adapter import (
 from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedder
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
 from memwing.infrastructure.graph.graphiti_reranker import GraphitiNoProviderReranker
-from memwing.ports.graph_backend import GraphWriteRequest
+from memwing.ports.graph_backend import GraphWriteBatchRequest, GraphWriteRequest
 from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
 
 
@@ -60,13 +60,16 @@ class FakeGraphiti:
 
     async def add_episode(self, **kwargs: object) -> FakeAddEpisodeResult:
         self.add_episode_calls.append(kwargs)
+        episode_uuid = kwargs.get("uuid")
+        if not isinstance(episode_uuid, str):
+            episode_uuid = "episode_001"
         return FakeAddEpisodeResult(
-            episode=FakeEpisode(uuid="episode_001"),
+            episode=FakeEpisode(uuid=episode_uuid),
             edges=[
                 FakeEdge(
                     uuid="edge_001",
                     fact="Ada owns the roadmap.",
-                    episodes=["episode_001"],
+                    episodes=[episode_uuid],
                     attributes={"confidence": 0.87},
                 )
             ],
@@ -166,11 +169,56 @@ def test_graphiti_adapter_ingests_graph_job_through_add_episode() -> None:
     assert graphiti.add_episode_calls[0]["episode_body"] == "Ada owns the roadmap."
     assert graphiti.add_episode_calls[0]["source_description"] == "MemWing graph write job"
     assert graphiti.add_episode_calls[0]["group_id"] == "project_001"
-    assert "uuid" not in graphiti.add_episode_calls[0]
+    assert graphiti.add_episode_calls[0]["uuid"]
+    assert graphiti.add_episode_calls[0]["previous_episode_uuids"] is None
     assert result.backend == "graphiti"
-    assert result.backend_episode_refs == ("episode_001",)
+    assert result.backend_episode_refs == (graphiti.add_episode_calls[0]["uuid"],)
     assert result.backend_fact_refs == ("edge_001",)
     assert result.facts[0].fact_text == "Ada owns the roadmap."
+
+
+def test_graphiti_adapter_ordered_batch_uses_stable_uuid_and_previous_episode_context() -> None:
+    graphiti = FakeGraphiti()
+    adapter = GraphitiAdapter(graphiti)
+    first_job = _graph_job("graph_job_001", memory_id="memory_001", source_event_id="source_001")
+    second_job = _graph_job("graph_job_002", memory_id="memory_002", source_event_id="source_002")
+    first_memory = _memory_item(
+        memory_id="memory_001",
+        source_event_id="source_001",
+        content="First decision.",
+    )
+    second_memory = _memory_item(
+        memory_id="memory_002",
+        source_event_id="source_002",
+        content="Second decision.",
+    )
+
+    async def scenario():
+        return await adapter.ingest_graph_jobs(
+            GraphWriteBatchRequest(
+                requests=(
+                    GraphWriteRequest(
+                        job=second_job,
+                        memory_item=second_memory,
+                        source_events=(_source_event("source_002"),),
+                    ),
+                    GraphWriteRequest(
+                        job=first_job,
+                        memory_item=first_memory,
+                        source_events=(_source_event("source_001"),),
+                    ),
+                )
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert tuple(item.job_id for item in result.items) == ("graph_job_001", "graph_job_002")
+    assert len(graphiti.add_episode_calls) == 2
+    first_uuid = graphiti.add_episode_calls[0]["uuid"]
+    assert graphiti.add_episode_calls[0]["previous_episode_uuids"] is None
+    assert graphiti.add_episode_calls[1]["previous_episode_uuids"] == [first_uuid]
+    assert graphiti.add_episode_calls[0]["uuid"] != graphiti.add_episode_calls[1]["uuid"]
 
 
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
@@ -250,9 +298,9 @@ def test_graphiti_adapter_source_redaction_marker_is_explicitly_unsupported() ->
         asyncio.run(scenario())
 
 
-def _source_event() -> SourceEvent:
+def _source_event(source_event_id: str = "source_001") -> SourceEvent:
     return SourceEvent(
-        id="source_001",
+        id=source_event_id,
         project_memory_space_id="project_001",
         group_id="group_001",
         thread_id="thread_001",
@@ -276,9 +324,14 @@ def _source_event() -> SourceEvent:
     )
 
 
-def _memory_item() -> MemoryItem:
+def _memory_item(
+    *,
+    memory_id: str = "memory_001",
+    source_event_id: str = "source_001",
+    content: str = "Ada owns the roadmap.",
+) -> MemoryItem:
     return MemoryItem(
-        id="memory_001",
+        id=memory_id,
         project_memory_space_id="project_001",
         group_id="group_001",
         thread_id="thread_001",
@@ -286,10 +339,10 @@ def _memory_item() -> MemoryItem:
         route=MemoryRoute.GRAPH,
         display_type=MemoryDisplayType.DECISION,
         title="Decision: roadmap owner",
-        content="Ada owns the roadmap.",
+        content=content,
         summary=None,
-        source_event_ids=("source_001",),
-        primary_source_event_id="source_001",
+        source_event_ids=(source_event_id,),
+        primary_source_event_id=source_event_id,
         status=MemoryStatus.CANDIDATE,
         event_time=NOW,
         valid_from=None,
@@ -314,18 +367,24 @@ def _memory_item() -> MemoryItem:
     )
 
 
-def _graph_job() -> GraphWriteJob:
+def _graph_job(
+    job_id: str = "graph_job_001",
+    *,
+    memory_id: str = "memory_001",
+    source_event_id: str = "source_001",
+) -> GraphWriteJob:
     return GraphWriteJob(
-        id="graph_job_001",
+        id=job_id,
         backend="graphiti",
+        serialization_key="backend:graphiti:project:project_001",
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
-        memory_id="memory_001",
-        source_event_ids=("source_001",),
+        memory_id=memory_id,
+        source_event_ids=(source_event_id,),
         route=MemoryRoute.GRAPH,
         status="pending",
-        idempotency_key="graph:memory_001",
+        idempotency_key=f"graph:{memory_id}",
         attempts=0,
         max_attempts=3,
         priority=100,

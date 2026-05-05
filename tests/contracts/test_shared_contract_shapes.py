@@ -204,6 +204,7 @@ def test_graph_write_job_contract_carries_worker_claim_fields() -> None:
     job = GraphWriteJob(
         id="graph_job_001",
         backend="graphiti",
+        serialization_key="backend:graphiti:project:project_001",
         project_memory_space_id="project_001",
         thread_id="thread_001",
         saga_id=None,
@@ -227,6 +228,7 @@ def test_graph_write_job_contract_carries_worker_claim_fields() -> None:
 
     assert job.route is MemoryRoute.GRAPH
     assert job.memory_id == "memory_001"
+    assert job.serialization_key == "backend:graphiti:project:project_001"
     assert job.idempotency_key == "graph:memory_001"
     assert job.max_attempts == 3
     assert job.lock_expires_at is None

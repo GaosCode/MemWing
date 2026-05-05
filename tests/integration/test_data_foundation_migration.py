@@ -48,6 +48,9 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
     assert "UNIQUE (memory_id, reason, status)" in migration
     assert "idx_forgetting_review_candidates_project_status" in migration
     assert "idx_graph_write_jobs_project_thread_saga" in migration
+    assert "serialization_key text" in migration
+    assert "idx_graph_write_jobs_status_serialization_lock" in migration
+    assert "idx_graph_write_jobs_project_status_serialization" in migration
     assert "idx_outbox_jobs_project_type_aggregate_status_run" in migration
     assert "memory_id text NOT NULL REFERENCES memory_items(id)" in migration
     assert "idx_graph_write_jobs_memory" in migration

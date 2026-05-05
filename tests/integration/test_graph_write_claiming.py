@@ -131,6 +131,28 @@ def test_unexpired_processing_graph_job_blocks_same_project_claim() -> None:
     asyncio.run(scenario())
 
 
+def test_graph_claim_allows_different_serialization_keys_with_project_concurrency() -> None:
+    store = InMemoryDataStore()
+    store.add_graph_write_job(_job("graph_job_001", serialization_key="key:001"))
+    store.add_graph_write_job(_job("graph_job_002", serialization_key="key:002"))
+    store.add_graph_write_job(_job("graph_job_003", serialization_key="key:003"))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            claimed = await tx.graph_write_jobs.claim_pending(
+                now=NOW,
+                worker_id="worker_b",
+                lock_duration=timedelta(minutes=5),
+                limit=3,
+                max_project_concurrency=2,
+            )
+
+        assert tuple(job.id for job in claimed) == ("graph_job_001", "graph_job_002")
+        assert store.graph_write_jobs[2].status == "pending"
+
+    asyncio.run(scenario())
+
+
 def test_graph_claim_limit_zero_claims_no_jobs() -> None:
     store = InMemoryDataStore()
     store.add_graph_write_job(_job("graph_job_001"))
@@ -194,6 +216,7 @@ def _job(
     *,
     project_memory_space_id: str = "project_001",
     thread_id: str | None = "thread_001",
+    serialization_key: str | None = None,
     status: str = "pending",
     locked_by: str | None = None,
     lock_expires_at: datetime | None = None,
@@ -201,6 +224,9 @@ def _job(
     return GraphWriteJob(
         id=job_id,
         backend="graphiti",
+        serialization_key=(
+            serialization_key or f"backend:graphiti:project:{project_memory_space_id}"
+        ),
         project_memory_space_id=project_memory_space_id,
         thread_id=thread_id,
         saga_id=None,

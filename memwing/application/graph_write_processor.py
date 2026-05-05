@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import uuid
 
 from memwing.core.lifecycle import LifecycleAction
+from memwing.core.errors import ProviderPermanentFailure, ProviderTransientFailure
 from memwing.core.models import (
     GraphFact,
     GraphWriteJob,
@@ -14,7 +15,12 @@ from memwing.core.models import (
     MemoryGraphLinkType,
 )
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
-from memwing.ports.graph_backend import GraphBackendPort, GraphWriteRequest
+from memwing.ports.graph_backend import (
+    GraphBackendPort,
+    GraphWriteBatchItemResult,
+    GraphWriteBatchRequest,
+    GraphWriteRequest,
+)
 from memwing.ports.lifecycle_transition import LifecycleTransitionPort, LifecycleTransitionRequest
 
 
@@ -22,6 +28,13 @@ from memwing.ports.lifecycle_transition import LifecycleTransitionPort, Lifecycl
 class GraphWriteProcessingResult:
     link_count: int
     invalidated_memory_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphWriteBatchProcessingItemResult:
+    job: GraphWriteJob
+    result: GraphWriteProcessingResult | None
+    error: Exception | None
 
 
 class GraphWriteProcessor:
@@ -53,6 +66,109 @@ class GraphWriteProcessor:
             self._graph_backend.ingest_graph_job(request),
             timeout=self._backend_timeout.total_seconds(),
         )
+        return await self._complete_graph_result(
+            job=job,
+            graph_result=graph_result,
+            now=now,
+        )
+
+    async def process_batch(
+        self,
+        jobs: tuple[GraphWriteJob, ...],
+        *,
+        now: datetime,
+    ) -> tuple[GraphWriteBatchProcessingItemResult, ...]:
+        if not jobs:
+            return ()
+
+        build_results: list[GraphWriteBatchProcessingItemResult] = []
+        requests: list[GraphWriteRequest] = []
+        for job in jobs:
+            try:
+                requests.append(await self._build_request(job))
+            except GraphWriteProcessorInputError as exc:
+                build_results.append(
+                    GraphWriteBatchProcessingItemResult(job=job, result=None, error=exc)
+                )
+
+        if not requests:
+            return tuple(build_results)
+
+        try:
+            batch_result = await asyncio.wait_for(
+                self._graph_backend.ingest_graph_jobs(
+                    GraphWriteBatchRequest(requests=tuple(requests))
+                ),
+                timeout=self._backend_timeout.total_seconds(),
+            )
+        except Exception as exc:
+            return (
+                *build_results,
+                *(
+                    GraphWriteBatchProcessingItemResult(
+                        job=request.job,
+                        result=None,
+                        error=exc,
+                    )
+                    for request in requests
+                ),
+            )
+
+        result_by_job_id = {item.job_id: item for item in batch_result.items}
+        processed: list[GraphWriteBatchProcessingItemResult] = [*build_results]
+        for request in requests:
+            item = result_by_job_id.get(request.job.id)
+            if item is None:
+                processed.append(
+                    GraphWriteBatchProcessingItemResult(
+                        job=request.job,
+                        result=None,
+                        error=GraphWriteProcessorInputError(
+                            f"missing graph batch result for job {request.job.id}"
+                        ),
+                    )
+                )
+                continue
+            if item.result is None:
+                processed.append(
+                    GraphWriteBatchProcessingItemResult(
+                        job=request.job,
+                        result=None,
+                        error=_batch_item_error(item),
+                    )
+                )
+                continue
+            try:
+                processing_result = await self._complete_graph_result(
+                    job=request.job,
+                    graph_result=item.result,
+                    now=now,
+                )
+            except Exception as exc:
+                processed.append(
+                    GraphWriteBatchProcessingItemResult(
+                        job=request.job,
+                        result=None,
+                        error=exc,
+                    )
+                )
+            else:
+                processed.append(
+                    GraphWriteBatchProcessingItemResult(
+                        job=request.job,
+                        result=processing_result,
+                        error=None,
+                    )
+                )
+        return tuple(processed)
+
+    async def _complete_graph_result(
+        self,
+        *,
+        job: GraphWriteJob,
+        graph_result: GraphWriteResult,
+        now: datetime,
+    ) -> GraphWriteProcessingResult:
         self._ensure_lifecycle_port_for_invalidated_facts(graph_result.invalidated_facts)
         invalidated_memory_ids = await self._memory_ids_for_invalidated_facts(
             facts=graph_result.invalidated_facts,
@@ -217,6 +333,13 @@ class GraphWriteProcessor:
 
 class GraphWriteProcessorInputError(RuntimeError):
     pass
+
+
+def _batch_item_error(item: GraphWriteBatchItemResult) -> Exception:
+    reason_code = item.reason_code or "graph_batch_item_failed"
+    safe_message = item.error_message or item.error_type or reason_code
+    failure_type = ProviderTransientFailure if item.retryable else ProviderPermanentFailure
+    return failure_type(reason_code, safe_message)
 
 
 def _memory_graph_link(
