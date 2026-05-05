@@ -60,6 +60,10 @@ export type RememberEventResponseDto = {
   duplicate_of: string | null;
 };
 
+export type ManualMemoryCreateResult = RememberEventResponseDto & {
+  visibleMemoryId: string | null;
+};
+
 export async function listControlMemories(scope: ControlScopeParams): Promise<MemoryListResponseDto> {
   return parseControlMemoryListResponse(await getJson("/v1/control/memories", scope));
 }

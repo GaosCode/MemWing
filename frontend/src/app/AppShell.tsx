@@ -2,7 +2,6 @@ import {
   Activity,
   ArrowLeft,
   BookOpen,
-  ChevronDown,
   Folder,
   Inbox,
   RefreshCcw,
@@ -220,7 +219,6 @@ function Topbar({
             onChange={(next) => changeLocale(next)}
           />
         </span>
-        <ChevronDown size={16} />
       </button>
     </header>
   );

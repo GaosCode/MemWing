@@ -276,7 +276,10 @@ input:focus-visible {
   z-index: 80;
   top: calc(100% + 8px);
   left: 0;
-  right: 0;
+  right: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(320px, calc(100vw - 32px));
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
@@ -289,13 +292,23 @@ input:focus-visible {
 .scope-select__menu button,
 .filter-select__menu button,
 .toolbar-select__menu button {
+  width: 100%;
+  min-width: 0;
   min-height: 32px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   text-align: left;
+  line-height: 1.25;
   padding: 0 10px;
   cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.toolbar-select__menu {
+  left: auto;
+  right: 0;
 }
 
 .scope-select__menu button:hover,
@@ -422,7 +435,9 @@ kbd {
   z-index: 90;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 132px;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(260px, calc(100vw - 32px));
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
@@ -433,13 +448,18 @@ kbd {
 }
 
 .language-select__menu button {
+  width: 100%;
+  min-width: 0;
   min-height: 32px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   text-align: left;
+  line-height: 1.25;
   padding: 0 10px;
   cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .language-select__menu button:hover,
@@ -1012,6 +1032,7 @@ kbd {
 
 .memory-table {
   margin: 0 28px 22px;
+  min-width: 1120px;
 }
 
 .memory-table--compact .table-row {
@@ -1435,6 +1456,7 @@ kbd {
 
 .maintenance-table {
   margin: 0 28px;
+  min-width: 1120px;
 }
 
 .maintenance-row {
@@ -1448,7 +1470,8 @@ kbd {
 
 .maintenance-row > span:last-child {
   font-family: var(--font-latin);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .overview-grid,
@@ -1988,6 +2011,7 @@ button.board-card {
 }
 
 .curve-thresholds span {
+  min-width: 0;
   min-height: 50px;
   padding: 8px 10px;
   border-radius: var(--radius);
@@ -1998,8 +2022,11 @@ button.board-card {
 }
 
 .curve-thresholds strong {
+  min-width: 0;
   color: var(--text-primary);
   font-family: var(--font-latin);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .curve-review-row {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { controlMaintenanceToItems } from "../api/mappers/controlPlane";
 import { memoryListItemToViewModel } from "../api/mappers/memoryList";
-import type { ManualMemoryInput, MemoryEditInput, PageEditInput } from "../shared/api/controlPlaneClient";
+import type { ManualMemoryCreateResult, ManualMemoryInput, MemoryEditInput, PageEditInput } from "../shared/api/controlPlaneClient";
 import {
   approvePushCandidate,
   createManualMemory,
@@ -108,7 +108,7 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
     loadSourceEventDetail,
   };
 
-  async function refreshControlPlane(options: RefreshOptions = {}) {
+  async function refreshControlPlane(options: RefreshOptions = {}): Promise<MemoryItem[]> {
     const showLoading = options.showLoading ?? true;
     if (showLoading) {
       setLoading(true);
@@ -147,8 +147,10 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
           : nextPage?.id ?? null
       ));
       setSelectedPageDetail(nextPageDetail);
+      return nextMemories;
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "MemWing API request failed");
+      return [];
     } finally {
       if (showLoading) {
         setLoading(false);
@@ -263,8 +265,16 @@ export function useControlPlaneData(scope: ControlScopeParams = controlScope) {
     return detail;
   }
 
-  async function runManualMemoryCreate(input: ManualMemoryInput) {
-    await createManualMemory(scope, input);
-    await refreshControlPlane({ showLoading: false });
+  async function runManualMemoryCreate(input: ManualMemoryInput): Promise<ManualMemoryCreateResult> {
+    const result = await createManualMemory(scope, input);
+    const nextMemories = await refreshControlPlane({ showLoading: false });
+    const visibleMemory = nextMemories.find((memory) => memory.sourceEventIds.includes(result.source_event_id)) ?? null;
+    if (visibleMemory !== null) {
+      setSelectedMemoryId(visibleMemory.id);
+    }
+    return {
+      ...result,
+      visibleMemoryId: visibleMemory?.id ?? null,
+    };
   }
 }

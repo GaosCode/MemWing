@@ -6,7 +6,7 @@ import { maintenanceKey, useControlPlaneData } from "./useControlPlaneData";
 import { controlScope } from "./controlScope";
 import { Button, SplitSurface } from "../shared/components/ui";
 import type { ControlPageDto, ControlScopeParams } from "../api/generated/controlPlane";
-import type { ManualMemoryInput } from "../shared/api/controlPlaneClient";
+import type { ManualMemoryCreateResult, ManualMemoryInput } from "../shared/api/controlPlaneClient";
 import type { DetailMode, MaintenanceItem, MemoryItem, NavKey } from "../shared/types/entities";
 import { InboxPage } from "../features/inbox/InboxPage";
 import { LibraryPage } from "../features/library/LibraryPage";
@@ -212,7 +212,9 @@ export function App() {
               selected={control.selectedMaintenance}
               onSelect={selectMaintenance}
               onAction={control.runMaintenanceAction}
-              onRefreshData={() => control.refreshControlPlane({ showLoading: false })}
+              onRefreshData={async () => {
+                await control.refreshControlPlane({ showLoading: false });
+              }}
               onMemoryLifecycleAction={control.runMemoryLifecycleAction}
             />
           }
@@ -224,12 +226,13 @@ export function App() {
     return <SettingsPage settings={control.settings} integrations={control.integrations} onRefresh={() => void control.refreshSettings()} />;
   }, [activeNav, control, detailMode, inspectorOpen, inspectorWidth, visibleMaintenanceItems, visibleMemories]);
 
-  async function submitManualMemory(input: ManualMemoryInput) {
-    await control.runManualMemoryCreate(input);
+  async function submitManualMemory(input: ManualMemoryInput): Promise<ManualMemoryCreateResult> {
+    const result = await control.runManualMemoryCreate(input);
     setActiveNav("library");
     setDetailMode(null);
-    setInspectorOpen(false);
-    setGlobalSearchQuery(input.title);
+    setInspectorOpen(result.visibleMemoryId !== null);
+    setGlobalSearchQuery("");
+    return result;
   }
 
   return (
@@ -241,7 +244,9 @@ export function App() {
       searchQuery={globalSearchQuery}
       searchResultCount={searchResultCount}
       onSelectNav={openNav}
-      onRefresh={control.refreshControlPlane}
+      onRefresh={async () => {
+        await control.refreshControlPlane();
+      }}
       onScopeChange={setScope}
       onSearchQueryChange={setGlobalSearchQuery}
     >

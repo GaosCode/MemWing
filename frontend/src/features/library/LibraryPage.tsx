@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Check, Clock3, Columns3, ExternalLink, List, ListFilter, Plus, Search } from "lucide-react";
 import { PageHeader, SelectMenu } from "../../shared/components/ui";
-import type { ManualMemoryInput } from "../../shared/api/controlPlaneClient";
+import type { ManualMemoryCreateResult, ManualMemoryInput } from "../../shared/api/controlPlaneClient";
 import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
 import { exportLibraryMemoriesCsv, filterLibraryMemories } from "./libraryControls";
@@ -20,7 +20,7 @@ export function LibraryPage({
   memories: MemoryItem[];
   selected: MemoryItem;
   onSelect: (memory: MemoryItem) => void;
-  onCreateMemory: (input: ManualMemoryInput) => Promise<void>;
+  onCreateMemory: (input: ManualMemoryInput) => Promise<ManualMemoryCreateResult>;
 }) {
   const { dictionary } = useI18n();
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -223,10 +223,19 @@ export function LibraryPage({
       <AddMemoryDialog
         open={memoryComposerOpen}
         onClose={() => setMemoryComposerOpen(false)}
-        onSubmit={onCreateMemory}
+        onSubmit={submitMemoryCreate}
       />
     </>
   );
+
+  async function submitMemoryCreate(input: ManualMemoryInput) {
+    const result = await onCreateMemory(input);
+    if (result.visibleMemoryId !== null) {
+      setNotice(`已提交新增记忆，候选项 ${result.visibleMemoryId} 已出现在列表中。`);
+      return;
+    }
+    setNotice(`已提交新增记忆事件 ${result.source_event_id}，后端管线生成候选记忆后会出现在列表中。`);
+  }
 
   function exportMemories(records: MemoryItem[]) {
     exportLibraryMemoriesCsv(records);
