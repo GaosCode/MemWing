@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -71,6 +72,135 @@ def test_control_http_lists_details_and_mutates_memories() -> None:
     assert confirm_response.json()["item"]["item"]["status"] == "active"
     assert edit_response.status_code == 200
     assert edit_response.json()["item"]["item"]["title"] == "Edited memory title"
+
+
+def test_control_http_lists_scope_directory_and_hides_benchmark_by_default() -> None:
+    store = _store()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="benchmark:20260505-115148:bs001",
+            name="Benchmark bs001",
+            default_safe_mode_enabled=False,
+        )
+    )
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        response = client.get("/v1/control/scopes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["project_memory_space_id"] for item in body["items"]] == ["project_001"]
+    assert body["items"][0]["kind"] == "project"
+    assert body["items"][0]["groups"] == []
+    assert body["next_cursor"] is None
+    assert body["trace_id"].startswith("control:scopes")
+
+
+def test_control_http_lists_benchmark_scope_directory_with_group_and_thread_when_requested() -> None:
+    store = _store()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="benchmark:20260505-115148:bs001",
+            name="Benchmark bs001",
+            default_safe_mode_enabled=False,
+        )
+    )
+    _seed_benchmark_scope(store)
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        response = client.get("/v1/control/scopes", params={"include_benchmark": "true"})
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    benchmark_item = next(
+        item for item in items
+        if item["project_memory_space_id"] == "benchmark:20260505-115148:bs001"
+    )
+    assert benchmark_item["kind"] == "benchmark"
+    assert benchmark_item["memory_count"] == 1
+    assert benchmark_item["source_event_count"] == 1
+    assert benchmark_item["page_count"] == 1
+    assert benchmark_item["groups"] == [
+        {
+            "group_id": "benchmark:bs001",
+            "safe_mode_enabled": False,
+            "shared_group_id": None,
+            "memory_count": 1,
+            "source_event_count": 1,
+            "threads": [
+                {
+                    "thread_id": "benchmark:bs001",
+                    "memory_count": 1,
+                    "source_event_count": 1,
+                    "updated_at": (NOW - timedelta(days=1)).isoformat(),
+                }
+            ],
+        }
+    ]
+
+
+def test_control_http_resolves_manual_benchmark_scope_to_effective_scope() -> None:
+    store = _store()
+    store.add_project_memory_space(
+        ProjectMemorySpace(
+            id="benchmark:20260505-115148:bs001",
+            name="Benchmark bs001",
+            default_safe_mode_enabled=False,
+        )
+    )
+    _seed_benchmark_scope(store)
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/control/scopes/resolve",
+            params={
+                "project_memory_space_id": "benchmark:20260505-115148:bs001",
+                "group_id": "benchmark:bs001",
+                "thread_id": "benchmark:bs001",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requested_scope"] == {
+        "project_memory_space_id": "benchmark:20260505-115148:bs001",
+        "group_id": "benchmark:bs001",
+        "thread_id": "benchmark:bs001",
+        "shared_group_id": None,
+    }
+    assert body["effective_scope"] == {
+        "project_memory_space_id": "benchmark:20260505-115148:bs001",
+        "group_ids": None,
+        "thread_id": "benchmark:bs001",
+        "shared_group_id": None,
+        "safe_mode_enabled": False,
+        "cross_group_allowed": True,
+    }
+    assert body["project"] == {
+        "project_memory_space_id": "benchmark:20260505-115148:bs001",
+        "name": "Benchmark bs001",
+        "kind": "benchmark",
+    }
+    assert body["trace_id"].startswith("control:scope-resolve")
+
+
+def test_control_http_rejects_unknown_manual_scope_without_directory_leak() -> None:
+    store = _store()
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/control/scopes/resolve",
+            params={"project_memory_space_id": "missing_project"},
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["ok"] is False
+    assert body["code"] == "scope_resolution_failed"
 
 
 def test_control_http_manual_memory_create_writes_source_event_without_runtime_binding() -> None:
@@ -247,6 +377,52 @@ def _seed_page(store: InMemoryDataStore) -> None:
     async def seed() -> None:
         async with store.transaction() as tx:
             await tx.memory_pages.upsert(_page())
+
+    asyncio.run(seed())
+
+
+def _seed_benchmark_scope(store: InMemoryDataStore) -> None:
+    import asyncio
+
+    project_id = "benchmark:20260505-115148:bs001"
+    group_id = "benchmark:bs001"
+    thread_id = "benchmark:bs001"
+
+    async def seed() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                replace(
+                    _source_event(),
+                    id="benchmark_source_001",
+                    project_memory_space_id=project_id,
+                    group_id=group_id,
+                    thread_id=thread_id,
+                    raw_payload_hash="hash_benchmark_source_001",
+                )
+            )
+            await tx.memory_items.upsert(
+                replace(
+                    _memory_item(),
+                    id="benchmark_memory_001",
+                    project_memory_space_id=project_id,
+                    group_id=group_id,
+                    thread_id=thread_id,
+                    source_event_ids=("benchmark_source_001",),
+                    primary_source_event_id="benchmark_source_001",
+                )
+            )
+            await tx.memory_pages.upsert(
+                replace(
+                    _page(),
+                    id="benchmark_page_001",
+                    project_memory_space_id=project_id,
+                    group_id=group_id,
+                    thread_id=thread_id,
+                    scope_id=thread_id,
+                    source_event_ids=("benchmark_source_001",),
+                    linked_memory_item_ids=("benchmark_memory_001",),
+                )
+            )
 
     asyncio.run(seed())
 

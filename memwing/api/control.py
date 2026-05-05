@@ -445,6 +445,232 @@ class ControlSettingsResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlScopeThreadResponse:
+    thread_id: str
+    memory_count: int
+    source_event_count: int
+    updated_at: str | None
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeThreadResponse:
+        _require_exact_fields(
+            payload,
+            {"thread_id", "memory_count", "source_event_count", "updated_at"},
+        )
+        return cls(
+            thread_id=_required_text(payload, "thread_id"),
+            memory_count=_required_int(payload, "memory_count"),
+            source_event_count=_required_int(payload, "source_event_count"),
+            updated_at=_optional_text(payload, "updated_at"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeGroupResponse:
+    group_id: str
+    safe_mode_enabled: bool
+    shared_group_id: str | None
+    memory_count: int
+    source_event_count: int
+    threads: tuple[ControlScopeThreadResponse, ...]
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeGroupResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "group_id",
+                "safe_mode_enabled",
+                "shared_group_id",
+                "memory_count",
+                "source_event_count",
+                "threads",
+            },
+        )
+        threads = payload.get("threads")
+        if not isinstance(threads, list | tuple):
+            raise SchemaValidationError("threads must be a list")
+        return cls(
+            group_id=_required_text(payload, "group_id"),
+            safe_mode_enabled=_required_bool(payload, "safe_mode_enabled"),
+            shared_group_id=_optional_text(payload, "shared_group_id"),
+            memory_count=_required_int(payload, "memory_count"),
+            source_event_count=_required_int(payload, "source_event_count"),
+            threads=tuple(
+                ControlScopeThreadResponse.from_json(_object_item(thread, "threads"))
+                for thread in threads
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeDirectoryItemResponse:
+    project_memory_space_id: str
+    name: str
+    kind: str
+    default_safe_mode_enabled: bool
+    memory_count: int
+    source_event_count: int
+    page_count: int
+    updated_at: str | None
+    groups: tuple[ControlScopeGroupResponse, ...]
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeDirectoryItemResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "project_memory_space_id",
+                "name",
+                "kind",
+                "default_safe_mode_enabled",
+                "memory_count",
+                "source_event_count",
+                "page_count",
+                "updated_at",
+                "groups",
+            },
+        )
+        groups = payload.get("groups")
+        if not isinstance(groups, list | tuple):
+            raise SchemaValidationError("groups must be a list")
+        return cls(
+            project_memory_space_id=_required_text(payload, "project_memory_space_id"),
+            name=_required_text(payload, "name"),
+            kind=_required_text(payload, "kind"),
+            default_safe_mode_enabled=_required_bool(payload, "default_safe_mode_enabled"),
+            memory_count=_required_int(payload, "memory_count"),
+            source_event_count=_required_int(payload, "source_event_count"),
+            page_count=_required_int(payload, "page_count"),
+            updated_at=_optional_text(payload, "updated_at"),
+            groups=tuple(
+                ControlScopeGroupResponse.from_json(_object_item(group, "groups"))
+                for group in groups
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeDirectoryResponse:
+    items: tuple[ControlScopeDirectoryItemResponse, ...]
+    next_cursor: str | None
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeDirectoryResponse:
+        _require_exact_fields(payload, {"items", "next_cursor", "trace_id"})
+        items = payload.get("items")
+        if not isinstance(items, list | tuple):
+            raise SchemaValidationError("items must be a list")
+        return cls(
+            items=tuple(
+                ControlScopeDirectoryItemResponse.from_json(_object_item(item, "items"))
+                for item in items
+            ),
+            next_cursor=_optional_text(payload, "next_cursor"),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeParamsResponse:
+    project_memory_space_id: str
+    group_id: str | None
+    thread_id: str | None
+    shared_group_id: str | None
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeParamsResponse:
+        _require_exact_fields(
+            payload,
+            {"project_memory_space_id", "group_id", "thread_id", "shared_group_id"},
+        )
+        return cls(
+            project_memory_space_id=_required_text(payload, "project_memory_space_id"),
+            group_id=_optional_text(payload, "group_id"),
+            thread_id=_optional_text(payload, "thread_id"),
+            shared_group_id=_optional_text(payload, "shared_group_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlResolvedScopeResponse:
+    project_memory_space_id: str
+    group_ids: tuple[str, ...] | None
+    thread_id: str | None
+    shared_group_id: str | None
+    safe_mode_enabled: bool
+    cross_group_allowed: bool
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlResolvedScopeResponse:
+        _require_exact_fields(
+            payload,
+            {
+                "project_memory_space_id",
+                "group_ids",
+                "thread_id",
+                "shared_group_id",
+                "safe_mode_enabled",
+                "cross_group_allowed",
+            },
+        )
+        group_ids = payload.get("group_ids")
+        if group_ids is not None and not isinstance(group_ids, list | tuple):
+            raise SchemaValidationError("group_ids must be a list")
+        return cls(
+            project_memory_space_id=_required_text(payload, "project_memory_space_id"),
+            group_ids=(
+                tuple(require_text(group_id, "group_ids") for group_id in group_ids)
+                if group_ids is not None
+                else None
+            ),
+            thread_id=_optional_text(payload, "thread_id"),
+            shared_group_id=_optional_text(payload, "shared_group_id"),
+            safe_mode_enabled=_required_bool(payload, "safe_mode_enabled"),
+            cross_group_allowed=_required_bool(payload, "cross_group_allowed"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeProjectResponse:
+    project_memory_space_id: str
+    name: str
+    kind: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeProjectResponse:
+        _require_exact_fields(payload, {"project_memory_space_id", "name", "kind"})
+        return cls(
+            project_memory_space_id=_required_text(payload, "project_memory_space_id"),
+            name=_required_text(payload, "name"),
+            kind=_required_text(payload, "kind"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlScopeResolveResponse:
+    requested_scope: ControlScopeParamsResponse
+    effective_scope: ControlResolvedScopeResponse
+    project: ControlScopeProjectResponse
+    trace_id: str
+
+    @classmethod
+    def from_json(cls, payload: JsonObject) -> ControlScopeResolveResponse:
+        _require_exact_fields(payload, {"requested_scope", "effective_scope", "project", "trace_id"})
+        return cls(
+            requested_scope=ControlScopeParamsResponse.from_json(
+                _object_field(payload, "requested_scope")
+            ),
+            effective_scope=ControlResolvedScopeResponse.from_json(
+                _object_field(payload, "effective_scope")
+            ),
+            project=ControlScopeProjectResponse.from_json(_object_field(payload, "project")),
+            trace_id=_required_text(payload, "trace_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ControlIntegrationResponse:
     name: str
     configured: bool

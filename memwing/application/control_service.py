@@ -20,6 +20,8 @@ from memwing.application.control_projection import (
     ControlForgettingReviewItemProjection,
     ControlForgettingReviewProjection,
     ControlMaintenanceProjection,
+    ControlScopeDirectoryProjection,
+    ControlScopeResolveProjection,
     ControlSettingsProjection,
     ControlSummaryProjection,
     project_graph_job,
@@ -27,6 +29,7 @@ from memwing.application.control_projection import (
     project_outbox_job,
     project_push_candidate,
 )
+from memwing.application.control_scope_directory import ControlScopeDirectory
 from memwing.application.control_push_service import ControlPushServiceMixin
 from memwing.application.control_service_support import (
     _audit_event,
@@ -35,7 +38,8 @@ from memwing.application.control_service_support import (
     _scope_values_match,
 )
 from memwing.application.lifecycle_service import LifecycleTransitionService
-from memwing.core.scope import EffectiveScope
+from memwing.application.scope_resolver import ScopeResolver
+from memwing.core.scope import EffectiveScope, MemoryScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.platform_connector import PlatformConnectorPort
 
@@ -53,12 +57,42 @@ class ControlService(
         now: Callable[[], datetime] | None = None,
         page_memory_service: object | None = None,
         platform_connectors: Mapping[str, PlatformConnectorPort] | None = None,
+        scope_resolver: ScopeResolver | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._now = now or (lambda: datetime.now(UTC))
         self._lifecycle = LifecycleTransitionService(unit_of_work)
         self._page_memory_service = page_memory_service
         self._platform_connectors = platform_connectors or {}
+        self._scope_directory = ControlScopeDirectory(
+            unit_of_work,
+            scope_resolver or ScopeResolver(unit_of_work),
+        )
+
+    async def list_scopes(
+        self,
+        *,
+        include_benchmark: bool,
+        query: str | None,
+        limit: int,
+        cursor: str | None,
+        trace_id: str,
+    ) -> ControlScopeDirectoryProjection:
+        return await self._scope_directory.list_scopes(
+            include_benchmark=include_benchmark,
+            query=query,
+            limit=limit,
+            cursor=cursor,
+            trace_id=trace_id,
+        )
+
+    async def resolve_scope(
+        self,
+        *,
+        scope_hint: MemoryScope,
+        trace_id: str,
+    ) -> ControlScopeResolveProjection:
+        return await self._scope_directory.resolve_scope(scope_hint=scope_hint, trace_id=trace_id)
 
     async def list_forgetting_review(
         self,

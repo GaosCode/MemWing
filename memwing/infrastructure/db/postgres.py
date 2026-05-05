@@ -8,6 +8,9 @@ from memwing.core.scope import (
     GroupMemorySettings,
     PlatformScopeBinding,
     ProjectMemorySpace,
+    ProjectMemorySpaceDirectoryGroupRecord,
+    ProjectMemorySpaceDirectoryRecord,
+    ProjectMemorySpaceDirectoryThreadRecord,
     RuntimeScopeBinding,
 )
 
@@ -76,6 +79,161 @@ class PostgresDataStore:
             {"project_memory_space_id": project_memory_space_id},
         )
         return project_memory_space_from_row(row) if row is not None else None
+
+    async def list_project_memory_space_directory(
+        self,
+        *,
+        include_benchmark: bool,
+        query: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[ProjectMemorySpaceDirectoryRecord, ...]:
+        del cursor
+        rows = await self._connection.fetch(
+            """
+            SELECT
+                p.id,
+                p.name,
+                p.default_safe_mode_enabled,
+                COUNT(DISTINCT m.id) AS memory_count,
+                COUNT(DISTINCT s.id) AS source_event_count,
+                COUNT(DISTINCT pg.id) AS page_count,
+                GREATEST(
+                    p.updated_at,
+                    COALESCE(MAX(m.updated_at), p.updated_at),
+                    COALESCE(MAX(s.created_at), p.updated_at),
+                    COALESCE(MAX(pg.updated_at), p.updated_at)
+                ) AS directory_updated_at
+            FROM project_memory_spaces p
+            LEFT JOIN memory_items m
+                ON m.project_memory_space_id = p.id
+            LEFT JOIN source_events s
+                ON s.project_memory_space_id = p.id
+            LEFT JOIN memory_pages pg
+                ON pg.project_memory_space_id = p.id
+            WHERE (%(include_benchmark)s OR p.id NOT LIKE %(benchmark_pattern)s)
+              AND (
+                %(query_pattern)s::text IS NULL
+                OR p.id ILIKE %(query_pattern)s
+                OR p.name ILIKE %(query_pattern)s
+              )
+            GROUP BY p.id, p.name, p.default_safe_mode_enabled, p.updated_at
+            ORDER BY directory_updated_at DESC, p.id ASC
+            LIMIT %(limit)s
+            """,
+            {
+                "include_benchmark": include_benchmark,
+                "benchmark_pattern": "benchmark:%",
+                "query_pattern": f"%{query.strip()}%" if query and query.strip() else None,
+                "limit": limit,
+            },
+        )
+        records = []
+        for row in rows:
+            project = ProjectMemorySpace(
+                id=str(row["id"]),
+                name=str(row["name"]),
+                default_safe_mode_enabled=bool(row["default_safe_mode_enabled"]),
+            )
+            records.append(
+                ProjectMemorySpaceDirectoryRecord(
+                    project=project,
+                    memory_count=int(row["memory_count"]),
+                    source_event_count=int(row["source_event_count"]),
+                    page_count=int(row["page_count"]),
+                    updated_at=row["directory_updated_at"],
+                    groups=await self._list_project_directory_groups(project),
+                )
+            )
+        return tuple(records)
+
+    async def _list_project_directory_groups(
+        self,
+        project: ProjectMemorySpace,
+    ) -> tuple[ProjectMemorySpaceDirectoryGroupRecord, ...]:
+        rows = await self._connection.fetch(
+            """
+            WITH scope_rows AS (
+                SELECT
+                    project_memory_space_id,
+                    group_id,
+                    thread_id,
+                    updated_at,
+                    id,
+                    'memory' AS kind
+                FROM memory_items
+                UNION ALL
+                SELECT
+                    project_memory_space_id,
+                    group_id,
+                    thread_id,
+                    created_at AS updated_at,
+                    id,
+                    'source' AS kind
+                FROM source_events
+                UNION ALL
+                SELECT
+                    project_memory_space_id,
+                    group_id,
+                    thread_id,
+                    updated_at,
+                    id,
+                    'page' AS kind
+                FROM memory_pages
+            )
+            SELECT
+                r.group_id,
+                r.thread_id,
+                COALESCE(g.safe_mode_enabled, %(project_safe_mode)s) AS safe_mode_enabled,
+                g.shared_group_id,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.kind = 'memory') AS memory_count,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.kind = 'source') AS source_event_count,
+                MAX(r.updated_at) AS updated_at
+            FROM scope_rows r
+            LEFT JOIN group_memory_settings g
+                ON g.project_memory_space_id = r.project_memory_space_id
+               AND g.group_id = r.group_id
+            WHERE r.project_memory_space_id = %(project_memory_space_id)s
+              AND r.group_id IS NOT NULL
+            GROUP BY r.group_id, r.thread_id, g.safe_mode_enabled, g.shared_group_id
+            ORDER BY r.group_id ASC, r.thread_id ASC
+            """,
+            {
+                "project_memory_space_id": project.id,
+                "project_safe_mode": project.default_safe_mode_enabled,
+            },
+        )
+        groups_by_id: dict[str, list[Row]] = {}
+        for row in rows:
+            groups_by_id.setdefault(str(row["group_id"]), []).append(row)
+        groups = []
+        for group_id, group_rows in groups_by_id.items():
+            group_memory_count = sum(int(row["memory_count"]) for row in group_rows)
+            group_source_event_count = sum(int(row["source_event_count"]) for row in group_rows)
+            groups.append(
+                ProjectMemorySpaceDirectoryGroupRecord(
+                    group_id=group_id,
+                    safe_mode_enabled=bool(group_rows[0]["safe_mode_enabled"]),
+                    shared_group_id=(
+                        str(group_rows[0]["shared_group_id"])
+                        if group_rows[0]["shared_group_id"] is not None
+                        else None
+                    ),
+                    memory_count=group_memory_count,
+                    source_event_count=group_source_event_count,
+                    threads=tuple(
+                        ProjectMemorySpaceDirectoryThreadRecord(
+                            thread_id=str(row["thread_id"]),
+                            memory_count=int(row["memory_count"]),
+                            source_event_count=int(row["source_event_count"]),
+                            updated_at=row["updated_at"],
+                        )
+                        for row in group_rows
+                        if row["thread_id"] is not None
+                    ),
+                )
+            )
+        return tuple(groups)
 
     async def list_runtime_scope_binding_candidates(
         self,

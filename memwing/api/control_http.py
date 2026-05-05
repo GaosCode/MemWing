@@ -107,6 +107,23 @@ async def _dispatch_get(
                 trace_id=_trace_id_from_query(query, "control:integrations")
             )
         )
+    if path == "/v1/control/scopes/resolve":
+        return json_object(
+            await services.control.resolve_scope(
+                scope_hint=_scope_hint_from_query(query),
+                trace_id=_trace_id_from_query(query, "control:scope-resolve"),
+            )
+        )
+    if path == "/v1/control/scopes":
+        return json_object(
+            await services.control.list_scopes(
+                include_benchmark=_optional_bool_query(query, "include_benchmark", default=False),
+                query=_optional_query_text(query, "query"),
+                limit=_limit_from_query(query),
+                cursor=_optional_query_text(query, "cursor"),
+                trace_id=_trace_id_from_query(query, "control:scopes"),
+            )
+        )
 
     scope = await _scope_from_query(query, services.scope_resolver)
     trace_id = _trace_id_from_query(query, "control:read")
@@ -403,17 +420,21 @@ async def _scope_from_query(
     return (await _resolved_scope_from_query(query, resolver)).effective_scope
 
 
+def _scope_hint_from_query(query: Mapping[str, str]) -> MemoryScope:
+    return MemoryScope(
+        project_memory_space_id=_required_query_text(query, "project_memory_space_id"),
+        group_id=_optional_query_text(query, "group_id"),
+        thread_id=_optional_query_text(query, "thread_id"),
+        shared_group_id=_optional_query_text(query, "shared_group_id"),
+    )
+
+
 async def _resolved_scope_from_query(
     query: Mapping[str, str],
     resolver: ScopeResolver,
 ):
     return await resolver.resolve_control(
-        MemoryScope(
-            project_memory_space_id=_required_query_text(query, "project_memory_space_id"),
-            group_id=_optional_query_text(query, "group_id"),
-            thread_id=_optional_query_text(query, "thread_id"),
-            shared_group_id=_optional_query_text(query, "shared_group_id"),
-        )
+        _scope_hint_from_query(query)
     )
 
 
@@ -446,6 +467,18 @@ def _optional_query_text(query: Mapping[str, str], field: str) -> str | None:
     if value is None or not value.strip():
         return None
     return require_text(value, field)
+
+
+def _optional_bool_query(query: Mapping[str, str], field: str, *, default: bool) -> bool:
+    raw = query.get(field)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().casefold()
+    if value in ("1", "true", "yes"):
+        return True
+    if value in ("0", "false", "no"):
+        return False
+    raise ValidationFailure("control_bool_invalid", f"{field} must be boolean.")
 
 
 def _trace_id_from_query(query: Mapping[str, str], prefix: str) -> str:

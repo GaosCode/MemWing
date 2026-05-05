@@ -17,6 +17,58 @@ from tests.unit.postgres_store_fixtures import (
 )
 
 
+def test_postgres_control_projection_lists_scope_directory_without_literal_percent_patterns() -> None:
+    now = source_event().created_at
+    connection = FakePostgresConnection(
+        fetch_results=(
+            (
+                {
+                    "id": "benchmark:20260505-115148:bs001",
+                    "name": "Benchmark bs001",
+                    "default_safe_mode_enabled": False,
+                    "memory_count": 1,
+                    "source_event_count": 1,
+                    "page_count": 0,
+                    "directory_updated_at": now,
+                },
+            ),
+            (
+                {
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                    "safe_mode_enabled": False,
+                    "shared_group_id": None,
+                    "memory_count": 1,
+                    "source_event_count": 1,
+                    "updated_at": now,
+                },
+            ),
+        )
+    )
+
+    async def scenario() -> None:
+        records = await PostgresDataStore(connection).list_project_memory_space_directory(
+            include_benchmark=True,
+            query="bs001",
+            limit=10,
+            cursor=None,
+        )
+
+        assert records[0].project.id == "benchmark:20260505-115148:bs001"
+        assert records[0].groups[0].group_id == "benchmark:bs001"
+        assert records[0].groups[0].threads[0].thread_id == "benchmark:bs001"
+
+    asyncio.run(scenario())
+
+    directory_call = connection.calls[0]
+    assert directory_call[0] == "fetch"
+    assert "'%%'" not in directory_call[1]
+    assert "p.id NOT LIKE %(benchmark_pattern)s" in directory_call[1]
+    assert "%(query_pattern)s::text IS NULL" in directory_call[1]
+    assert directory_call[2]["benchmark_pattern"] == "benchmark:%"
+    assert directory_call[2]["query_pattern"] == "%bs001%"
+
+
 def test_postgres_control_projection_lists_jobs_for_project() -> None:
     source = source_event()
     graph_job = graph_write_job()

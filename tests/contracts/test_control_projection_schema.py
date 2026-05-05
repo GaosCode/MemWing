@@ -9,6 +9,8 @@ from memwing.api.control import (
     ControlPageListResponse,
     ControlSettingsResponse,
     ControlSummaryResponse,
+    ControlScopeDirectoryResponse,
+    ControlScopeResolveResponse,
     MemoryDetailResponse,
     MemoryListItemResponse,
     MemoryListResponse,
@@ -220,6 +222,72 @@ def test_control_page_summary_settings_and_integrations_contracts_are_backend_ow
     assert summary.dead_letter_job_count == 0
     assert settings.settings_mutation_supported is False
     assert integrations.items[0].writable is False
+
+
+def test_control_scope_directory_and_resolve_contracts_are_backend_owned() -> None:
+    directory = ControlScopeDirectoryResponse.from_json(
+        {
+            "items": [
+                {
+                    "project_memory_space_id": "benchmark:20260505-115148:bs001",
+                    "name": "Benchmark bs001",
+                    "kind": "benchmark",
+                    "default_safe_mode_enabled": False,
+                    "memory_count": 6,
+                    "source_event_count": 13,
+                    "page_count": 1,
+                    "updated_at": "2026-05-05T11:51:48+00:00",
+                    "groups": [
+                        {
+                            "group_id": "benchmark:bs001",
+                            "safe_mode_enabled": True,
+                            "shared_group_id": None,
+                            "memory_count": 6,
+                            "source_event_count": 13,
+                            "threads": [
+                                {
+                                    "thread_id": "benchmark:bs001",
+                                    "memory_count": 6,
+                                    "source_event_count": 13,
+                                    "updated_at": "2026-05-05T11:51:48+00:00",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "next_cursor": None,
+            "trace_id": "trace_scopes",
+        }
+    )
+    resolved = ControlScopeResolveResponse.from_json(
+        {
+            "requested_scope": {
+                "project_memory_space_id": "benchmark:20260505-115148:bs001",
+                "group_id": "benchmark:bs001",
+                "thread_id": "benchmark:bs001",
+                "shared_group_id": None,
+            },
+            "effective_scope": {
+                "project_memory_space_id": "benchmark:20260505-115148:bs001",
+                "group_ids": ["benchmark:bs001"],
+                "thread_id": "benchmark:bs001",
+                "shared_group_id": None,
+                "safe_mode_enabled": True,
+                "cross_group_allowed": False,
+            },
+            "project": {
+                "project_memory_space_id": "benchmark:20260505-115148:bs001",
+                "name": "Benchmark bs001",
+                "kind": "benchmark",
+            },
+            "trace_id": "trace_scope_resolve",
+        }
+    )
+
+    assert directory.items[0].kind == "benchmark"
+    assert directory.items[0].groups[0].threads[0].thread_id == "benchmark:bs001"
+    assert resolved.effective_scope.group_ids == ("benchmark:bs001",)
 
 
 def _memory_item_payload(

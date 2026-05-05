@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,34 @@ class GroupMemorySettings:
     group_id: str
     safe_mode_enabled: bool
     shared_group_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMemorySpaceDirectoryThreadRecord:
+    thread_id: str
+    memory_count: int
+    source_event_count: int
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMemorySpaceDirectoryGroupRecord:
+    group_id: str
+    safe_mode_enabled: bool
+    shared_group_id: str | None
+    memory_count: int
+    source_event_count: int
+    threads: tuple[ProjectMemorySpaceDirectoryThreadRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMemorySpaceDirectoryRecord:
+    project: ProjectMemorySpace
+    memory_count: int
+    source_event_count: int
+    page_count: int
+    updated_at: datetime | None
+    groups: tuple[ProjectMemorySpaceDirectoryGroupRecord, ...]
 
 
 def effective_scope_matches(

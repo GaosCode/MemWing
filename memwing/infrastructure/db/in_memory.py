@@ -13,13 +13,16 @@ from memwing.core.models import (
     PushCandidate,
     SourceEvent,
 )
-from memwing.core.scope_patterns import session_pattern_matches
 from memwing.core.scope import (
     GroupMemorySettings,
     PlatformScopeBinding,
     ProjectMemorySpace,
+    ProjectMemorySpaceDirectoryGroupRecord,
+    ProjectMemorySpaceDirectoryRecord,
+    ProjectMemorySpaceDirectoryThreadRecord,
     RuntimeScopeBinding,
 )
+from memwing.core.scope_patterns import session_pattern_matches
 
 from .in_memory_evidence_repositories import (
     InMemoryEvidenceChunkRepository,
@@ -114,6 +117,100 @@ class InMemoryDataStore:
     ) -> ProjectMemorySpace | None:
         return self._state.projects.get(project_memory_space_id)
 
+    async def list_project_memory_space_directory(
+        self,
+        *,
+        include_benchmark: bool,
+        query: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[ProjectMemorySpaceDirectoryRecord, ...]:
+        query_text = (query or "").strip().casefold()
+        projects = sorted(self._state.projects.values(), key=lambda project: project.id)
+        records = []
+        for project in projects:
+            if not include_benchmark and project.id.startswith("benchmark:"):
+                continue
+            if query_text and query_text not in project.id.casefold() and query_text not in project.name.casefold():
+                continue
+            memory_items = [
+                item for item in self._state.memory_items.values()
+                if item.project_memory_space_id == project.id
+            ]
+            source_events = [
+                event for event in self._state.source_events.values()
+                if event.project_memory_space_id == project.id
+            ]
+            pages = [
+                page for page in self._state.memory_pages.values()
+                if page.project_memory_space_id == project.id
+            ]
+            updated_values = (
+                [item.updated_at for item in memory_items]
+                + [event.created_at for event in source_events]
+                + [page.updated_at for page in pages]
+            )
+            records.append(
+                ProjectMemorySpaceDirectoryRecord(
+                    project=project,
+                    memory_count=len(memory_items),
+                    source_event_count=len(source_events),
+                    page_count=len(pages),
+                    updated_at=max(updated_values) if updated_values else None,
+                    groups=self._directory_groups(
+                        project=project,
+                        memory_items=memory_items,
+                        source_events=source_events,
+                        pages=pages,
+                    ),
+                )
+            )
+        return tuple(records[:limit])
+
+    def _directory_groups(
+        self,
+        *,
+        project: ProjectMemorySpace,
+        memory_items: list[object],
+        source_events: list[object],
+        pages: list[object],
+    ) -> tuple[ProjectMemorySpaceDirectoryGroupRecord, ...]:
+        group_ids = sorted(
+            {
+                value
+                for value in (
+                    [item.group_id for item in memory_items]
+                    + [event.group_id for event in source_events]
+                    + [page.group_id for page in pages]
+                )
+                if value is not None
+            }
+        )
+        groups = []
+        for group_id in group_ids:
+            settings = self._state.group_settings.get((project.id, group_id))
+            group_memory_items = [item for item in memory_items if item.group_id == group_id]
+            group_source_events = [event for event in source_events if event.group_id == group_id]
+            groups.append(
+                ProjectMemorySpaceDirectoryGroupRecord(
+                    group_id=group_id,
+                    safe_mode_enabled=(
+                        settings.safe_mode_enabled
+                        if settings is not None
+                        else project.default_safe_mode_enabled
+                    ),
+                    shared_group_id=settings.shared_group_id if settings is not None else None,
+                    memory_count=len(group_memory_items),
+                    source_event_count=len(group_source_events),
+                    threads=_directory_threads(
+                        memory_items=group_memory_items,
+                        source_events=group_source_events,
+                        pages=[page for page in pages if page.group_id == group_id],
+                    ),
+                )
+            )
+        return tuple(groups)
+
     async def list_runtime_scope_binding_candidates(
         self,
         *,
@@ -196,3 +293,41 @@ class _Transaction:
     @property
     def fail_on_outbox_job_type(self) -> str | None:
         return self._store._fail_on_outbox_job_type
+
+
+def _directory_threads(
+    *,
+    memory_items: list[object],
+    source_events: list[object],
+    pages: list[object],
+) -> tuple[ProjectMemorySpaceDirectoryThreadRecord, ...]:
+    thread_ids = sorted(
+        {
+            value
+            for value in (
+                [item.thread_id for item in memory_items]
+                + [event.thread_id for event in source_events]
+                + [page.thread_id for page in pages]
+            )
+            if value is not None
+        }
+    )
+    threads = []
+    for thread_id in thread_ids:
+        thread_memory_items = [item for item in memory_items if item.thread_id == thread_id]
+        thread_source_events = [event for event in source_events if event.thread_id == thread_id]
+        thread_pages = [page for page in pages if page.thread_id == thread_id]
+        updated_values = (
+            [item.updated_at for item in thread_memory_items]
+            + [event.created_at for event in thread_source_events]
+            + [page.updated_at for page in thread_pages]
+        )
+        threads.append(
+            ProjectMemorySpaceDirectoryThreadRecord(
+                thread_id=thread_id,
+                memory_count=len(thread_memory_items),
+                source_event_count=len(thread_source_events),
+                updated_at=max(updated_values) if updated_values else None,
+            )
+        )
+    return tuple(threads)
