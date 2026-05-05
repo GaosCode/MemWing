@@ -7,6 +7,8 @@ import pytest
 from graphiti_core.llm_client import LLMClient
 from pydantic import BaseModel
 
+from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.infrastructure.graph.graphiti_cache_context import graphiti_model_cache_context
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError
 from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
@@ -64,6 +66,41 @@ def test_graphiti_llm_wrapper_validates_response_model() -> None:
             trace_id=None,
         )
     ]
+
+
+def test_graphiti_llm_wrapper_caches_validated_graphiti_extraction_by_context() -> None:
+    store = InMemoryDataStore()
+    fake = FakeLLMClient('{"ok": true, "count": 2}')
+    wrapper = GraphitiMemWingLLMClient(
+        fake,
+        cache_unit_of_work=store,
+        cache_runtime="test",
+        cache_model="fake-model",
+        cache_transport="local",
+    )
+    messages = [Message(role="user", content="Alice owns the roadmap.")]
+
+    async def scenario() -> tuple[dict[str, object], dict[str, object]]:
+        with graphiti_model_cache_context(
+            project_memory_space_id="project_001",
+            source_event_ids=("source_001",),
+        ):
+            first = await wrapper.generate_response(messages, response_model=ExtractedPayload)
+            second = await wrapper.generate_response(messages, response_model=ExtractedPayload)
+            return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert first == {"ok": True, "count": 2}
+    assert second == {"ok": True, "count": 2}
+    assert len(fake.requests) == 1
+    assert fake.requests[0].cache_context is not None
+    assert fake.requests[0].cache_context.role == "graphiti_extraction"
+    assert fake.requests[0].cache_context.source_event_ids == ("source_001",)
+    assert wrapper.cache_metrics.misses == 1
+    assert wrapper.cache_metrics.hits == 1
+    assert wrapper.cache_metrics.puts == 1
+    assert wrapper.cache_metrics.provider_calls == 1
 
 
 def test_graphiti_llm_wrapper_combines_non_system_messages_in_order() -> None:

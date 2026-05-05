@@ -55,11 +55,18 @@ class ValidatedLLMJsonCache:
         project_memory_space_id: str,
         source_event_ids: tuple[str, ...],
         input_text: str,
+        prompt_hash: str | None = None,
+        schema_hash: str | None = None,
     ) -> dict[str, object] | None:
         if not source_event_ids:
             self.metrics.bypasses += 1
             return None
-        key = self._key(project_memory_space_id=project_memory_space_id, input_text=input_text)
+        key = self._key(
+            project_memory_space_id=project_memory_space_id,
+            input_text=input_text,
+            prompt_hash=prompt_hash,
+            schema_hash=schema_hash,
+        )
         async with self._unit_of_work.transaction() as tx:
             hit = await tx.model_result_cache.get(key=key, now=self._now())
         if hit is None:
@@ -75,6 +82,8 @@ class ValidatedLLMJsonCache:
         source_event_ids: tuple[str, ...],
         input_text: str,
         value_json: dict[str, object],
+        prompt_hash: str | None = None,
+        schema_hash: str | None = None,
     ) -> None:
         if not source_event_ids:
             self.metrics.bypasses += 1
@@ -82,7 +91,12 @@ class ValidatedLLMJsonCache:
         now = self._now()
         entry = ModelResultCacheEntry(
             id=str(uuid.uuid4()),
-            key=self._key(project_memory_space_id=project_memory_space_id, input_text=input_text),
+            key=self._key(
+                project_memory_space_id=project_memory_space_id,
+                input_text=input_text,
+                prompt_hash=prompt_hash,
+                schema_hash=schema_hash,
+            ),
             source_event_ids=source_event_ids,
             value_json=value_json,
             embedding_vector=None,
@@ -103,17 +117,26 @@ class ValidatedLLMJsonCache:
         *,
         project_memory_space_id: str,
         source_event_ids: tuple[str, ...],
+        prompt_hash: str | None = None,
+        schema_hash: str | None = None,
     ) -> ModelCacheContext:
         return ModelCacheContext(
             project_memory_space_id=project_memory_space_id,
             source_event_ids=source_event_ids,
             role=self._role,
-            prompt_hash=self._prompt_hash,
-            schema_hash=self._schema_hash,
+            prompt_hash=prompt_hash or self._prompt_hash,
+            schema_hash=schema_hash or self._schema_hash,
             cache_policy="required",
         )
 
-    def _key(self, *, project_memory_space_id: str, input_text: str) -> ModelResultCacheKey:
+    def _key(
+        self,
+        *,
+        project_memory_space_id: str,
+        input_text: str,
+        prompt_hash: str | None = None,
+        schema_hash: str | None = None,
+    ) -> ModelResultCacheKey:
         return ModelResultCacheKey(
             project_memory_space_id=project_memory_space_id,
             cache_kind="llm_json",
@@ -121,7 +144,7 @@ class ValidatedLLMJsonCache:
             runtime=self._runtime,
             model=self._model,
             transport=self._transport,
-            prompt_hash=self._prompt_hash,
+            prompt_hash=prompt_hash or self._prompt_hash,
             input_hash=sha256(input_text.encode("utf-8")).hexdigest(),
-            schema_hash=self._schema_hash,
+            schema_hash=schema_hash or self._schema_hash,
         )
