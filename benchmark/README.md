@@ -79,6 +79,12 @@ uv run memwing-benchmark --config config.local.json --backend memwing-http --mod
 # MemWing HTTP write evaluation. Scores memories through MemWing search APIs.
 uv run memwing-benchmark --config config.local.json --backend memwing-http --mode write --phase evaluate --batch --yes
 
+# MemWing HTTP retrieval. Searches preseeded MemWing memory through HTTP.
+uv run memwing-benchmark --config config.local.json --backend memwing-http --mode retrieval --case-id bs001 --yes
+
+# MemWing OpenClaw plugin retrieval. Checks plugin config, then searches MemWing APIs.
+uv run memwing-benchmark --config config.local.json --backend memwing-openclaw-plugin --mode retrieval --case-id bs001 --yes
+
 # MemWing OpenClaw plugin ingest. Sends live messages through OpenClaw first.
 uv run memwing-benchmark --config config.local.json --backend memwing-openclaw-plugin --mode write --phase ingest --batch --live --yes
 
@@ -157,7 +163,8 @@ Configuration notes:
 - `openclaw.restart_gateway=true` allows the harness to restart OpenClaw gateway
   after configuration changes.
 - `memwing.base_url` is required for the MemWing HTTP backend and should point
-  at the MemWing server under test.
+  at the MemWing server under test. The benchmark checks `${base_url}/healthz`
+  before MemWing HTTP search or ingest starts.
 - `memwing.project_memory_space_id` is the Project Memory Space scope hint used
   for benchmark Source Event ingest and memory search.
 - `memwing.group_id`, `memwing.thread_id`, and `memwing.shared_group_id` are
@@ -263,6 +270,7 @@ pnpm openclaw memory search \
 | `--reply-timeout-seconds` | `120.0` | Timeout while waiting for live probe replies. |
 | `--memory-poll-interval-seconds` | `20.0` | Poll interval for memory file changes. |
 | `--memory-timeout-seconds` | `60.0` | Timeout for memory file change polling. |
+| `--pg-preseed-per-case` | false | MemWing retrieval uses real ingest per case with isolated benchmark scope, pipeline drain, and readiness polling. |
 
 Runtime constraints:
 
@@ -276,12 +284,20 @@ Runtime constraints:
   endpoint and must not use `--live`.
 - `memwing-http write --phase evaluate` scores durable memory through MemWing search
   APIs and reports local file-diff metrics as unavailable.
+- `memwing-http retrieval` normally checks `/healthz` and searches MemWing without
+  writing seed events. With `--pg-preseed-per-case`, it uses real ingest per case.
+- `memwing-openclaw-plugin retrieval` verifies the OpenClaw MemWing plugin
+  configuration, then searches MemWing APIs and must not use `--live`.
 - `memwing-openclaw-plugin write --phase ingest` requires `--live`, sends
   Feishu/Lark messages through OpenClaw, and fails before sending if the
   OpenClaw MemWing plugin is not enabled or points at a different
   `memwing.base_url`.
 - `memwing-openclaw-plugin write --phase evaluate` uses MemWing search APIs and
   must not use `--live`.
+- `--pg-preseed-per-case` is only supported with retrieval runs on
+  `memwing-http` or `memwing-openclaw-plugin`; it now records
+  `memory_pipeline=real_ingest_per_case`, so pass `--yes` for non-interactive
+  side-effect confirmation.
 
 ## Retrieval Mode
 
@@ -476,9 +492,26 @@ plugins.entries.memwing.hooks.allowConversationAccess == true
 plugins.entries.memwing.config.memwingBaseUrl == memwing.base_url
 ```
 
-This path records Feishu sends, OpenClaw plugin preflight evidence, and MemWing
-search readiness evidence. It must not use OpenClaw native memory files as
-MemWing evaluation evidence.
+This path records Feishu sends, OpenClaw plugin preflight evidence, MemWing
+search readiness evidence, and OpenClaw plugin/tool evidence. A plugin E2E
+ingest run must prove at least one stable OpenClaw-side signal before it can be
+reported as successful:
+
+```text
+OpenClaw trajectory contains memwing_search_memory
+OpenClaw command or plugin output contains /v1/memwing/tools/search-memory
+OpenClaw command or plugin output contains /v1/tools/memwing/search-memory
+```
+
+If no signal is available, the run fails with:
+
+```text
+OpenClaw plugin MemWing tool evidence is unavailable
+```
+
+Set `openclaw.trajectory_dir` in `config.local.json`, or pass
+`--trajectory-dir`, when using trajectory files as the evidence source. This
+path must not use OpenClaw native memory files as MemWing evaluation evidence.
 
 ### Single-Case Full Run
 
@@ -538,6 +571,88 @@ pnpm openclaw config set agents.defaults.workspace /absolute/path/to/original/wo
 pnpm openclaw gateway restart
 ```
 
+## MemWing Local Runtime
+
+Start local Postgres and the canonical MemWing runtime before running
+`memwing-http` or `memwing-openclaw-plugin` HTTP checks. `memwing-runtime`
+supervises both `memwing-api` and `memwing-pipeline`; running uvicorn directly
+starts only the API and does not process derived memory layers.
+
+```bash
+cd ..
+docker compose up -d postgres
+DATABASE_URL='postgresql://memwing:memwing_dev_password@127.0.0.1:5432/memwing' \
+  uv run memwing-runtime
+```
+
+Use this backend split:
+
+```text
+memwing-http:
+  Direct MemWing API benchmark against FastAPI.
+
+memwing-openclaw-plugin:
+  OpenClaw plugin integration benchmark. It must prove plugin/tool traffic
+  reaches the configured MemWing FastAPI server.
+```
+
+## MemWing Real Ingest Per Case
+
+For `--backend memwing-http --mode retrieval` and `--backend
+memwing-openclaw-plugin --mode retrieval`, `--pg-preseed-per-case` now means
+real MemWing ingest per case. It does not seed Postgres directly.
+
+Start the derived backends and MemWing runtime with benchmark admin enabled:
+
+```bash
+cd ..
+docker compose up -d postgres qdrant neo4j
+MEMWING_BENCHMARK_ADMIN_ENABLED=true \
+MEMWING_MODEL_RUNTIME=openclaw \
+MEMWING_MODEL_TRANSPORT=local \
+MEMWING_GRAPH_BACKEND=graphiti \
+MEMWING_EVIDENCE_BACKEND=qdrant \
+QDRANT_URL=http://127.0.0.1:6333 \
+MEMWING_GRAPHITI_NEO4J_URI=bolt://localhost:7687 \
+MEMWING_GRAPHITI_NEO4J_USER=neo4j \
+MEMWING_GRAPHITI_NEO4J_PASSWORD=memwing_dev_password \
+DATABASE_URL='postgresql://memwing:memwing_dev_password@127.0.0.1:5432/memwing' \
+  uv run memwing-runtime
+```
+
+Then run retrieval:
+
+```bash
+cd benchmark
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-openclaw-plugin \
+  --mode retrieval \
+  --batch \
+  --pg-preseed-per-case \
+  --yes
+```
+
+With `--pg-preseed-per-case`, each case:
+
+```text
+1. Builds an isolated benchmark scope.
+2. Calls benchmark cleanup for that scope.
+3. Ingests seed messages through /v1/openclaw/events/ingest.
+4. Waits on the product pipeline readiness / await contract for the ingested Source Events.
+5. Reports layered Source Event, Outbox, derived backend, and warning status.
+6. Searches through /v1/memwing/tools/search-memory.
+```
+
+Postgres `source_events` remains the source of truth. Qdrant and Neo4j are
+derived stores populated by `memwing-pipeline`; benchmark cleanup only resets
+the benchmark Postgres scope and does not hard-delete Graphiti or Qdrant data.
+Readiness reports backend errors separately from empty search results, and the
+report records source mix such as `evidence_index` and `graph_backend`.
+
+`memwing-benchmark-pg-seed` remains a manual diagnostic command only. It is not
+used by the real benchmark orchestration path.
+
 ## Run Outputs
 
 Each run writes artifacts under:
@@ -570,7 +685,8 @@ Generated files:
 - `scores.json`: aggregate metrics.
 - `report.md`: human-readable report for review.
 - `raw/records.json`: raw Lark/Feishu, OpenClaw, judge, trajectory, and debug
-  records.
+  records. MemWing HTTP evidence is also split into `memwing_http_health`,
+  `memwing_http_search`, and, for plugin runs, `openclaw_plugin_tool_evidence`.
 
 Review and sanitize generated reports before committing them. Do not commit raw
 records that contain chat IDs, message contents, workspace paths, tokens, or
@@ -619,6 +735,8 @@ Metric caveats:
   supported.
 - `--backend memwing-http --live` is not supported; direct MemWing benchmark
   paths use HTTP ingest/search APIs.
+- `--backend memwing-openclaw-plugin --mode retrieval --live` is not supported;
+  offline retrieval searches MemWing APIs after plugin config preflight.
 - Live retrieval does not support batch mode.
 - Write ingest does not verify that asynchronous memory writing has completed.
 - Write evaluate reads the current OpenClaw workspace; verify the workspace before
