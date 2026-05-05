@@ -29,6 +29,7 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
         "graph_write_jobs",
         "memory_graph_links",
         "memory_recall_events",
+        "model_result_cache",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in migration
 
@@ -64,6 +65,12 @@ def test_data_foundation_migration_declares_required_tables_and_indexes() -> Non
     assert "topics_json jsonb NOT NULL DEFAULT '[]'::jsonb" in migration
     assert "open_questions text[] NOT NULL DEFAULT '{}'" in migration
     assert "next_steps text[] NOT NULL DEFAULT '{}'" in migration
+    assert "cache_kind text NOT NULL" in migration
+    assert "source_event_ids text[] NOT NULL" in migration
+    assert "embedding_vector double precision[]" in migration
+    assert "uq_model_result_cache_key" in migration
+    assert "idx_model_result_cache_source_event_ids" in migration
+    assert "idx_model_result_cache_project_status" in migration
     assert "UNIQUE (runtime, agent_id, workspace_id, session_key_pattern)" not in migration
     assert "UNIQUE (platform, tenant_id, channel_id, thread_id)" not in migration
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_runtime_scope_bindings_key" in migration

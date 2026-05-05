@@ -9,6 +9,7 @@ from memwing.ports.model_runtime import (
     LLMModelRequest,
     LLMModelResponse,
     MemWingModelRole,
+    ModelCacheContext,
     MemWingModelSelection,
 )
 
@@ -46,8 +47,22 @@ def test_model_selection_contract_is_role_scoped() -> None:
 
 
 def test_existing_llm_model_request_response_use_runtime_contract() -> None:
-    request = LLMModelRequest(system_prompt="system", user_prompt="user", trace_id="trace")
+    context = ModelCacheContext(
+        project_memory_space_id="project_001",
+        source_event_ids=("source_001",),
+        role="long_term_filter",
+        prompt_hash="prompt:v1",
+        schema_hash="long_term_filter:v1",
+        cache_policy="required",
+    )
+    request = LLMModelRequest(
+        system_prompt="system",
+        user_prompt="user",
+        trace_id="trace",
+        cache_context=context,
+    )
     response = LLMModelResponse(text="{}", provider="test", model="fake")
 
     assert request.system_prompt == "system"
+    assert request.cache_context is context
     assert response.provider == "test"

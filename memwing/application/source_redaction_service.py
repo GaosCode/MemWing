@@ -99,6 +99,12 @@ class SourceRedactionService:
                     source_event_id=command.source_event_id,
                     invalidated_at=now,
                 )
+                await tx.model_result_cache.invalidate_source_event(
+                    project_memory_space_id=command.scope.project_memory_space_id,
+                    source_event_id=command.source_event_id,
+                    invalidated_at=now,
+                    reason="source_redaction",
+                )
                 affected_items = await tx.memory_items.list_by_source_event(command.source_event_id)
                 affected_ids = []
                 for item in affected_items:

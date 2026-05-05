@@ -4,6 +4,7 @@ import asyncio
 
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.postgres import PostgresDataStore
+from memwing.ports.model_result_cache import ModelResultCacheEntry, ModelResultCacheKey
 
 from tests.unit.postgres_store_fixtures import (
     FakePostgresConnection,
@@ -161,6 +162,43 @@ def test_postgres_derived_repositories_execute_lane_d_e_f_read_contract_paths() 
     assert connection.calls[6][2]["project_memory_space_id"] == "project_001"
 
 
+def test_postgres_model_result_cache_repository_executes_key_and_lineage_paths() -> None:
+    entry = _model_cache_entry()
+    connection = FakePostgresConnection(
+        fetchrow_results=(
+            _model_cache_row(entry),
+            _model_cache_row(entry),
+            {"invalidated_count": 3},
+        ),
+        fetch_results=((_model_cache_row(entry),),),
+    )
+
+    async def scenario() -> None:
+        async with PostgresDataStore(connection).transaction() as tx:
+            assert await tx.model_result_cache.put(entry) == entry
+            assert await tx.model_result_cache.get(key=entry.key, now=entry.created_at) == entry
+            assert await tx.model_result_cache.list_by_source_event(
+                project_memory_space_id="project_001",
+                source_event_id="source_001",
+            ) == (entry,)
+            assert await tx.model_result_cache.invalidate_source_event(
+                project_memory_space_id="project_001",
+                source_event_id="source_001",
+                invalidated_at=entry.created_at,
+                reason="source_redaction",
+            ) == 3
+
+    asyncio.run(scenario())
+
+    queries = "\n".join(call[1] for call in connection.calls)
+    assert "INSERT INTO model_result_cache" in queries
+    assert "ON CONFLICT" in queries
+    assert "hit_count = model_result_cache.hit_count + 1" in queries
+    assert "%(source_event_id)s = ANY(source_event_ids)" in queries
+    assert "status = 'invalidated'" in queries
+    assert connection.calls[-1][2]["reason"] == "source_redaction"
+
+
 def _effective_scope() -> EffectiveScope:
     return EffectiveScope(
         project_memory_space_id="project_001",
@@ -170,3 +208,56 @@ def _effective_scope() -> EffectiveScope:
         safe_mode_enabled=True,
         cross_group_allowed=False,
     )
+
+
+def _model_cache_entry() -> ModelResultCacheEntry:
+    now = source_event().created_at
+    return ModelResultCacheEntry(
+        id="cache_001",
+        key=ModelResultCacheKey(
+            project_memory_space_id="project_001",
+            cache_kind="embedding",
+            role="evidence_embedding",
+            runtime="openclaw",
+            model="embedding-model",
+            transport="local",
+            prompt_hash="none",
+            input_hash="input_hash",
+            schema_hash="embedding:v1",
+        ),
+        source_event_ids=("source_001",),
+        value_json={"vector_size": 2},
+        embedding_vector=(0.1, 0.2),
+        status="active",
+        created_at=now,
+        last_hit_at=None,
+        hit_count=0,
+        invalidated_at=None,
+        invalidated_reason=None,
+        expires_at=None,
+    )
+
+
+def _model_cache_row(entry: ModelResultCacheEntry) -> dict[str, object]:
+    return {
+        "id": entry.id,
+        "project_memory_space_id": entry.key.project_memory_space_id,
+        "cache_kind": entry.key.cache_kind,
+        "role": entry.key.role,
+        "runtime": entry.key.runtime,
+        "model": entry.key.model,
+        "transport": entry.key.transport,
+        "prompt_hash": entry.key.prompt_hash,
+        "input_hash": entry.key.input_hash,
+        "schema_hash": entry.key.schema_hash,
+        "source_event_ids": entry.source_event_ids,
+        "value_json": entry.value_json,
+        "embedding_vector": entry.embedding_vector,
+        "status": entry.status,
+        "created_at": entry.created_at,
+        "last_hit_at": entry.last_hit_at,
+        "hit_count": entry.hit_count,
+        "invalidated_at": entry.invalidated_at,
+        "invalidated_reason": entry.invalidated_reason,
+        "expires_at": entry.expires_at,
+    }

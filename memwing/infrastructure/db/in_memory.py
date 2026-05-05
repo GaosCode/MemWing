@@ -37,6 +37,7 @@ from .in_memory_memory_repositories import (
     InMemoryMemoryRecallEventRepository,
     InMemoryMemoryVersionRepository,
 )
+from .in_memory_model_cache import InMemoryModelResultCacheRepository
 from .in_memory_repositories import (
     InMemoryAuditEventRepository,
     InMemoryOutboxJobRepository,
@@ -175,6 +176,7 @@ class _Transaction:
         self.memory_graph_links = InMemoryMemoryGraphLinkRepository(self)
         self.forgetting_review_candidates = InMemoryForgettingReviewCandidateRepository(self)
         self.push_candidates = InMemoryPushCandidateRepository(self)
+        self.model_result_cache = InMemoryModelResultCacheRepository(self)
 
     async def __aenter__(self) -> _Transaction:
         await self._store._lock.acquire()

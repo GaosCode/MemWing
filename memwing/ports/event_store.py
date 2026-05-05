@@ -29,6 +29,7 @@ from memwing.core.scope import (
     ProjectMemorySpace,
     RuntimeScopeBinding,
 )
+from memwing.ports.model_result_cache import ModelResultCachePort
 
 
 class EventStoreError(RuntimeError):
@@ -599,6 +600,7 @@ class EventStoreTransactionPort(Protocol):
     memory_graph_links: MemoryGraphLinkRepositoryPort
     forgetting_review_candidates: ForgettingReviewCandidateRepositoryPort
     push_candidates: PushCandidateRepositoryPort
+    model_result_cache: ModelResultCachePort
 
 
 class EventStoreUnitOfWorkPort(Protocol):

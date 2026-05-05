@@ -470,6 +470,48 @@ CREATE INDEX IF NOT EXISTS idx_memory_recall_events_memory_recalled
 CREATE INDEX IF NOT EXISTS idx_memory_recall_events_trace
     ON memory_recall_events (trace_id);
 
+CREATE TABLE IF NOT EXISTS model_result_cache (
+    id text PRIMARY KEY,
+    project_memory_space_id text NOT NULL REFERENCES project_memory_spaces(id),
+    cache_kind text NOT NULL,
+    role text NOT NULL,
+    runtime text NOT NULL,
+    model text NOT NULL,
+    transport text NOT NULL,
+    prompt_hash text NOT NULL,
+    input_hash text NOT NULL,
+    schema_hash text NOT NULL,
+    source_event_ids text[] NOT NULL,
+    value_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    embedding_vector double precision[],
+    status text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_hit_at timestamptz,
+    hit_count integer NOT NULL DEFAULT 0,
+    invalidated_at timestamptz,
+    invalidated_reason text,
+    expires_at timestamptz
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_model_result_cache_key
+    ON model_result_cache (
+        project_memory_space_id,
+        cache_kind,
+        role,
+        runtime,
+        model,
+        transport,
+        prompt_hash,
+        input_hash,
+        schema_hash
+    );
+
+CREATE INDEX IF NOT EXISTS idx_model_result_cache_source_event_ids
+    ON model_result_cache USING gin (source_event_ids);
+
+CREATE INDEX IF NOT EXISTS idx_model_result_cache_project_status
+    ON model_result_cache (project_memory_space_id, status);
+
 -- Atomic claim shape for the production Postgres adapter:
 -- SELECT id FROM outbox_jobs
 -- WHERE (status = 'pending' AND next_run_at <= now())

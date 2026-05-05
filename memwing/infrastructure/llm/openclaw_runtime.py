@@ -19,7 +19,7 @@ from memwing.infrastructure.llm.model_client import (
     LLMModelRequest,
     LLMModelResponse,
 )
-from memwing.ports.model_runtime import MemWingModelRole, MemWingModelSelection
+from memwing.ports.model_runtime import MemWingModelRole, MemWingModelSelection, ModelCacheContext
 
 
 OpenClawRuntimeTransportMode = Literal["local", "gateway"]
@@ -229,10 +229,25 @@ class OpenClawRuntimeEmbeddingClient(EmbeddingModelClient):
             transport=transport,
         )
 
-    async def embed(self, input: str) -> tuple[float, ...]:
-        return (await self.embed_batch((input,)))[0]
+    async def embed(
+        self,
+        input: str,
+        *,
+        cache_context: ModelCacheContext | None = None,
+    ) -> tuple[float, ...]:
+        return (
+            await self.embed_batch(
+                (input,),
+                cache_contexts=(cache_context,),
+            )
+        )[0]
 
-    async def embed_batch(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+    async def embed_batch(
+        self,
+        inputs: tuple[str, ...],
+        *,
+        cache_contexts: tuple[ModelCacheContext | None, ...] | None = None,
+    ) -> tuple[tuple[float, ...], ...]:
         if not inputs:
             return ()
         result = await self._transport.run(

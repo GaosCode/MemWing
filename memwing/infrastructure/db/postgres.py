@@ -28,6 +28,7 @@ from .postgres_memory_repositories import (
     PostgresMemoryRecallEventRepository,
     PostgresMemoryVersionRepository,
 )
+from .postgres_model_cache import PostgresModelResultCacheRepository
 from .postgres_repositories import (
     PostgresAuditEventRepository,
     PostgresExecutor,
@@ -164,6 +165,7 @@ class PostgresTransaction(PostgresExecutor):
         self.memory_graph_links = PostgresMemoryGraphLinkRepository(self)
         self.forgetting_review_candidates = PostgresForgettingReviewCandidateRepository(self)
         self.push_candidates = PostgresPushCandidateRepository(self)
+        self.model_result_cache = PostgresModelResultCacheRepository(self)
 
     async def __aenter__(self) -> PostgresTransaction:
         self._context = self._connection.transaction()

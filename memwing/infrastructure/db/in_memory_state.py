@@ -18,6 +18,7 @@ from memwing.core.models import (
     WorkingMemoryEntry,
     SourceEvent,
 )
+from memwing.ports.model_result_cache import ModelResultCacheEntry, ModelResultCacheKey
 from memwing.core.scope import (
     GroupMemorySettings,
     PlatformScopeBinding,
@@ -54,6 +55,8 @@ class InMemoryState:
     forgetting_review_by_memory_reason_status: dict[tuple[str, str, str], str] = field(default_factory=dict)
     push_candidates: dict[str, PushCandidate] = field(default_factory=dict)
     push_candidate_by_cooldown_status: dict[tuple[str, str], str] = field(default_factory=dict)
+    model_result_cache: dict[str, ModelResultCacheEntry] = field(default_factory=dict)
+    model_result_cache_by_key: dict[ModelResultCacheKey, str] = field(default_factory=dict)
     projects: dict[str, ProjectMemorySpace] = field(default_factory=dict)
     runtime_bindings: list[RuntimeScopeBinding] = field(default_factory=list)
     platform_bindings: list[PlatformScopeBinding] = field(default_factory=list)
