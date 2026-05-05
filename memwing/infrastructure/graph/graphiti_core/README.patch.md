@@ -44,9 +44,11 @@ vendored source can retain its internal imports without mechanical rewriting.
   this for stable episode IDs across Graph Write Job retries.
 - Added `Graphiti.add_episode_bulk_semantic()` for MemWing ordered batch writes.
   This semantic bulk path processes each `RawEpisode` through `add_episode`,
-  advances previous episode UUID context between items, and preserves single
-  episode Current Truth semantics including edge invalidation, timestamp
-  extraction, stable UUID handling, and per-episode results.
+  retrieves existing previous episode context once at batch start, advances the
+  returned episode UUID context between items, and preserves single episode
+  Current Truth semantics including edge invalidation, timestamp extraction,
+  stable UUID handling, and per-episode results. MemWing keeps this path behind
+  `MEMWING_GRAPHITI_SEMANTIC_BULK_ENABLED=true`.
 
 ## Upgrade Procedure
 

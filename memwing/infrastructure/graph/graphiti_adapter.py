@@ -13,6 +13,7 @@ from typing import Protocol
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import GraphFact, GraphWriteResult
 from memwing.core.scope import EffectiveScope
+from memwing.infrastructure.graph.graphiti_cache_context import graphiti_model_cache_context
 from memwing.ports.graph_backend import (
     GraphWriteBatchItemResult,
     GraphWriteBatchRequest,
@@ -43,11 +44,20 @@ class GraphitiConnectionConfig:
     user: str | None = None
     password: str | None = None
     store_raw_episode_content: bool = True
+    semantic_bulk_ingest_enabled: bool = False
 
 
 class GraphitiAdapter:
-    def __init__(self, graphiti: GraphitiRuntime) -> None:
+    def __init__(
+        self,
+        graphiti: GraphitiRuntime,
+        *,
+        semantic_bulk_ingest_enabled: bool = False,
+        cache_metrics_sources: tuple[object, ...] = (),
+    ) -> None:
         self._graphiti = graphiti
+        self._semantic_bulk_ingest_enabled = semantic_bulk_ingest_enabled
+        self._cache_metrics_sources = cache_metrics_sources
 
     @classmethod
     def from_clients(
@@ -72,7 +82,11 @@ class GraphitiAdapter:
             cross_encoder=cross_encoder,
             store_raw_episode_content=config.store_raw_episode_content,
         )
-        return cls(graphiti)
+        return cls(
+            graphiti,
+            semantic_bulk_ingest_enabled=config.semantic_bulk_ingest_enabled,
+            cache_metrics_sources=(llm_client, embedder),
+        )
 
     async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
         return await self._search(query, trace_suffix="current")
@@ -84,7 +98,11 @@ class GraphitiAdapter:
         return await self._ingest_one(request, previous_episode_uuid=None)
 
     async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
-        bulk_ingest = getattr(self._graphiti, "add_episode_bulk_semantic", None)
+        bulk_ingest = (
+            getattr(self._graphiti, "add_episode_bulk_semantic", None)
+            if self._semantic_bulk_ingest_enabled
+            else None
+        )
         if bulk_ingest is not None:
             return await self._ingest_graph_jobs_bulk(request, bulk_ingest=bulk_ingest)
 
@@ -152,10 +170,18 @@ class GraphitiAdapter:
 
         try:
             raw_episodes = [_raw_episode(graph_request) for graph_request in ordered_requests]
-            results = await bulk_ingest(
-                raw_episodes,
-                group_id=_graphiti_group_id(ordered_requests[0].job.project_memory_space_id),
-            )
+            with graphiti_model_cache_context(
+                project_memory_space_id=ordered_requests[0].job.project_memory_space_id,
+                source_event_ids=tuple(
+                    source_event_id
+                    for graph_request in ordered_requests
+                    for source_event_id in graph_request.job.source_event_ids
+                ),
+            ):
+                results = await bulk_ingest(
+                    raw_episodes,
+                    group_id=_graphiti_group_id(ordered_requests[0].job.project_memory_space_id),
+                )
         except Exception as exc:
             return _blocked_batch_results(
                 ordered_requests,
@@ -204,19 +230,29 @@ class GraphitiAdapter:
             or request.source_events[0].event_time
             or request.memory_item.created_at
         )
-        result = await self._graphiti.add_episode(
-            name=request.memory_item.title,
-            episode_body=request.memory_item.content,
-            source_description="MemWing graph write job",
-            reference_time=reference_time,
-            group_id=_graphiti_group_id(request.job.project_memory_space_id),
-            uuid=_stable_graphiti_episode_uuid(request),
-            previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
-        )
+        with graphiti_model_cache_context(
+            project_memory_space_id=request.job.project_memory_space_id,
+            source_event_ids=request.job.source_event_ids,
+        ):
+            result = await self._graphiti.add_episode(
+                name=request.memory_item.title,
+                episode_body=request.memory_item.content,
+                source_description="MemWing graph write job",
+                reference_time=reference_time,
+                group_id=_graphiti_group_id(request.job.project_memory_space_id),
+                uuid=_stable_graphiti_episode_uuid(request),
+                previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
+            )
         return _graph_write_result_from_graphiti_result(
             result,
             source_event_ids=request.memory_item.source_event_ids,
         )
+
+    def cache_metrics_snapshot(self) -> dict[str, int]:
+        snapshot: dict[str, int] = {}
+        for source in self._cache_metrics_sources:
+            _merge_metrics_snapshot(snapshot, source)
+        return snapshot
 
     async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
         raise NotImplementedError("Graphiti source redaction marker sync is not implemented")
@@ -287,6 +323,28 @@ def _graph_write_result_from_graphiti_result(
         backend_episode_refs=episode_refs,
         backend_fact_refs=tuple(fact.fact_id for fact in facts),
     )
+
+
+def _merge_metrics_snapshot(snapshot: dict[str, int], source: object) -> None:
+    metrics = getattr(source, "cache_metrics", None)
+    if metrics is None:
+        metrics = getattr(source, "metrics", None)
+    if metrics is None:
+        return
+    prefix = _metrics_prefix(source)
+    for name in ("hits", "misses", "puts", "invalidations", "bypasses", "provider_calls"):
+        value = getattr(metrics, name, None)
+        if isinstance(value, int):
+            snapshot[f"{prefix}_{name}"] = snapshot.get(f"{prefix}_{name}", 0) + value
+
+
+def _metrics_prefix(source: object) -> str:
+    name = source.__class__.__name__
+    if "Embed" in name:
+        return "embedding"
+    if "LLM" in name:
+        return "llm"
+    return "model_cache"
 
 
 def _blocked_batch_results(

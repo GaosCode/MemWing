@@ -60,6 +60,11 @@ def graphiti_neo4j_password_from_env(env: Mapping[str, str] | None = None) -> st
     return _optional_env(env, "MEMWING_GRAPHITI_NEO4J_PASSWORD")
 
 
+def graphiti_semantic_bulk_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
+    value = _optional_env(env, "MEMWING_GRAPHITI_SEMANTIC_BULK_ENABLED")
+    return value is not None and value.casefold() == "true"
+
+
 def graph_write_timeout_seconds_from_env(env: Mapping[str, str] | None = None) -> float:
     raw_value = _optional_env(env, "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS") or "180"
     try:

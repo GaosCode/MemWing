@@ -1477,9 +1477,30 @@ class Graphiti:
         for the next item in the ordered batch.
         """
         results: list[AddEpisodeResults] = []
-        previous_episode_uuid = previous_episode_uuids[-1] if previous_episode_uuids else None
+        if previous_episode_uuids is None and bulk_episodes:
+            effective_group_id = (
+                get_default_group_id(self.driver.provider) if group_id is None else group_id
+            )
+            previous_episodes = await self.retrieve_episodes(
+                bulk_episodes[0].reference_time,
+                last_n=RELEVANT_SCHEMA_LIMIT,
+                group_ids=[effective_group_id],
+                source=bulk_episodes[0].source,
+            )
+            batch_previous_episode_uuids = [episode.uuid for episode in previous_episodes]
+        else:
+            batch_previous_episode_uuids = previous_episode_uuids or []
 
-        for raw_episode in bulk_episodes:
+        previous_episode_uuid = (
+            batch_previous_episode_uuids[-1] if batch_previous_episode_uuids else None
+        )
+
+        for index, raw_episode in enumerate(bulk_episodes):
+            current_previous_episode_uuids = (
+                batch_previous_episode_uuids
+                if index == 0
+                else ([previous_episode_uuid] if previous_episode_uuid else [])
+            )
             result = await self.add_episode(
                 name=raw_episode.name,
                 episode_body=raw_episode.content,
@@ -1491,7 +1512,7 @@ class Graphiti:
                 update_communities=update_communities,
                 entity_types=entity_types,
                 excluded_entity_types=excluded_entity_types,
-                previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
+                previous_episode_uuids=current_previous_episode_uuids,
                 edge_types=edge_types,
                 edge_type_map=edge_type_map,
                 custom_extraction_instructions=custom_extraction_instructions,

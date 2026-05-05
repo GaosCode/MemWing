@@ -267,7 +267,7 @@ def test_graphiti_adapter_reuses_stable_episode_uuid_for_job_retry() -> None:
 
 def test_graphiti_adapter_uses_semantic_bulk_when_available() -> None:
     graphiti = FakeSemanticBulkGraphiti()
-    adapter = GraphitiAdapter(graphiti)
+    adapter = GraphitiAdapter(graphiti, semantic_bulk_ingest_enabled=True)
     first_job = _graph_job("graph_job_001", memory_id="memory_001", source_event_id="source_001")
     second_job = _graph_job("graph_job_002", memory_id="memory_002", source_event_id="source_002")
 
@@ -307,6 +307,45 @@ def test_graphiti_adapter_uses_semantic_bulk_when_available() -> None:
         graphiti.raw_episode_uuids[0],
         graphiti.raw_episode_uuids[1],
     )
+
+
+def test_graphiti_adapter_keeps_semantic_bulk_behind_config_gate() -> None:
+    graphiti = FakeSemanticBulkGraphiti()
+    adapter = GraphitiAdapter(graphiti)
+    first_job = _graph_job("graph_job_001", memory_id="memory_001", source_event_id="source_001")
+    second_job = _graph_job("graph_job_002", memory_id="memory_002", source_event_id="source_002")
+
+    async def scenario():
+        return await adapter.ingest_graph_jobs(
+            GraphWriteBatchRequest(
+                requests=(
+                    GraphWriteRequest(
+                        job=first_job,
+                        memory_item=_memory_item(
+                            memory_id="memory_001",
+                            source_event_id="source_001",
+                            content="First decision.",
+                        ),
+                        source_events=(_source_event("source_001"),),
+                    ),
+                    GraphWriteRequest(
+                        job=second_job,
+                        memory_item=_memory_item(
+                            memory_id="memory_002",
+                            source_event_id="source_002",
+                            content="Second decision.",
+                        ),
+                        source_events=(_source_event("source_002"),),
+                    ),
+                )
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert graphiti.bulk_calls == 0
+    assert len(graphiti.add_episode_calls) == 2
+    assert all(item.result is not None for item in result.items)
 
 
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:

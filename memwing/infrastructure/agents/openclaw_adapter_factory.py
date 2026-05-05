@@ -13,6 +13,7 @@ from memwing.api.runtime_config import (
     graph_write_max_global_concurrency_from_env,
     graph_write_max_project_concurrency_from_env,
     graph_write_timeout_seconds_from_env,
+    graphiti_semantic_bulk_enabled_from_env,
     graphiti_neo4j_password_from_env,
     graphiti_neo4j_uri_from_env,
     graphiti_neo4j_user_from_env,
@@ -269,6 +270,17 @@ def _graph_backend_from_env(
     resolver = MemWingModelConfigResolver.from_env(env)
     llm_client = _llm_client_for_role(resolver, "graphiti_extraction")
     embedding_client = _embedding_client_for_role(resolver, "graphiti_embedding")
+    graphiti_selection = resolver.selection_for("graphiti_extraction")
+    graphiti_llm_cache_kwargs = (
+        {
+            "cache_unit_of_work": store,
+            "cache_runtime": graphiti_selection.runtime,
+            "cache_model": graphiti_selection.model or "openclaw",
+            "cache_transport": graphiti_selection.transport or "local",
+        }
+        if store is not None
+        else {}
+    )
     if store is not None:
         embedding_client = _caching_embedding_client_for_role(
             store,
@@ -281,8 +293,12 @@ def _graph_backend_from_env(
             uri=graphiti_neo4j_uri_from_env(env),
             user=graphiti_neo4j_user_from_env(env),
             password=graphiti_neo4j_password_from_env(env),
+            semantic_bulk_ingest_enabled=graphiti_semantic_bulk_enabled_from_env(env),
         ),
-        llm_client=GraphitiMemWingLLMClient(llm_client),
+        llm_client=GraphitiMemWingLLMClient(
+            llm_client,
+            **graphiti_llm_cache_kwargs,
+        ),
         embedder=GraphitiMemWingEmbedder(embedding_client),
         cross_encoder=GraphitiNoProviderReranker(),
     )

@@ -14,6 +14,7 @@ from memwing.api.runtime_config import (
     graph_write_max_project_concurrency_from_env,
     graph_write_timeout_seconds_from_env,
     graphiti_neo4j_password_from_env,
+    graphiti_semantic_bulk_enabled_from_env,
     qdrant_collection_from_env,
     qdrant_url_from_env,
 )
@@ -29,6 +30,7 @@ def test_runtime_config_reads_graph_and_evidence_defaults() -> None:
     assert graph_write_batch_size_from_env({}) == 8
     assert graph_write_max_project_concurrency_from_env({}) == 1
     assert graph_write_max_global_concurrency_from_env({}) == 16
+    assert graphiti_semantic_bulk_enabled_from_env({}) is False
     assert graphiti_neo4j_password_from_env({"MEMWING_GRAPHITI_NEO4J_PASSWORD": "   "}) is None
 
 
@@ -104,6 +106,16 @@ def test_benchmark_admin_enabled_requires_literal_true() -> None:
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "true"}) is True
     assert benchmark_admin_enabled_from_env({"MEMWING_BENCHMARK_ADMIN_ENABLED": "1"}) is False
     assert benchmark_admin_enabled_from_env({}) is False
+
+
+def test_graphiti_semantic_bulk_requires_literal_true() -> None:
+    assert graphiti_semantic_bulk_enabled_from_env(
+        {"MEMWING_GRAPHITI_SEMANTIC_BULK_ENABLED": "true"}
+    ) is True
+    assert graphiti_semantic_bulk_enabled_from_env(
+        {"MEMWING_GRAPHITI_SEMANTIC_BULK_ENABLED": "1"}
+    ) is False
+    assert graphiti_semantic_bulk_enabled_from_env({}) is False
 
 
 def test_feishu_push_config_requires_explicit_enablement() -> None:
