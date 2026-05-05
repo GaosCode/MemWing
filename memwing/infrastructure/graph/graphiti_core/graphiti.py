@@ -1481,6 +1481,9 @@ class Graphiti:
             effective_group_id = (
                 get_default_group_id(self.driver.provider) if group_id is None else group_id
             )
+            if effective_group_id != self.driver._database:
+                self.driver = self.driver.clone(database=effective_group_id)
+                self.clients.driver = self.driver
             previous_episodes = await self.retrieve_episodes(
                 bulk_episodes[0].reference_time,
                 last_n=RELEVANT_SCHEMA_LIMIT,

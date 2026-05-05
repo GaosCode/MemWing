@@ -21,6 +21,8 @@ NOW = datetime(2026, 5, 1, tzinfo=UTC)
 
 def test_semantic_bulk_retrieves_existing_previous_context_once() -> None:
     graphiti = object.__new__(Graphiti)
+    graphiti.driver = FakeDriver("project_001")
+    graphiti.clients = SimpleNamespace(driver=graphiti.driver)
     retrieve_calls: list[dict[str, object]] = []
     add_calls: list[dict[str, object]] = []
 
@@ -61,6 +63,43 @@ def test_semantic_bulk_retrieves_existing_previous_context_once() -> None:
     assert add_calls[0]["saga_previous_episode_uuid"] == "existing_episode_001"
     assert add_calls[1]["previous_episode_uuids"] == ["first_episode"]
     assert add_calls[1]["saga_previous_episode_uuid"] == "first_episode"
+
+
+def test_semantic_bulk_switches_driver_before_previous_context_lookup() -> None:
+    graphiti = object.__new__(Graphiti)
+    graphiti.driver = FakeDriver("default")
+    graphiti.clients = SimpleNamespace(driver=graphiti.driver)
+    retrieve_databases: list[str] = []
+
+    async def retrieve_episodes(reference_time, *, last_n, group_ids, source):
+        retrieve_databases.append(graphiti.driver._database)
+        return [SimpleNamespace(uuid="existing_episode_001")]
+
+    async def add_episode(**kwargs):
+        return SimpleNamespace(episode=SimpleNamespace(uuid=kwargs["uuid"]))
+
+    graphiti.retrieve_episodes = retrieve_episodes
+    graphiti.add_episode = add_episode
+
+    asyncio.run(
+        graphiti.add_episode_bulk_semantic(
+            [_raw_episode("first_episode", "First decision.")],
+            group_id="project_001",
+        )
+    )
+
+    assert retrieve_databases == ["project_001"]
+    assert graphiti.clients.driver is graphiti.driver
+
+
+class FakeDriver:
+    provider = "neo4j"
+
+    def __init__(self, database: str) -> None:
+        self._database = database
+
+    def clone(self, *, database: str) -> "FakeDriver":
+        return FakeDriver(database)
 
 
 def _raw_episode(uuid: str, content: str) -> RawEpisode:
