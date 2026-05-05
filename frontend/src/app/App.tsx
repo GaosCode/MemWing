@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import "./controlPlaneState.css";
 import { AppShell, type TopbarScopeOptions } from "./AppShell";
@@ -27,7 +27,6 @@ export function App() {
   const [inspectorWidth, setInspectorWidth] = useState(400);
   const [scope, setScope] = useState<ControlScopeParams>(() => ({ ...controlScope }));
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
-  const [memoryComposerOpen, setMemoryComposerOpen] = useState(false);
   const control = useControlPlaneData(scope);
 
   const visibleMemories = useMemo(
@@ -168,7 +167,7 @@ export function App() {
       return (
         <SplitSurface
           {...splitProps}
-          main={<LibraryPage memories={visibleMemories} selected={control.selectedMemory} onSelect={selectMemory} onAddMemory={() => setMemoryComposerOpen(true)} />}
+          main={<LibraryPage memories={visibleMemories} selected={control.selectedMemory} onSelect={selectMemory} onCreateMemory={submitManualMemory} />}
           inspector={<MemoryInspector memory={control.selectedMemory} onOpenDetail={() => setDetailMode("memory")} onLifecycleAction={control.runMemoryLifecycleAction} libraryMode {...inspectorControls} />}
         />
       );
@@ -234,125 +233,20 @@ export function App() {
   }
 
   return (
-    <>
-      <AppShell
-        activeNav={activeNav}
-        shellMode={detailMode ? "detail" : "split"}
-        scope={scope}
-        scopeOptions={scopeOptions}
-        searchQuery={globalSearchQuery}
-        searchResultCount={searchResultCount}
-        onSelectNav={openNav}
-        onRefresh={control.refreshControlPlane}
-        onScopeChange={setScope}
-        onSearchQueryChange={setGlobalSearchQuery}
-      >
-        {content}
-      </AppShell>
-      <AddMemoryDialog
-        open={memoryComposerOpen}
-        onClose={() => setMemoryComposerOpen(false)}
-        onSubmit={submitManualMemory}
-      />
-    </>
-  );
-}
-
-function AddMemoryDialog({
-  open,
-  onClose,
-  onSubmit,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (input: ManualMemoryInput) => Promise<void>;
-}) {
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [reason, setReason] = useState("手动新增记忆");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setTitle("");
-    setContent("");
-    setSourceUrl("");
-    setReason("手动新增记忆");
-    setError(null);
-    setSubmitting(false);
-  }, [open]);
-
-  if (!open) {
-    return null;
-  }
-
-  const canSubmit = title.trim().length > 0 && content.trim().length > 0 && reason.trim().length > 0;
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canSubmit || submitting) {
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onSubmit({
-        title: title.trim(),
-        content: content.trim(),
-        sourceUrl: sourceUrl.trim().length > 0 ? sourceUrl.trim() : null,
-        reason: reason.trim(),
-      });
-      onClose();
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "新增记忆提交失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) {
-        onClose();
-      }
-    }}>
-      <form className="memory-create-dialog" aria-label="新增记忆" onSubmit={submit}>
-        <div className="dialog-header">
-          <div>
-            <h2>新增记忆</h2>
-            <p>提交后写入 MemWing 事件管线，由后端生成候选记忆和审计记录。</p>
-          </div>
-          <button type="button" aria-label="关闭新增记忆" onClick={onClose}>×</button>
-        </div>
-        <label>
-          <span>标题</span>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：Demo 范围优先飞书文档记忆" />
-        </label>
-        <label>
-          <span>内容</span>
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} placeholder="写下需要 MemWing 记住的事实、偏好、规则或决策。" />
-        </label>
-        <label>
-          <span>来源链接</span>
-          <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="可选" />
-        </label>
-        <label>
-          <span>原因</span>
-          <input value={reason} onChange={(event) => setReason(event.target.value)} />
-        </label>
-        {error ? <p className="dialog-error">{error}</p> : null}
-        <div className="dialog-actions">
-          <button className="button" type="button" onClick={onClose}>取消</button>
-          <button className="button button--primary" type="submit" disabled={!canSubmit || submitting}>
-            {submitting ? "提交中" : "提交记忆"}
-          </button>
-        </div>
-      </form>
-    </div>
+    <AppShell
+      activeNav={activeNav}
+      shellMode={detailMode ? "detail" : "split"}
+      scope={scope}
+      scopeOptions={scopeOptions}
+      searchQuery={globalSearchQuery}
+      searchResultCount={searchResultCount}
+      onSelectNav={openNav}
+      onRefresh={control.refreshControlPlane}
+      onScopeChange={setScope}
+      onSearchQueryChange={setGlobalSearchQuery}
+    >
+      {content}
+    </AppShell>
   );
 }
 

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Check, Clock3, Columns3, ExternalLink, List, ListFilter, Plus, Search } from "lucide-react";
 import { PageHeader, SelectMenu } from "../../shared/components/ui";
+import type { ManualMemoryInput } from "../../shared/api/controlPlaneClient";
 import { useI18n } from "../../shared/i18n";
 import type { MemoryItem } from "../../shared/types/entities";
 import { exportLibraryMemoriesCsv, filterLibraryMemories } from "./libraryControls";
@@ -14,12 +15,12 @@ export function LibraryPage({
   memories,
   selected,
   onSelect,
-  onAddMemory,
+  onCreateMemory,
 }: {
   memories: MemoryItem[];
   selected: MemoryItem;
   onSelect: (memory: MemoryItem) => void;
-  onAddMemory: () => void;
+  onCreateMemory: (input: ManualMemoryInput) => Promise<void>;
 }) {
   const { dictionary } = useI18n();
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -30,6 +31,7 @@ export function LibraryPage({
   const [notice, setNotice] = useState(dictionary.library.ready);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [memoryComposerOpen, setMemoryComposerOpen] = useState(false);
 
   function filterLabel(key: FilterKey) {
     return dictionary.library.filterLabels[key];
@@ -107,8 +109,8 @@ export function LibraryPage({
             <button
               className="button button--primary"
               type="button"
-              onPointerUp={onAddMemory}
-              onClick={onAddMemory}
+              onMouseDown={() => setMemoryComposerOpen(true)}
+              onClick={() => setMemoryComposerOpen(true)}
             >
               <Plus size={17} />
               新增记忆
@@ -218,6 +220,11 @@ export function LibraryPage({
       {view === "Board" ? (
         <MemoryBoardView memories={visibleMemories} selected={selected} onSelect={onSelect} />
       ) : null}
+      <AddMemoryDialog
+        open={memoryComposerOpen}
+        onClose={() => setMemoryComposerOpen(false)}
+        onSubmit={onCreateMemory}
+      />
     </>
   );
 
@@ -233,5 +240,103 @@ function FilterControl({ label, value, options, onChange }: { label: string; val
       <span>{label}</span>
       <SelectMenu className="filter-select" value={value} options={options} onChange={onChange} />
     </label>
+  );
+}
+
+function AddMemoryDialog({
+  open,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (input: ManualMemoryInput) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [reason, setReason] = useState("手动新增记忆");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setTitle("");
+    setContent("");
+    setSourceUrl("");
+    setReason("手动新增记忆");
+    setError(null);
+    setSubmitting(false);
+  }, [open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const canSubmit = title.trim().length > 0 && content.trim().length > 0 && reason.trim().length > 0;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSubmit || submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        content: content.trim(),
+        sourceUrl: sourceUrl.trim().length > 0 ? sourceUrl.trim() : null,
+        reason: reason.trim(),
+      });
+      onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "新增记忆提交失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        onClose();
+      }
+    }}>
+      <form className="memory-create-dialog" aria-label="新增记忆" onSubmit={submit}>
+        <div className="dialog-header">
+          <div>
+            <h2>新增记忆</h2>
+            <p>提交后写入 MemWing 事件管线，由后端生成候选记忆和审计记录。</p>
+          </div>
+          <button type="button" aria-label="关闭新增记忆" onClick={onClose}>×</button>
+        </div>
+        <label>
+          <span>标题</span>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：Demo 范围优先飞书文档记忆" />
+        </label>
+        <label>
+          <span>内容</span>
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} placeholder="写下需要 MemWing 记住的事实、偏好、规则或决策。" />
+        </label>
+        <label>
+          <span>来源链接</span>
+          <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="可选" />
+        </label>
+        <label>
+          <span>原因</span>
+          <input value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        {error ? <p className="dialog-error">{error}</p> : null}
+        <div className="dialog-actions">
+          <button className="button" type="button" onClick={onClose}>取消</button>
+          <button className="button button--primary" type="submit" disabled={!canSubmit || submitting}>
+            {submitting ? "提交中" : "提交记忆"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
