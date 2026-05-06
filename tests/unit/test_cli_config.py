@@ -8,6 +8,7 @@ import pytest
 
 from memwing.cli import main
 from memwing.config_store import load_json_config
+from memwing.cli import RuntimeLaunch
 from memwing.service_supervisor import ServiceCheck, ServiceReport
 
 
@@ -109,6 +110,7 @@ def test_memwing_doctor_lite_command_reports_profile_without_full_local_requirem
 ) -> None:
     monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("OPENCLAW_CLI", "python")
+    monkeypatch.setattr("memwing.doctor.run_command", _successful_openclaw_runner)
 
     with pytest.raises(SystemExit) as exit_info:
         main(["doctor", "--profile", "lite"])
@@ -118,6 +120,7 @@ def test_memwing_doctor_lite_command_reports_profile_without_full_local_requirem
     assert "profile: lite" in output
     assert "Lite does not require Neo4j" in output
     assert "database.url is required" not in output
+    assert "openclaw_plugin" in output
 
 
 def test_memwing_status_command_can_skip_api_health_probe(
@@ -144,9 +147,7 @@ def test_memwing_openclaw_install_dry_run_uses_packaged_plugin_dir(
 ) -> None:
     monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
     plugin_dir = tmp_path / "plugin"
-    (plugin_dir / "dist").mkdir(parents=True)
-    (plugin_dir / "openclaw.plugin.json").write_text('{"id":"memwing"}', encoding="utf-8")
-    (plugin_dir / "dist" / "index.js").write_text("module.exports = {}", encoding="utf-8")
+    _plugin_artifact(tmp_path)
 
     with pytest.raises(SystemExit) as exit_info:
         main(
@@ -175,6 +176,19 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
 ) -> None:
     memwing_home = tmp_path / "home"
     monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    plugin_dir = _plugin_artifact(tmp_path)
+    monkeypatch.setenv("MEMWING_OPENCLAW_PLUGIN_DIR", str(plugin_dir))
+    installed: list[object] = []
+    started: list[object] = []
+    monkeypatch.setattr(
+        "memwing.cli.install_openclaw_plugin",
+        lambda plan, *, smoke: installed.append((plan, smoke)),
+    )
+    monkeypatch.setattr(
+        "memwing.cli._start_runtime_background",
+        lambda runtime_env, home: started.append((runtime_env, home))
+        or RuntimeLaunch(12345, home / "logs" / "runtime.log", home / "runtime.pid"),
+    )
 
     with pytest.raises(SystemExit) as exit_info:
         main(["quickstart", "--profile", "lite"])
@@ -186,6 +200,10 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     assert (memwing_home / "memwing.db").exists()
     assert (memwing_home / "evidence").is_dir()
     assert (memwing_home / "graph").is_dir()
+    assert installed
+    assert started
+    assert "openclaw: installed" in output
+    assert "runtime: started pid=12345" in output
 
 
 def test_memwing_quickstart_lite_dry_run_does_not_write_state(
@@ -215,6 +233,12 @@ def test_memwing_quickstart_full_local_writes_service_profile(
 ) -> None:
     memwing_home = tmp_path / "home"
     monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    monkeypatch.setenv("MEMWING_OPENCLAW_PLUGIN_DIR", str(_plugin_artifact(tmp_path)))
+    monkeypatch.setattr("memwing.cli.install_openclaw_plugin", lambda _plan, *, smoke: None)
+    monkeypatch.setattr(
+        "memwing.cli._start_runtime_background",
+        lambda _env, home: RuntimeLaunch(12345, home / "logs" / "runtime.log", home / "runtime.pid"),
+    )
     monkeypatch.setattr(
         "memwing.cli.verify_profile_services",
         lambda _config: ServiceReport(
@@ -242,6 +266,23 @@ def test_memwing_quickstart_full_local_writes_service_profile(
     assert config["runtime"]["modelRuntime"] == "openclaw"
     assert config["graph"]["backend"] == "graphiti"
     assert config["evidence"]["backend"] == "qdrant"
+
+
+def test_memwing_quickstart_can_skip_openclaw_and_runtime_for_setup_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["quickstart", "--profile", "lite", "--skip-openclaw", "--no-start"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "openclaw: skipped" in output
+    assert "runtime: skipped" in output
 
 
 def test_memwing_setup_production_renders_config_without_provisioning(
@@ -290,3 +331,32 @@ def test_memwing_doctor_production_validates_external_endpoints_and_secrets(
     output = capsys.readouterr().out
     assert "graph.neo4j.password is required for production" in output
     assert "evidence.qdrant.apiKey is required for production" in output
+
+
+def _plugin_artifact(tmp_path: Path) -> Path:
+    plugin_dir = tmp_path / "plugin"
+    (plugin_dir / "dist").mkdir(parents=True)
+    (plugin_dir / "openclaw.plugin.json").write_text('{"id":"memwing"}', encoding="utf-8")
+    (plugin_dir / "dist" / "openclaw.plugin.json").write_text(
+        '{"id":"memwing"}',
+        encoding="utf-8",
+    )
+    (plugin_dir / "dist" / "index.js").write_text("module.exports = {}", encoding="utf-8")
+    return plugin_dir
+
+
+def _successful_openclaw_runner(command: object) -> object:
+    from memwing.openclaw_installer import OpenClawCommandResult
+
+    argv = getattr(command, "argv")
+    if argv[1:3] == ("plugins", "inspect"):
+        stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+        stdout = json.dumps("memwing")
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
+        stdout = json.dumps(
+            {"enabled": True, "hooks": {"allowConversationAccess": True}}
+        )
+    else:
+        stdout = ""
+    return OpenClawCommandResult(tuple(argv), 0, stdout, "")

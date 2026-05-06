@@ -10,6 +10,14 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from memwing.config_store import get_config_value
+from memwing.openclaw_installer import (
+    CommandRunner,
+    OpenClawInstallerError,
+    build_install_plan,
+    openclaw_status,
+    render_status_text as render_openclaw_status_text,
+    run_command,
+)
 from memwing.runtime_env import build_runtime_env
 
 
@@ -81,9 +89,11 @@ def run_doctor(
     *,
     env: Mapping[str, str] | None = None,
     command_lookup: Callable[[str], str | None] | None = None,
+    openclaw_runner: CommandRunner | None = None,
     fix: bool = False,
 ) -> DoctorReport:
     runtime_env = build_runtime_env(config, base_env=env)
+    openclaw_cli_check = _openclaw_cli_check(config, env=env, command_lookup=command_lookup)
     checks: list[DoctorCheck] = [
         DoctorCheck("config", "ok", "MemWing config is parseable"),
         DoctorCheck("profile", "ok", f"profile={runtime_env.profile}"),
@@ -92,7 +102,13 @@ def run_doctor(
         _model_check(runtime_env.env),
         _graph_check(runtime_env.profile, runtime_env.env),
         _evidence_check(runtime_env.profile, runtime_env.env),
-        _openclaw_cli_check(config, env=env, command_lookup=command_lookup),
+        openclaw_cli_check,
+        _openclaw_plugin_check(
+            config,
+            env=env,
+            openclaw_cli_check=openclaw_cli_check,
+            runner=openclaw_runner,
+        ),
     ]
     fix_message = "no automatic fixes were applied" if fix else None
     return DoctorReport(
@@ -252,6 +268,28 @@ def _openclaw_cli_check(
     if resolved is None:
         return DoctorCheck("openclaw", "fail", f"OpenClaw CLI is not available: {command}")
     return DoctorCheck("openclaw", "ok", f"OpenClaw CLI found at {resolved}")
+
+
+def _openclaw_plugin_check(
+    config: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None,
+    openclaw_cli_check: DoctorCheck,
+    runner: CommandRunner | None,
+) -> DoctorCheck:
+    if openclaw_cli_check.status == "fail":
+        return DoctorCheck("openclaw_plugin", "fail", openclaw_cli_check.message)
+    try:
+        plan = build_install_plan(config, env=env, validate_plugin=False)
+        inspect, slot, entry = openclaw_status(plan, runner=runner or run_command)
+        render_openclaw_status_text(inspect, slot, entry)
+    except OpenClawInstallerError as exc:
+        return DoctorCheck("openclaw_plugin", "fail", str(exc))
+    return DoctorCheck(
+        "openclaw_plugin",
+        "ok",
+        "plugin enabled, context engine selected, conversation hook enabled",
+    )
 
 
 def _api_base_url(env: Mapping[str, str]) -> str:

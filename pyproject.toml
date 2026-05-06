@@ -34,6 +34,9 @@ where = [".", "memwing/infrastructure/graph"]
 include = ["memwing*", "graphiti_core*"]
 exclude = ["memwing.infrastructure.graph.graphiti_core*"]
 
+[tool.setuptools.package-data]
+"memwing.integrations.openclaw" = ["openclaw.plugin.json", "dist/**", "dist/*.js"]
+
 [project.scripts]
 memwing = "memwing.cli:main"
 memwing-api = "memwing.api_runner:main"

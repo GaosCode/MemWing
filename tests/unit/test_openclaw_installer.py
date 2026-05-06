@@ -66,7 +66,12 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
                 }
             )
         elif command.argv[1:3] == ("config", "get"):
-            stdout = json.dumps("memwing")
+            if command.argv[3] == "plugins.slots.contextEngine":
+                stdout = json.dumps("memwing")
+            else:
+                stdout = json.dumps(
+                    {"enabled": True, "hooks": {"allowConversationAccess": True}}
+                )
         else:
             stdout = ""
         return OpenClawCommandResult(command.argv, 0, stdout, "")
@@ -74,7 +79,8 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
     results = install_openclaw_plugin(plan, runner=runner)
 
     managed_plugin = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.3"
-    assert results[-1].stdout == '"memwing"'
+    assert results[-2].stdout == '"memwing"'
+    assert json.loads(results[-1].stdout)["enabled"] is True
     assert plan.plugin_source_dir == plugin_dir.resolve()
     assert plan.plugin_dir == managed_plugin.resolve()
     assert (managed_plugin / "openclaw.plugin.json").exists()
@@ -86,6 +92,7 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
     }
     assert calls[2].argv == ("openclaw", "plugins", "inspect", "memwing", "--runtime", "--json")
     assert calls[3].argv == ("openclaw", "config", "get", "plugins.slots.contextEngine", "--json")
+    assert calls[4].argv == ("openclaw", "config", "get", "plugins.entries.memwing", "--json")
 
 
 def test_openclaw_install_fails_when_smoke_does_not_register_context_engine(
@@ -98,10 +105,46 @@ def test_openclaw_install_fails_when_smoke_does_not_register_context_engine(
         if command.argv[1:3] == ("plugins", "inspect"):
             return OpenClawCommandResult(command.argv, 0, '{"capabilities":[]}', "")
         if command.argv[1:3] == ("config", "get"):
-            return OpenClawCommandResult(command.argv, 0, '"memwing"', "")
+            if command.argv[3] == "plugins.slots.contextEngine":
+                return OpenClawCommandResult(command.argv, 0, '"memwing"', "")
+            return OpenClawCommandResult(
+                command.argv,
+                0,
+                '{"enabled":true,"hooks":{"allowConversationAccess":true}}',
+                "",
+            )
         return OpenClawCommandResult(command.argv, 0, "", "")
 
     with pytest.raises(OpenClawInstallerError, match="context engine"):
+        install_openclaw_plugin(plan, runner=runner)
+
+
+def test_openclaw_install_fails_when_conversation_hook_is_disabled(
+    tmp_path: Path,
+) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+    plan = build_install_plan(default_config(), env={}, plugin_dir=plugin_dir)
+
+    def runner(command: OpenClawCommand) -> OpenClawCommandResult:
+        if command.argv[1:3] == ("plugins", "inspect"):
+            return OpenClawCommandResult(
+                command.argv,
+                0,
+                '{"capabilities":[{"kind":"context-engine","ids":["memwing"]}]}',
+                "",
+            )
+        if command.argv[1:3] == ("config", "get"):
+            if command.argv[3] == "plugins.slots.contextEngine":
+                return OpenClawCommandResult(command.argv, 0, '"memwing"', "")
+            return OpenClawCommandResult(
+                command.argv,
+                0,
+                '{"enabled":true,"hooks":{"allowConversationAccess":false}}',
+                "",
+            )
+        return OpenClawCommandResult(command.argv, 0, "", "")
+
+    with pytest.raises(OpenClawInstallerError, match="allowConversationAccess"):
         install_openclaw_plugin(plan, runner=runner)
 
 
@@ -120,6 +163,19 @@ def test_default_plugin_dir_can_be_overridden_by_env(tmp_path: Path) -> None:
     plugin_dir = _plugin_artifact(tmp_path)
 
     assert default_plugin_dir(env={"MEMWING_OPENCLAW_PLUGIN_DIR": str(plugin_dir)}) == plugin_dir
+
+
+def test_openclaw_plugin_validation_requires_manifest_and_entrypoint(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugin"
+    (plugin_dir / "dist").mkdir(parents=True)
+    (plugin_dir / "openclaw.plugin.json").write_text('{"id":"memwing"}', encoding="utf-8")
+    (plugin_dir / "dist" / "openclaw.plugin.json").write_text(
+        '{"id":"memwing"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OpenClawInstallerError, match="dist/index.js"):
+        build_install_plan(default_config(), env={}, plugin_dir=plugin_dir)
 
 
 def test_openclaw_dry_run_reports_managed_plugin_target(tmp_path: Path) -> None:

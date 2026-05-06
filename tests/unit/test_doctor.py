@@ -10,6 +10,7 @@ from memwing.doctor import (
     render_doctor_text,
     run_doctor,
 )
+from memwing.openclaw_installer import OpenClawCommandResult
 
 
 def test_doctor_lite_does_not_require_full_local_services(tmp_path: Path) -> None:
@@ -19,6 +20,7 @@ def test_doctor_lite_does_not_require_full_local_services(tmp_path: Path) -> Non
         config,
         env={"MEMWING_HOME": str(tmp_path / "home")},
         command_lookup=lambda command: f"/bin/{command}",
+        openclaw_runner=_successful_openclaw_runner,
     )
 
     assert report.exit_code() == 0
@@ -26,6 +28,7 @@ def test_doctor_lite_does_not_require_full_local_services(tmp_path: Path) -> Non
     assert "Lite does not require Neo4j" in rendered
     assert "Lite does not require Qdrant" in rendered
     assert "database.url is required" not in rendered
+    assert "ok: openclaw_plugin: plugin enabled, context engine selected, conversation hook enabled" in rendered
 
 
 def test_doctor_full_local_reports_missing_database_model_and_backends() -> None:
@@ -48,6 +51,7 @@ def test_doctor_full_local_reports_missing_database_model_and_backends() -> None
         "evidence.qdrant.url is required when evidence.backend=qdrant"
     )
     assert messages["openclaw"] == "OpenClaw CLI is not available: openclaw"
+    assert messages["openclaw_plugin"] == "OpenClaw CLI is not available: openclaw"
 
 
 def test_status_reports_effective_runtime_config_without_health_probe(tmp_path: Path) -> None:
@@ -92,6 +96,7 @@ def test_doctor_json_output_includes_fix_message() -> None:
         default_config(),
         env={},
         command_lookup=lambda command: f"/bin/{command}",
+        openclaw_runner=_successful_openclaw_runner,
         fix=True,
     )
 
@@ -99,3 +104,42 @@ def test_doctor_json_output_includes_fix_message() -> None:
 
     assert payload["fix"] == "no automatic fixes were applied"
     assert payload["ok"] is True
+
+
+def test_doctor_fails_when_openclaw_plugin_is_not_enabled(tmp_path: Path) -> None:
+    report = run_doctor(
+        default_config(),
+        env={"MEMWING_HOME": str(tmp_path / "home")},
+        command_lookup=lambda command: f"/bin/{command}",
+        openclaw_runner=_disabled_openclaw_runner,
+    )
+
+    assert report.exit_code() == 1
+    messages = {check.name: check.message for check in report.checks}
+    assert "plugins.entries.memwing.enabled must be true" in messages["openclaw_plugin"]
+
+
+def _successful_openclaw_runner(command: object) -> OpenClawCommandResult:
+    argv = getattr(command, "argv")
+    if argv[1:3] == ("plugins", "inspect"):
+        stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+        stdout = json.dumps("memwing")
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
+        stdout = json.dumps({"enabled": True, "hooks": {"allowConversationAccess": True}})
+    else:
+        stdout = ""
+    return OpenClawCommandResult(tuple(argv), 0, stdout, "")
+
+
+def _disabled_openclaw_runner(command: object) -> OpenClawCommandResult:
+    argv = getattr(command, "argv")
+    if argv[1:3] == ("plugins", "inspect"):
+        stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+        stdout = json.dumps("memwing")
+    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
+        stdout = json.dumps({"enabled": False, "hooks": {"allowConversationAccess": True}})
+    else:
+        stdout = ""
+    return OpenClawCommandResult(tuple(argv), 0, stdout, "")

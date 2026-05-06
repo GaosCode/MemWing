@@ -4,8 +4,10 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from memwing.config_store import (
@@ -40,6 +42,13 @@ from memwing.openclaw_installer import (
 from memwing.profiles import build_profile_config
 from memwing.runtime_env import build_runtime_env
 from memwing.service_supervisor import render_service_report, verify_profile_services
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLaunch:
+    pid: int
+    log_path: Path
+    pid_path: Path
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -142,7 +151,8 @@ def _run_quickstart(args: argparse.Namespace) -> int:
         print(f"profile: {profile}")
         print(f"config: {path}")
         print(render_service_report(report))
-        print("openclaw: run `memwing openclaw install` to link and configure the plugin")
+        if report.ok:
+            _finish_quickstart(args, load_effective_config(), memwing_home)
         return 0 if report.ok else 1
 
     sqlite_path = Path(
@@ -157,7 +167,7 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     print(f"state: {sqlite_path}")
     print("graph: disabled")
     print("evidence: disabled")
-    print("openclaw: run `memwing openclaw install` to link and configure the plugin")
+    _finish_quickstart(args, load_effective_config(), memwing_home)
     return 0
 
 
@@ -172,7 +182,56 @@ def _print_quickstart_dry_run(profile: str, path: Path, config: dict[str, Any]) 
         print("evidence: disabled")
     else:
         print("would_verify: postgres qdrant neo4j")
-    print("openclaw: run `memwing openclaw install` to link and configure the plugin")
+    print("openclaw: would install packaged plugin and configure OpenClaw")
+    print("runtime: would start memwing-runtime in the background")
+
+
+def _finish_quickstart(args: argparse.Namespace, config: dict[str, Any], memwing_home: Path) -> None:
+    if args.skip_openclaw:
+        print("openclaw: skipped")
+    else:
+        plan = build_install_plan(config)
+        install_openclaw_plugin(plan, smoke=not args.skip_smoke)
+        print(f"openclaw: installed {plan.plugin_dir}")
+        if not args.skip_smoke:
+            print("openclaw_smoke: ok")
+
+    if args.no_start:
+        print("runtime: skipped")
+    else:
+        launch = _start_runtime_background(build_runtime_env(config), memwing_home)
+        print(f"runtime: started pid={launch.pid}")
+        print(f"runtime_log: {launch.log_path}")
+
+
+def _start_runtime_background(runtime_env: object, memwing_home: Path) -> RuntimeLaunch:
+    env = getattr(runtime_env, "env")
+    logs_dir = memwing_home / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / "runtime.log"
+    pid_path = memwing_home / "runtime.pid"
+    log_handle = log_path.open("ab")
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "memwing.runtime_runner",
+                "--host",
+                env["MEMWING_API_HOST"],
+                "--port",
+                env["MEMWING_API_PORT"],
+                "--allow-degraded-pipeline",
+            ],
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log_handle.close()
+    pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
+    return RuntimeLaunch(pid=process.pid, log_path=log_path, pid_path=pid_path)
 
 
 def _run_setup(args: argparse.Namespace) -> int:
@@ -230,8 +289,8 @@ def _run_openclaw(args: argparse.Namespace) -> int:
         return 0
     if args.openclaw_command == "status":
         plan = build_install_plan(config, openclaw_cli=args.openclaw_cli, validate_plugin=False)
-        inspect, slot = openclaw_status(plan)
-        print(render_openclaw_status_text(inspect, slot))
+        inspect, slot, entry = openclaw_status(plan)
+        print(render_openclaw_status_text(inspect, slot, entry))
         return 0
     raise ConfigStoreError("openclaw command is required")
 
@@ -287,6 +346,9 @@ def _parser() -> argparse.ArgumentParser:
     quickstart = subcommands.add_parser("quickstart")
     quickstart.add_argument("--profile", choices=("lite", "full-local", "production"), default="lite")
     quickstart.add_argument("--dry-run", action="store_true")
+    quickstart.add_argument("--skip-openclaw", action="store_true")
+    quickstart.add_argument("--skip-smoke", action="store_true")
+    quickstart.add_argument("--no-start", action="store_true")
 
     setup = subcommands.add_parser("setup")
     setup.add_argument("--profile", choices=("production",), required=True)

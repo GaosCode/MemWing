@@ -11,7 +11,8 @@ def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() ->
 
     assert "REPLACE_WITH_RELEASE_SHA256" not in formula
     assert "virtualenv_install_with_resources" not in formula
-    assert "sha256 :no_check" in formula
+    assert "sha256 :no_check" not in formula
+    assert 'sha256 "93db283fc96bb79be23dcd3680d13b92be2cc139f60cf63d734992dc019b108c"' in formula
     assert 'prefix.install Dir["*"]' in formula
     assert "python@3.13" in formula
     assert 'artifact_python = (prefix/"PYTHON_MAJOR_MINOR").read.strip' in formula
@@ -55,3 +56,12 @@ def test_release_packaging_has_quickstart_dry_run_smoke() -> None:
     assert "memwing quickstart --profile lite --dry-run" in smoke_script
     assert "MEMWING_HOME=" in smoke_script
     assert 'PATH="$PREFIX/bin:$PATH"' in smoke_script
+
+
+def test_python_package_includes_openclaw_plugin_artifact() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert '[tool.setuptools.package-data]' in pyproject
+    assert '"memwing.integrations.openclaw"' in pyproject
+    assert '"openclaw.plugin.json"' in pyproject
+    assert '"dist/**"' in pyproject

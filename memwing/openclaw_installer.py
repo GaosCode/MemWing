@@ -17,6 +17,7 @@ from memwing.openclaw_smoke import (
     PLUGIN_ID,
     render_status_text as render_smoke_status_text,
     verify_context_engine,
+    verify_plugin_entry,
     verify_runtime_inspect,
 )
 
@@ -65,6 +66,9 @@ class OpenClawInstallPlan:
     def context_engine_command(self) -> OpenClawCommand:
         return self._command("config", "get", "plugins.slots.contextEngine", "--json")
 
+    def plugin_entry_command(self) -> OpenClawCommand:
+        return self._command("config", "get", "plugins.entries.memwing", "--json")
+
     def batch_entries(self) -> tuple[dict[str, object], ...]:
         return (
             {"path": "plugins.entries.memwing.enabled", "value": True},
@@ -91,7 +95,11 @@ class OpenClawInstallPlan:
     def commands(self, *, include_smoke: bool = True) -> tuple[OpenClawCommand, ...]:
         commands = (self.plugin_install_command(), self.config_set_command())
         if include_smoke:
-            commands += (self.runtime_inspect_command(), self.context_engine_command())
+            commands += (
+                self.runtime_inspect_command(),
+                self.context_engine_command(),
+                self.plugin_entry_command(),
+            )
         return commands
 
     def _command(self, *args: str) -> OpenClawCommand:
@@ -175,8 +183,9 @@ def install_openclaw_plugin(
     if smoke:
         inspect = _run_checked(command_runner, plan.runtime_inspect_command())
         slot = _run_checked(command_runner, plan.context_engine_command())
-        _verify_smoke(inspect.stdout, slot.stdout)
-        results.extend((inspect, slot))
+        entry = _run_checked(command_runner, plan.plugin_entry_command())
+        _verify_smoke(inspect.stdout, slot.stdout, entry.stdout)
+        results.extend((inspect, slot, entry))
     return tuple(results)
 
 
@@ -184,18 +193,24 @@ def openclaw_status(
     plan: OpenClawInstallPlan,
     *,
     runner: CommandRunner | None = None,
-) -> tuple[OpenClawCommandResult, OpenClawCommandResult]:
+) -> tuple[OpenClawCommandResult, OpenClawCommandResult, OpenClawCommandResult]:
     command_runner = runner or run_command
     inspect = _run_checked(command_runner, plan.runtime_inspect_command())
     slot = _run_checked(command_runner, plan.context_engine_command())
-    _verify_smoke(inspect.stdout, slot.stdout)
-    return inspect, slot
+    entry = _run_checked(command_runner, plan.plugin_entry_command())
+    _verify_smoke(inspect.stdout, slot.stdout, entry.stdout)
+    return inspect, slot, entry
 
 
-def render_status_text(inspect: OpenClawCommandResult, slot: OpenClawCommandResult) -> str:
+def render_status_text(
+    inspect: OpenClawCommandResult,
+    slot: OpenClawCommandResult,
+    entry: OpenClawCommandResult,
+) -> str:
     return render_smoke_status_text(
         inspect_stdout=inspect.stdout,
         slot_stdout=slot.stdout,
+        entry_stdout=entry.stdout,
         inspect_argv=inspect.argv,
     )
 
@@ -257,10 +272,11 @@ def _validate_plugin_dir(plugin_dir: Path) -> None:
     if not manifest.exists():
         raise OpenClawInstallerError(f"OpenClaw plugin manifest is missing: {manifest}")
     dist_manifest = plugin_dir / "dist" / "openclaw.plugin.json"
-    if not dist_manifest.exists() and not (plugin_dir / "dist" / "index.js").exists():
-        raise OpenClawInstallerError(
-            "OpenClaw plugin dist is missing."
-        )
+    if not dist_manifest.exists():
+        raise OpenClawInstallerError(f"OpenClaw plugin dist manifest is missing: {dist_manifest}")
+    entrypoint = plugin_dir / "dist" / "index.js"
+    if not entrypoint.exists():
+        raise OpenClawInstallerError(f"OpenClaw plugin dist/index.js is missing: {entrypoint}")
 
 
 def _copy_plugin_artifact(source_dir: Path, target_dir: Path) -> None:
@@ -289,10 +305,11 @@ def _memwing_version(env: Mapping[str, str]) -> str:
         return "0.1.0-dev"
 
 
-def _verify_smoke(inspect_stdout: str, slot_stdout: str) -> None:
+def _verify_smoke(inspect_stdout: str, slot_stdout: str, entry_stdout: str) -> None:
     try:
         verify_runtime_inspect(inspect_stdout)
         verify_context_engine(slot_stdout)
+        verify_plugin_entry(entry_stdout)
     except OpenClawSmokeError as exc:
         raise OpenClawInstallerError(str(exc)) from exc
 

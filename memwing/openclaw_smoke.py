@@ -34,19 +34,36 @@ def verify_context_engine(stdout: str) -> None:
         )
 
 
+def verify_plugin_entry(stdout: str) -> None:
+    value = json_or_text(stdout)
+    if not isinstance(value, Mapping):
+        raise OpenClawSmokeError("OpenClaw plugins.entries.memwing must be an object")
+    if value.get("enabled") is not True:
+        raise OpenClawSmokeError("OpenClaw plugins.entries.memwing.enabled must be true")
+    hooks = value.get("hooks")
+    if not isinstance(hooks, Mapping) or hooks.get("allowConversationAccess") is not True:
+        raise OpenClawSmokeError(
+            "OpenClaw plugins.entries.memwing.hooks.allowConversationAccess must be true"
+        )
+
+
 def render_status_text(
     *,
     inspect_stdout: str,
     slot_stdout: str,
+    entry_stdout: str,
     inspect_argv: Sequence[str],
 ) -> str:
     verify_runtime_inspect(inspect_stdout)
     verify_context_engine(slot_stdout)
+    verify_plugin_entry(entry_stdout)
     return "\n".join(
         (
             "plugin: memwing",
             "runtime: ok",
             f"contextEngine: {json_or_text(slot_stdout)}",
+            "enabled: true",
+            "conversationHook: true",
             f"inspect_command: {' '.join(shlex.quote(part) for part in inspect_argv)}",
         )
     )
