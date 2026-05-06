@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${MEMWING_VERSION:-0.1.2}"
+VERSION="${MEMWING_VERSION:-0.1.3}"
 PREFIX="${MEMWING_INSTALL_PREFIX:-$HOME/.local}"
 BASE_URL="${MEMWING_RELEASE_BASE_URL:-https://github.com/GaosCode/MemWing/releases/download/v$VERSION}"
 

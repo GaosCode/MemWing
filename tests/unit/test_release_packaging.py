@@ -10,13 +10,13 @@ def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() ->
     formula = (ROOT / "packaging/homebrew/memwing.rb").read_text(encoding="utf-8")
 
     assert (
-        "https://github.com/GaosCode/MemWing/releases/download/v0.1.2/"
-        "memwing-0.1.2.tar.gz"
+        "https://github.com/GaosCode/MemWing/releases/download/v0.1.3/"
+        "memwing-0.1.3.tar.gz"
     ) in formula
     assert 'homepage "https://github.com/GaosCode/MemWing"' in formula
     assert "github.com/memwing/memwing" not in formula
     assert "REPLACE_WITH_RELEASE_SHA256" not in formula
-    assert "REPLACE_WITH_V0_1_2_SHA256" not in formula
+    assert "REPLACE_WITH_V0_1_3_SHA256" not in formula
     assert "virtualenv_install_with_resources" not in formula
     assert "sha256 :no_check" not in formula
     assert 'libexec.install Dir["*"]' in formula
@@ -37,7 +37,7 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
     assert '--target "$ARTIFACT_DIR/lib/python"' in build_script
     assert 'PYTHONPATH="$ROOT/lib/python:' in build_script
     assert 'PYTHON_BIN="${PYTHON_BIN:-python3.13}"' in build_script
-    assert 'VERSION="${MEMWING_VERSION:-0.1.2}"' in build_script
+    assert 'VERSION="${MEMWING_VERSION:-0.1.3}"' in build_script
     assert 'PYTHON_MAJOR_MINOR="$("$PYTHON_BIN" -c' in build_script
     assert 'PYTHON_BIN="${MEMWING_PYTHON:-python$PYTHON_MAJOR_MINOR}"' in build_script
     assert 'exec "$PYTHON_BIN" -m memwing.cli "$@"' in build_script
@@ -64,7 +64,7 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
     assert "npm run build" in build_script
     assert 'cp -R "$ROOT/frontend/dist/." "$ARTIFACT_DIR/control-plane/"' in build_script
     assert 'cp "$ROOT/LICENSE" "$ARTIFACT_DIR/licenses/LICENSE"' in build_script
-    assert 'VERSION="${MEMWING_VERSION:-0.1.2}"' in install_script
+    assert 'VERSION="${MEMWING_VERSION:-0.1.3}"' in install_script
     assert "python_major_minor=" in install_script
     assert "https://github.com/GaosCode/MemWing/releases/download/v$VERSION" in install_script
     assert "github.com/memwing/memwing" not in install_script
