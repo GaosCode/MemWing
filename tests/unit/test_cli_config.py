@@ -8,6 +8,7 @@ import pytest
 
 from memwing.cli import main
 from memwing.config_store import load_json_config
+from memwing.service_supervisor import ServiceCheck, ServiceReport
 
 
 def test_memwing_config_set_get_unset_and_file_are_backed_by_user_config(
@@ -194,6 +195,17 @@ def test_memwing_quickstart_full_local_writes_service_profile(
 ) -> None:
     memwing_home = tmp_path / "home"
     monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    monkeypatch.setattr(
+        "memwing.cli.verify_profile_services",
+        lambda _config: ServiceReport(
+            profile="full-local",
+            checks=(
+                ServiceCheck("postgres", "ok", "database.url is reachable at 127.0.0.1:5432"),
+                ServiceCheck("qdrant", "ok", "evidence.qdrant.url is reachable at 127.0.0.1:6333"),
+                ServiceCheck("neo4j", "ok", "graph.neo4j.uri is reachable at 127.0.0.1:7687"),
+            ),
+        ),
+    )
 
     with pytest.raises(SystemExit) as exit_info:
         main(["quickstart", "--profile", "full-local"])

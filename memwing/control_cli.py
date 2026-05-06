@@ -67,6 +67,11 @@ def add_control_parser(subcommands: argparse._SubParsersAction[argparse.Argument
     _add_read_options(source_list)
     source_purge = source_actions.add_parser("purge")
     source_purge.add_argument("source_event_id")
+    source_purge.add_argument(
+        "--purge-level",
+        choices=("memwing_redaction",),
+        default="memwing_redaction",
+    )
     _add_mutation_options(source_purge)
 
     pages = resources.add_parser("pages")
@@ -171,11 +176,15 @@ def _path(path_template: str, args: argparse.Namespace) -> str:
 
 def _mutation_body(args: argparse.Namespace) -> dict[str, object]:
     reason = args.reason or _default_reason(args)
-    return {
+    body: dict[str, object] = {
         "actor_id": args.actor_id,
         "reason": reason,
         "idempotency_key": f"memwing-cli:{uuid.uuid4()}",
     }
+    purge_level = getattr(args, "purge_level", None)
+    if purge_level is not None:
+        body["purge_level"] = purge_level
+    return body
 
 
 def _default_reason(args: argparse.Namespace) -> str:

@@ -5,19 +5,49 @@ from memwing.service_supervisor import verify_profile_services
 
 
 def test_full_local_service_supervisor_verifies_configured_dependencies() -> None:
-    report = verify_profile_services(build_profile_config("full-local"), env={})
+    seen: list[tuple[str, int]] = []
+
+    def fake_tcp_connect(host: str, port: int, _timeout: float) -> None:
+        seen.append((host, port))
+
+    report = verify_profile_services(
+        build_profile_config("full-local"),
+        env={},
+        tcp_connect=fake_tcp_connect,
+    )
 
     assert report.ok
     assert [check.name for check in report.checks] == ["postgres", "qdrant", "neo4j"]
     assert all(check.status == "ok" for check in report.checks)
+    assert seen == [
+        ("127.0.0.1", 5432),
+        ("127.0.0.1", 6333),
+        ("127.0.0.1", 7687),
+    ]
 
 
 def test_service_supervisor_reports_missing_full_local_dependency_config() -> None:
     config = build_profile_config("full-local")
     del config["database"]["url"]
 
-    report = verify_profile_services(config, env={})
+    report = verify_profile_services(config, env={}, tcp_connect=lambda *_args: None)
 
     assert not report.ok
     assert report.checks[0].name == "postgres"
     assert report.checks[0].status == "fail"
+
+
+def test_service_supervisor_fails_when_configured_dependency_is_unreachable() -> None:
+    def failing_tcp_connect(_host: str, _port: int, _timeout: float) -> None:
+        raise OSError("connection refused")
+
+    report = verify_profile_services(
+        build_profile_config("full-local"),
+        env={},
+        tcp_connect=failing_tcp_connect,
+    )
+
+    assert not report.ok
+    assert report.checks[0].name == "postgres"
+    assert report.checks[0].status == "fail"
+    assert "connection refused" in report.checks[0].message

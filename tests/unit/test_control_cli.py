@@ -181,5 +181,31 @@ def test_control_push_send_uses_platform_route(
     )
 
 
+def test_control_sources_purge_sends_required_purge_level(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "control",
+                "sources",
+                "purge",
+                "source_001",
+                "--project",
+                "project_001",
+                "--yes",
+            ]
+        )
+
+    assert exit_info.value.code == 0
+    method, path, _params, body = FakeControlClient.requests[0]
+    assert (method, path) == ("POST", "/v1/source-events/source_001/purge")
+    assert body is not None
+    assert body["purge_level"] == "memwing_redaction"
+
+
 def test_control_cli_stays_on_http_boundary() -> None:
     assert "memwing.application" not in inspect.getsource(control_cli)
