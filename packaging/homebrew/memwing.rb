@@ -14,8 +14,12 @@ class Memwing < Formula
     if artifact_python != "3.13"
       odie "MemWing artifact was built for Python #{artifact_python}, but this formula runs Python 3.13"
     end
-    inreplace libexec/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
-    bin.install_symlink libexec/"bin/memwing"
+    (bin/"memwing").write <<~SH
+      #!/bin/sh
+      export MEMWING_PYTHON="#{python}"
+      exec "#{libexec}/bin/memwing" "$@"
+    SH
+    chmod 0755, bin/"memwing"
   end
 
   test do

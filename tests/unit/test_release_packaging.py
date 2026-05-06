@@ -20,7 +20,9 @@ def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() ->
     assert "virtualenv_install_with_resources" not in formula
     assert "sha256 :no_check" not in formula
     assert 'libexec.install Dir["*"]' in formula
-    assert "bin.install_symlink" in formula
+    assert 'export MEMWING_PYTHON="#{python}"' in formula
+    assert 'exec "#{libexec}/bin/memwing" "$@"' in formula
+    assert 'chmod 0755, bin/"memwing"' in formula
     assert "python@3.13" in formula
     assert 'artifact_python = (libexec/"PYTHON_MAJOR_MINOR").read.strip' in formula
     assert 'if artifact_python != "3.13"' in formula
