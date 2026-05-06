@@ -37,6 +37,24 @@ test("manifest config schema accepts documented MemWing base URL", () => {
   ]);
 });
 
+test("manifest declares OpenClaw runtime capability and tool contracts", () => {
+  const manifestPath = path.resolve(__dirname, "..", "openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+
+  assert.equal(manifest.kind, "context-engine");
+  assert.deepEqual(manifest.contracts.tools, [
+    "memwing_search_memory",
+    "memwing_get_memory",
+    "memwing_explain_memory",
+    "memwing_search_sources",
+    "memwing_get_project_context",
+    "memory_search",
+    "memory_get",
+    "memory_index",
+    "memory_status"
+  ]);
+});
+
 test("registers MemWing context engine, hooks, tools, and native shims", async () => {
   const registered = captureRegistrations();
 

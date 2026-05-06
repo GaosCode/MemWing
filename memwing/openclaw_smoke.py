@@ -14,7 +14,9 @@ class OpenClawSmokeError(ValueError):
 
 def verify_runtime_inspect(stdout: str) -> None:
     payload = _parse_json(stdout, "OpenClaw plugin inspect")
-    capabilities = payload.get("capabilities") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise OpenClawSmokeError("OpenClaw plugin inspect must return an object")
+    capabilities = payload.get("capabilities")
     if not isinstance(capabilities, list):
         raise OpenClawSmokeError("OpenClaw plugin inspect did not include capabilities")
     for entry in capabilities:
@@ -23,6 +25,23 @@ def verify_runtime_inspect(stdout: str) -> None:
         ids = entry.get("ids")
         if entry.get("kind") == "context-engine" and isinstance(ids, list) and PLUGIN_ID in ids:
             return
+    plugin = payload.get("plugin")
+    if isinstance(plugin, Mapping):
+        context_engine_ids = plugin.get("contextEngineIds")
+        if isinstance(context_engine_ids, list) and PLUGIN_ID in context_engine_ids:
+            return
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, list):
+        errors = [
+            str(entry.get("message"))
+            for entry in diagnostics
+            if isinstance(entry, Mapping) and entry.get("level") == "error" and entry.get("message")
+        ]
+        if errors:
+            raise OpenClawSmokeError(
+                "OpenClaw runtime did not register the memwing context engine; "
+                f"plugin diagnostics: {'; '.join(errors[:3])}"
+            )
     raise OpenClawSmokeError("OpenClaw runtime did not register the memwing context engine")
 
 

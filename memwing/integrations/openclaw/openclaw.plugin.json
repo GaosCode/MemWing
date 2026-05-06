@@ -1,10 +1,24 @@
 {
   "id": "memwing",
   "name": "MemWing",
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "kind": "context-engine",
   "entry": "dist/index.js",
   "openclaw": {
     "supportedVersions": ">=2026.4.24 <2027.0.0"
+  },
+  "contracts": {
+    "tools": [
+      "memwing_search_memory",
+      "memwing_get_memory",
+      "memwing_explain_memory",
+      "memwing_search_sources",
+      "memwing_get_project_context",
+      "memory_search",
+      "memory_get",
+      "memory_index",
+      "memory_status"
+    ]
   },
   "configSchema": {
     "type": "object",
