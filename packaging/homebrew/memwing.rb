@@ -8,13 +8,14 @@ class Memwing < Formula
   depends_on "python@3.13"
 
   def install
-    prefix.install Dir["*"]
+    libexec.install Dir["*"]
     python = Formula["python@3.13"].opt_bin/"python3.13"
-    artifact_python = (prefix/"PYTHON_MAJOR_MINOR").read.strip
+    artifact_python = (libexec/"PYTHON_MAJOR_MINOR").read.strip
     if artifact_python != "3.13"
       odie "MemWing artifact was built for Python #{artifact_python}, but this formula runs Python 3.13"
     end
-    inreplace prefix/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
+    inreplace libexec/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
+    bin.write_exec_script libexec/"bin/memwing"
   end
 
   test do
