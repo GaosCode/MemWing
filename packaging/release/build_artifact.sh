@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MEMWING_VERSION:-0.1.0}"
+VERSION="${MEMWING_VERSION:-0.1.1}"
 OUT_DIR="$ROOT/dist/release"
 ARTIFACT_DIR="$OUT_DIR/memwing-$VERSION"
 PYTHON_BIN="${PYTHON_BIN:-python3.13}"
@@ -54,6 +54,12 @@ if [[ -z "$wheel" ]]; then
   exit 1
 fi
 "$PYTHON_BIN" -m pip install --upgrade --target "$ARTIFACT_DIR/lib/python" "$wheel"
+find "$ARTIFACT_DIR/lib/python" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "$ARTIFACT_DIR/lib/python" -type f -name "*.pyc" -delete
+find "$ARTIFACT_DIR/lib/python" -type f -path "*/memwing-*.dist-info/direct_url.json" -delete
+find "$ARTIFACT_DIR/lib/python" -type d -name "sboms" -path "*.dist-info/sboms" -prune -exec rm -rf {} +
+find "$ARTIFACT_DIR/lib/python" -type f -path "*/numpy/__config__.py" -exec \
+  perl -0pi -e 's#/private/(?:tmp|var)/[^"]+#<redacted-build-path>#g; s#/Users/[^"]+#<redacted-build-path>#g' {} +
 
 cat > "$ARTIFACT_DIR/bin/memwing" <<'EOF'
 #!/usr/bin/env sh
@@ -73,10 +79,42 @@ printf "%s\n" "$PYTHON_MAJOR_MINOR" > "$ARTIFACT_DIR/PYTHON_MAJOR_MINOR"
 printf "%s\n" "$PYTHON_EXECUTABLE_NAME" > "$ARTIFACT_DIR/PYTHON_EXECUTABLE"
 
 cp "$ROOT/memwing/integrations/openclaw/openclaw.plugin.json" "$ARTIFACT_DIR/memwing-openclaw-plugin/"
+cp "$ROOT/memwing/integrations/openclaw/package.json" "$ARTIFACT_DIR/memwing-openclaw-plugin/"
 cp -R "$ROOT/memwing/integrations/openclaw/dist/." "$ARTIFACT_DIR/memwing-openclaw-plugin/dist/"
 cp -R "$ROOT/frontend/dist/." "$ARTIFACT_DIR/control-plane/"
 cp "$ROOT/LICENSE" "$ARTIFACT_DIR/licenses/LICENSE"
 cp "$ROOT/pyproject.toml" "$ARTIFACT_DIR/default-configs/pyproject.toml"
+
+if find "$ARTIFACT_DIR" \( -type d -name "__pycache__" -o -type f -name "*.pyc" -o -type f -name "direct_url.json" \) | grep -q .; then
+  echo "Release artifact contains Python build metadata that should be stripped" >&2
+  exit 1
+fi
+local_path_scan_list="$OUT_DIR/local-path-scan-files.txt"
+find "$ARTIFACT_DIR" -type f \( \
+  -name "*.py" -o \
+  -name "*.pyi" -o \
+  -name "*.js" -o \
+  -name "*.json" -o \
+  -name "*.toml" -o \
+  -name "*.txt" -o \
+  -name "*.md" -o \
+  -name "*.html" -o \
+  -name "*.css" -o \
+  -name "*.sh" -o \
+  -name "METADATA" -o \
+  -name "RECORD" -o \
+  -name "WHEEL" -o \
+  -name "entry_points.txt" -o \
+  -name "top_level.txt" -o \
+  -name "PYTHON_MAJOR_MINOR" -o \
+  -name "PYTHON_EXECUTABLE" \
+\) -print > "$local_path_scan_list"
+if [ -s "$local_path_scan_list" ] && xargs grep -a -H -n -E "/Users/|/private/tmp/|/var/folders|MemWing_development_docs" < "$local_path_scan_list" >/dev/null 2>&1; then
+  rm -f "$local_path_scan_list"
+  echo "Release artifact contains local build paths" >&2
+  exit 1
+fi
+rm -f "$local_path_scan_list"
 
 cat > "$ARTIFACT_DIR/README.txt" <<EOF
 MemWing $VERSION release artifact.

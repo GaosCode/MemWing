@@ -1,6 +1,6 @@
 [project]
 name = "memwing"
-version = "0.1.0"
+version = "0.1.1"
 description = "MemWing memory system"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -37,7 +37,7 @@ include = ["memwing*", "graphiti_core*"]
 exclude = ["memwing.infrastructure.graph.graphiti_core*"]
 
 [tool.setuptools.package-data]
-"memwing.integrations.openclaw" = ["openclaw.plugin.json", "dist/**", "dist/*.js"]
+"memwing.integrations.openclaw" = ["package.json", "openclaw.plugin.json", "dist/**", "dist/*.js"]
 
 [project.scripts]
 memwing = "memwing.cli:main"
