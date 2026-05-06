@@ -76,6 +76,20 @@ def test_pooled_connection_retries_transient_disconnect_once() -> None:
     asyncio.run(run())
 
 
+def test_pooled_connection_execute_uses_pool_operation() -> None:
+    async def run() -> None:
+        fake_connection = _FakeConnection()
+        pool = _FakePool([fake_connection])
+        connection = PooledPostgresConnection(pool)
+
+        await connection.execute("ALTER TABLE example ADD COLUMN IF NOT EXISTS metadata_json jsonb")
+
+        assert pool.connection_count == 1
+        assert fake_connection.execute_count == 1
+
+    asyncio.run(run())
+
+
 def test_pooled_connection_maps_repeated_disconnect_to_transient_failure() -> None:
     async def run() -> None:
         pool = _FakePool(

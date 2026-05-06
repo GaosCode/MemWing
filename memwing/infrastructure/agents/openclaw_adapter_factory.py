@@ -33,6 +33,7 @@ from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.infrastructure.db.postgres import PostgresDataStore
 from memwing.infrastructure.db.postgres_benchmark_admin import PostgresBenchmarkAdminStore
 from memwing.infrastructure.db.postgres_connection import PooledPostgresConnection
+from memwing.infrastructure.db.postgres_schema import ensure_postgres_schema_compatibility
 from memwing.infrastructure.evidence.qdrant_index import QdrantEvidenceConfig, QdrantEvidenceIndex
 from memwing.infrastructure.graph.graphiti_adapter import GraphitiAdapter, GraphitiConnectionConfig
 from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedder
@@ -120,6 +121,7 @@ async def create_openclaw_adapter_from_postgres(
         max_size=max_size,
     )
     try:
+        await ensure_postgres_schema_compatibility(connection)
         store = PostgresDataStore(connection)
         runtime = create_openclaw_adapter_from_store(
             store,
@@ -204,6 +206,7 @@ async def create_worker_runner_from_env(
         max_size=max_size,
     )
     try:
+        await ensure_postgres_schema_compatibility(connection)
         store = PostgresDataStore(connection)
         resolver = MemWingModelConfigResolver.from_env(env)
         graph_backend = _graph_backend_from_env(env, store=store)

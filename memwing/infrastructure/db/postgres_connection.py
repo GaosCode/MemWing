@@ -54,6 +54,13 @@ class PooledPostgresConnection:
             return await _run_transaction_operation(_fetch, connection, sql, params)
         return await _run_pool_operation_with_retry(self._pool, _fetch, sql, params)
 
+    async def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
+        prepared_params = params or {}
+        connection = self._current_connection.get()
+        if connection is not None:
+            return await _run_transaction_operation(_execute, connection, sql, prepared_params)
+        return await _run_pool_operation_with_retry(self._pool, _execute, sql, prepared_params)
+
     async def close(self) -> None:
         await self._pool.close()
 
@@ -101,6 +108,10 @@ async def _fetchrow(connection: Any, sql: str, params: dict[str, object]) -> Row
 async def _fetch(connection: Any, sql: str, params: dict[str, object]) -> tuple[Row, ...]:
     cursor = await connection.execute(_prepare_sql(sql), _prepare_params(params))
     return tuple(await cursor.fetchall())
+
+
+async def _execute(connection: Any, sql: str, params: dict[str, object]) -> None:
+    await connection.execute(_prepare_sql(sql), _prepare_params(params))
 
 
 T = TypeVar("T")
