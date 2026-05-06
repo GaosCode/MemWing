@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from memwing.application.current_truth import CurrentTruthModule
+from memwing.application.memory_access_read_model import current_truth_to_access_result
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import (
     MemoryGraphLink,
@@ -44,7 +45,79 @@ def test_current_truth_returns_active_memory_and_downgrades_page_memory_to_backg
         assert result.background[0].source == "page_memory"
         assert result.supporting_evidence == ()
         assert result.warnings == ()
+        assert {
+            timing.branch: timing.result_count for timing in result.branch_timings
+        } == {
+            "graph_backend": 0,
+            "evidence_index": 0,
+            "working_memory": 0,
+            "memory_items": 1,
+            "page_memory": 1,
+            "raw_events": 0,
+        }
         assert result.trace_id == "trace_current"
+
+    asyncio.run(scenario())
+
+
+def test_current_truth_uses_relevance_for_memory_items_and_ranks_deadline_context() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.memory_items.upsert(
+                replace(
+                    _memory_item("memory_deadline", MemoryStatus.ACTIVE),
+                    title="云帆看板改造最终验收截止时间",
+                    content="云帆看板改造的最终验收截止时间是 2026-04-30 18:00。",
+                    source_event_ids=("source_deadline",),
+                    primary_source_event_id="source_deadline",
+                )
+            )
+            await tx.memory_items.upsert(
+                replace(
+                    _memory_item("memory_owner", MemoryStatus.ACTIVE),
+                    title="云帆看板改造负责人",
+                    content="云帆看板改造项目负责人是沈南。",
+                    source_event_ids=("source_owner",),
+                    primary_source_event_id="source_owner",
+                )
+            )
+            await tx.memory_pages.upsert(
+                replace(
+                    _page_memory(),
+                    brief=(
+                        "- 云帆看板改造项目负责人是沈南。\n"
+                        "- 云帆看板改造的最终验收截止时间是 2026-04-30 18:00。"
+                    ),
+                    source_event_ids=("source_owner", "source_deadline"),
+                    linked_memory_item_ids=("memory_owner", "memory_deadline"),
+                )
+            )
+
+        current = await CurrentTruthModule(
+            store,
+            graph_backend=DeadlineDistractingGraphBackend(),
+            now=lambda: NOW,
+        ).recall_current(
+            MemorySearchQuery(
+                query="云帆看板改造的最终验收截止时间是什么时候？",
+                scope=_scope(),
+                limit=5,
+                trace_id="trace_current",
+            )
+        )
+        result = current_truth_to_access_result(
+            current,
+            limit=5,
+            sort="relevance",
+            query="云帆看板改造的最终验收截止时间是什么时候？",
+        )
+
+        assert "memory_deadline" in tuple(item.id for item in current.current_facts)
+        assert result.results[0].id == "memory_deadline"
+        assert result.results[1].source == "page_memory"
+        assert result.results[2].source == "graph_backend"
 
     asyncio.run(scenario())
 
@@ -186,6 +259,12 @@ def test_current_truth_branch_timeouts_return_warnings_without_empty_success_lie
             ("graph_backend", "provider_timeout"),
             ("evidence_index", "provider_timeout"),
         ]
+        assert {
+            timing.branch: timing.status for timing in result.branch_timings
+        }["graph_backend"] == "provider_timeout"
+        assert {
+            timing.branch: timing.status for timing in result.branch_timings
+        }["evidence_index"] == "provider_timeout"
 
     asyncio.run(scenario())
 
@@ -304,6 +383,49 @@ class LinkedGraphBackend:
         return MemorySearchResult(
             contexts=(item.text,),
             results=(item,),
+            next_cursor=None,
+            trace_id="graph_current",
+        )
+
+    async def search_history(self, query: MemorySearchQuery) -> MemorySearchResult:
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request: object) -> object:
+        raise NotImplementedError
+
+    async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
+        raise NotImplementedError
+
+
+class DeadlineDistractingGraphBackend:
+    async def search_current(self, query: MemorySearchQuery) -> MemorySearchResult:
+        items = (
+            MemorySearchResultItem(
+                id="graph_acceptance",
+                text="云帆看板改造的验收人是韩悦",
+                score=None,
+                source="graph_backend",
+                source_event_ids=("source_acceptance",),
+                memory_item_ids=("memory_acceptance",),
+                valid_from=NOW,
+                valid_to=None,
+                metadata={},
+            ),
+            MemorySearchResultItem(
+                id="graph_scope",
+                text="云帆看板改造的交付范围包含导出入口",
+                score=None,
+                source="graph_backend",
+                source_event_ids=("source_scope",),
+                memory_item_ids=("memory_scope",),
+                valid_from=NOW,
+                valid_to=None,
+                metadata={},
+            ),
+        )
+        return MemorySearchResult(
+            contexts=tuple(item.text for item in items),
+            results=items,
             next_cursor=None,
             trace_id="graph_current",
         )

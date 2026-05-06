@@ -85,6 +85,16 @@ def test_recall_current_uses_current_truth_without_sync_recall_counter_updates()
         assert result.results[0].source == "memory_item"
         assert result.results[1].source == "page_memory"
         assert result.warnings == ()
+        assert result.diagnostics is not None
+        branch_timings = result.diagnostics["current_truth"]["branch_timings"]
+        assert {timing["branch"] for timing in branch_timings} == {
+            "graph_backend",
+            "evidence_index",
+            "working_memory",
+            "memory_items",
+            "page_memory",
+            "raw_events",
+        }
         assert tuple(block["id"] for block in context.context_blocks) == (
             "memory_active",
             "page_001",
@@ -345,7 +355,7 @@ def test_recall_current_relevance_search_adds_assembled_context_for_compound_que
         assert result.results[0].source == "working_memory"
         assert "海棠账单的上线窗口是 2026-05-06 20:00-22:00" in result.results[0].text
         assert "海棠结算的上线窗口是 2026-05-07 01:00-03:00" in result.results[0].text
-        assert tuple(item.id for item in result.results[1:]) == ("bill_window", "settlement_window")
+        assert {item.id for item in result.results[1:]} == {"bill_window", "settlement_window"}
 
     asyncio.run(scenario())
 

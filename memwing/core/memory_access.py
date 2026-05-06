@@ -91,6 +91,7 @@ class MemoryAccessSearchResult:
     next_cursor: str | None
     trace_id: str
     warnings: tuple[dict[str, str], ...] = ()
+    diagnostics: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "contexts", tuple(self.contexts))

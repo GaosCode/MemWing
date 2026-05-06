@@ -5,6 +5,7 @@ import re
 
 from memwing.application.current_truth import CurrentTruthResult
 from memwing.application.failure_semantics import classify_failure
+from memwing.application.search_relevance import search_relevance_score
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
 from memwing.core.memory_access import (
     MemoryAccessQuery,
@@ -191,6 +192,19 @@ def current_truth_to_access_result(
             }
             for warning in current.warnings
         ),
+        diagnostics={
+            "current_truth": {
+                "branch_timings": tuple(
+                    {
+                        "branch": timing.branch,
+                        "latency_ms": timing.latency_ms,
+                        "result_count": timing.result_count,
+                        "status": timing.status,
+                    }
+                    for timing in current.branch_timings
+                )
+            }
+        },
     )
 
 
@@ -215,11 +229,7 @@ def _relevance_sort_key(
     query: str,
 ) -> tuple[float, int]:
     base_score = item.score or 0
-    relevance_score = (
-        base_score
-        + _lexical_relevance_score(query, item.text)
-        + _temporal_relevance_adjustment(query, item.text)
-    )
+    relevance_score = base_score + search_relevance_score(query, item.text)
     return (-relevance_score, index)
 
 

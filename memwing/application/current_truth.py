@@ -5,9 +5,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import TypeVar
 
 from memwing.application.failure_semantics import classify_failure
+from memwing.application.search_relevance import search_relevance_matches, search_relevance_score
 from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
 from memwing.core.memory_search import (
     MemorySearchQuery,
@@ -29,6 +31,7 @@ from memwing.ports.graph_backend import GraphBackendPort
 
 _CURRENT_RECALL_STATUSES = frozenset((MemoryStatus.ACTIVE,))
 LocalBranchResultT = TypeVar("LocalBranchResultT")
+BranchResultT = TypeVar("BranchResultT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,14 @@ class CurrentTruthWarning:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentTruthBranchTiming:
+    branch: str
+    latency_ms: int
+    result_count: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentTruthResult:
     working_memory: tuple[MemorySearchResultItem, ...]
     current_facts: tuple[MemorySearchResultItem, ...]
@@ -46,6 +57,7 @@ class CurrentTruthResult:
     supporting_evidence: tuple[MemorySearchResultItem, ...]
     raw_events: tuple[MemorySearchResultItem, ...]
     warnings: tuple[CurrentTruthWarning, ...]
+    branch_timings: tuple[CurrentTruthBranchTiming, ...]
     trace_id: str
 
 
@@ -71,19 +83,19 @@ class CurrentTruthModule:
 
     async def recall_current(self, query: MemorySearchQuery) -> CurrentTruthResult:
         (
-            (graph_result, graph_warning),
-            (evidence_result, evidence_warning),
-            (working_memory, working_warning),
-            (memory_items, memory_items_warning),
-            (page_memory, page_warning),
-            (raw_events, raw_warning),
+            ((graph_result, graph_warning), graph_timing),
+            ((evidence_result, evidence_warning), evidence_timing),
+            ((working_memory, working_warning), working_timing),
+            ((memory_items, memory_items_warning), memory_items_timing),
+            ((page_memory, page_warning), page_timing),
+            ((raw_events, raw_warning), raw_timing),
         ) = await asyncio.gather(
-            self._graph_current(query),
-            self._evidence(query),
-            self._working_memory(query),
-            self._memory_items(query),
-            self._page_memory(query),
-            self._raw_events(query),
+            _timed_branch("graph_backend", self._graph_current(query), _graph_result_count),
+            _timed_branch("evidence_index", self._evidence(query), _graph_result_count),
+            _timed_branch("working_memory", self._working_memory(query), _local_result_count),
+            _timed_branch("memory_items", self._memory_items(query), _local_result_count),
+            _timed_branch("page_memory", self._page_memory(query), _local_result_count),
+            _timed_branch("raw_events", self._raw_events(query), _local_result_count),
         )
 
         warnings = tuple(
@@ -104,11 +116,19 @@ class CurrentTruthModule:
         )
         return CurrentTruthResult(
             working_memory=working_memory,
-            current_facts=tuple(current_facts[: query.limit]),
+            current_facts=tuple(current_facts),
             background=page_memory,
             supporting_evidence=evidence_result.results if evidence_result is not None else (),
             raw_events=raw_events,
             warnings=warnings,
+            branch_timings=(
+                graph_timing,
+                evidence_timing,
+                working_timing,
+                memory_items_timing,
+                page_timing,
+                raw_timing,
+            ),
             trace_id=query.trace_id or "current_truth:recall_current",
         )
 
@@ -333,6 +353,45 @@ def _branch_warning(branch: str, exc: BaseException) -> CurrentTruthWarning:
     )
 
 
+async def _timed_branch(
+    branch: str,
+    operation: Awaitable[BranchResultT],
+    count_results: Callable[[BranchResultT], int],
+) -> tuple[BranchResultT, CurrentTruthBranchTiming]:
+    started = perf_counter()
+    result = await operation
+    latency_ms = max(0, int((perf_counter() - started) * 1000))
+    warning = _branch_result_warning(result)
+    status = "ok" if warning is None else warning.reason_code
+    return result, CurrentTruthBranchTiming(
+        branch=branch,
+        latency_ms=latency_ms,
+        result_count=count_results(result),
+        status=status,
+    )
+
+
+def _branch_result_warning(result: object) -> CurrentTruthWarning | None:
+    if not isinstance(result, tuple) or len(result) != 2:
+        return None
+    warning = result[1]
+    return warning if isinstance(warning, CurrentTruthWarning) else None
+
+
+def _graph_result_count(
+    result: tuple[MemorySearchResult | None, CurrentTruthWarning | None],
+) -> int:
+    search_result, _warning = result
+    return 0 if search_result is None else len(search_result.results)
+
+
+def _local_result_count(
+    result: tuple[tuple[MemorySearchResultItem, ...], CurrentTruthWarning | None],
+) -> int:
+    items, _warning = result
+    return len(items)
+
+
 def _rank_memory_items(
     *,
     query: str,
@@ -347,9 +406,10 @@ def _rank_memory_items(
         score = _memory_item_score(item, now=now)
         if score < min_score:
             continue
-        if query and not _matches_query(item, query):
+        relevance = search_relevance_score(query, _memory_item_search_text(item))
+        if query and not search_relevance_matches(query, _memory_item_search_text(item)):
             continue
-        ranked.append((item, score))
+        ranked.append((item, score + relevance))
     return sorted(ranked, key=lambda pair: (pair[1], pair[0].updated_at, pair[0].id), reverse=True)
 
 
@@ -395,12 +455,8 @@ def _memory_item_score(item: MemoryItem, *, now: datetime) -> float:
     )
 
 
-def _matches_query(item: MemoryItem, query: str) -> bool:
-    normalized_query = query.casefold()
-    searchable = " ".join(
-        text for text in (item.title, item.content, item.summary) if text is not None
-    ).casefold()
-    return normalized_query in searchable
+def _memory_item_search_text(item: MemoryItem) -> str:
+    return " ".join(text for text in (item.title, item.content, item.summary) if text is not None)
 
 
 def _memory_item_to_result_item(item: MemoryItem, *, score: float) -> MemorySearchResultItem:
