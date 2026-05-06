@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});fs.cpSync('src','dist',{recursive:true});fs.copyFileSync('openclaw.plugin.json','dist/openclaw.plugin.json');\"",
+    "build:release": "npm run build",
     "typecheck": "node --check src/index.js && node --check src/toolSchemas.js && node --check src/nativeSchemas.js && node --check src/schemaPrimitives.js",
     "test": "node --test tests/plugin_smoke.test.js",
     "smoke": "npm run build && node --test tests/plugin_install_smoke.test.js",
