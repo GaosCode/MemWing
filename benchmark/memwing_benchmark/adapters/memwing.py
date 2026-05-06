@@ -21,6 +21,7 @@ HEALTH_ENDPOINT = "/healthz"
 CLEANUP_BENCHMARK_SCOPE_ENDPOINT = "/v1/memwing/admin/benchmark/cleanup-scope"
 DRAIN_BENCHMARK_PIPELINE_ENDPOINT = "/v1/memwing/admin/benchmark/drain"
 BENCHMARK_READINESS_ENDPOINT = "/v1/memwing/admin/benchmark/readiness"
+PRESEED_EXPECTED_ENDPOINT = "/v1/memwing/admin/benchmark/preseed-expected"
 PIPELINE_AWAIT_ENDPOINT = "/v1/memwing/pipeline/await"
 
 
@@ -74,8 +75,14 @@ class MemWingAdapter:
             transport=transport,
         )
 
-    def memory_search(self, query: str, *, max_results: int = 5) -> list[str]:
-        return self.memory_search_details(query, max_results=max_results).contexts
+    def memory_search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        mode: str = "current",
+    ) -> list[str]:
+        return self.memory_search_details(query, max_results=max_results, mode=mode).contexts
 
     def health(self) -> None:
         endpoint = HEALTH_ENDPOINT
@@ -131,17 +138,25 @@ class MemWingAdapter:
         limit: int | None = None,
         max_results: int | None = None,
         scope: MemWingCaseScope | None = None,
+        mode: str = "current",
     ) -> MemorySearchDetails:
         requested_limit = limit if limit is not None else max_results
         if requested_limit is None:
             requested_limit = 5
         if requested_limit <= 0:
             raise BenchmarkError("MemWing search limit must be greater than 0")
+        if mode not in {"current", "history"}:
+            raise BenchmarkError("MemWing search mode must be current or history")
 
         endpoint = SEARCH_MEMORY_ENDPOINT
         body, latency_ms = self._post_json(
             endpoint=endpoint,
-            payload=self._search_payload(query=query, limit=requested_limit, scope=scope),
+            payload=self._search_payload(
+                query=query,
+                limit=requested_limit,
+                scope=scope,
+                mode=mode,
+            ),
             timeout_seconds=self.config.search_timeout_seconds,
             request_fields=[
                 "agent_id",
@@ -262,6 +277,45 @@ class MemWingAdapter:
         )
         return body
 
+    def preseed_expected_memories(
+        self,
+        *,
+        case: BenchmarkCase,
+        run_id: str,
+        scope: MemWingCaseScope,
+        layers: tuple[str, ...] = ("memory_items", "graph", "page_memory"),
+    ) -> dict[str, Any]:
+        payload = {
+            "agent_id": self.config.agent_id,
+            "workspace_id": self.config.workspace_id,
+            "session_id": self._runtime_session_id(scope),
+            "case_id": case.case_id,
+            "scope": scope.payload(),
+            "layers": list(layers),
+            "expected_memories": [
+                {
+                    "id": memory.id,
+                    "fact": memory.fact,
+                }
+                for memory in case.expected_memory_items
+            ],
+        }
+        body, _latency_ms = self._post_json(
+            endpoint=PRESEED_EXPECTED_ENDPOINT,
+            payload=payload,
+            timeout_seconds=self.config.poll_timeout_seconds + self.config.search_timeout_seconds,
+            request_fields=[
+                "agent_id",
+                "workspace_id",
+                "session_id",
+                "case_id",
+                "scope",
+                "layers",
+                "expected_memories",
+            ],
+        )
+        return body
+
     def benchmark_readiness(
         self,
         *,
@@ -349,13 +403,14 @@ class MemWingAdapter:
         query: str,
         limit: int,
         scope: MemWingCaseScope | None,
+        mode: str,
     ) -> dict[str, Any]:
         return {
             "agent_id": self.config.agent_id,
             "workspace_id": self.config.workspace_id,
             "session_id": self._runtime_session_id(scope),
             "query": query,
-            "mode": "current",
+            "mode": mode,
             "limit": limit,
             "scope": self._scope_payload(scope),
         }
@@ -559,6 +614,8 @@ def _request_kind(endpoint: str) -> str:
         return "benchmark_drain"
     if endpoint == BENCHMARK_READINESS_ENDPOINT:
         return "benchmark_readiness"
+    if endpoint == PRESEED_EXPECTED_ENDPOINT:
+        return "benchmark_preseed_expected"
     if endpoint == PIPELINE_AWAIT_ENDPOINT:
         return "pipeline_await"
     return "http"

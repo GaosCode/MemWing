@@ -27,6 +27,14 @@ class BenchmarkCleanupResult:
 
 
 class BenchmarkAdminStorePort(Protocol):
+    async def prepare_scope(
+        self,
+        *,
+        scope: BenchmarkScope,
+        runtime_binding: BenchmarkRuntimeBinding,
+    ) -> None:
+        ...
+
     async def cleanup_scope(
         self,
         *,

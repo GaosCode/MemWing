@@ -10,6 +10,7 @@ from memwing_benchmark.adapters.memwing import (
     HEALTH_ENDPOINT,
     INGEST_EVENT_ENDPOINT,
     PIPELINE_AWAIT_ENDPOINT,
+    PRESEED_EXPECTED_ENDPOINT,
     SEARCH_MEMORY_ENDPOINT,
     MemWingCaseScope,
     MemWingAdapter,
@@ -17,7 +18,7 @@ from memwing_benchmark.adapters.memwing import (
 )
 from memwing_benchmark.config import MemWingConfig
 from memwing_benchmark.errors import BenchmarkError
-from memwing_benchmark.schema import BenchmarkCase, SeedMessage
+from memwing_benchmark.schema import BenchmarkCase, ExpectedMemoryItem, SeedMessage
 
 
 def test_memory_search_details_posts_to_memwing_tool_url_and_maps_results() -> None:
@@ -116,13 +117,21 @@ def test_case_scope_overrides_search_scope() -> None:
         thread_id="benchmark:bs001",
     )
 
-    adapter.memory_search_details("谁负责？", limit=1, scope=scope)
+    adapter.memory_search_details("谁负责？", limit=1, scope=scope, mode="history")
 
     assert seen_payloads[0]["scope"] == {
         "project_memory_space_id": "benchmark:run1:bs001",
         "group_id": "benchmark:bs001",
         "thread_id": "benchmark:bs001",
     }
+    assert seen_payloads[0]["mode"] == "history"
+
+
+def test_memory_search_details_rejects_invalid_mode() -> None:
+    adapter = MemWingAdapter(_config(), transport=httpx.MockTransport(lambda _request: None))
+
+    with pytest.raises(BenchmarkError, match="mode must be current or history"):
+        adapter.memory_search_details("谁负责？", limit=1, mode="invalid")
 
 
 def test_health_checks_memwing_server_readiness() -> None:
@@ -276,6 +285,17 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
 
     adapter.cleanup_benchmark_scope(scope)
     adapter.drain_benchmark_pipeline(scope)
+    adapter.preseed_expected_memories(
+        case=BenchmarkCase(
+            case_id="bs001",
+            category="basic",
+            expected_memory_items=[
+                ExpectedMemoryItem(id="bs001_m1", fact="负责人是沈南。"),
+            ],
+        ),
+        run_id="run1",
+        scope=scope,
+    )
     adapter.benchmark_readiness(scope=scope, expected_source_event_ids=["source_event_001"])
     adapter.pipeline_await(
         scope=scope,
@@ -305,6 +325,22 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
                     "group_id": "benchmark:bs001",
                     "thread_id": "benchmark:bs001",
                 }
+            },
+        ),
+        (
+            PRESEED_EXPECTED_ENDPOINT,
+            {
+                "agent_id": "main",
+                "workspace_id": "workspace_001",
+                "session_id": "benchmark:bs001",
+                "case_id": "bs001",
+                "scope": {
+                    "project_memory_space_id": "benchmark:run1:bs001",
+                    "group_id": "benchmark:bs001",
+                    "thread_id": "benchmark:bs001",
+                },
+                "layers": ["memory_items", "graph", "page_memory"],
+                "expected_memories": [{"id": "bs001_m1", "fact": "负责人是沈南。"}],
             },
         ),
         (

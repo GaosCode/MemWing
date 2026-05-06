@@ -37,6 +37,7 @@ def _write_memwing_ingest_run(
     run_id: str = "20260503-000000",
     case_id: str = "bs001",
     source_event_ids: list[str] | None = None,
+    benchmark_scope: bool = True,
 ) -> Path:
     run_dir = runs_root / "write-ingest" / "20260503" / run_id
     (run_dir / "raw").mkdir(parents=True)
@@ -53,6 +54,19 @@ def _write_memwing_ingest_run(
         + "\n",
         encoding="utf-8",
     )
+    scope = (
+        {
+            "project_memory_space_id": f"benchmark:{run_id}:{case_id}",
+            "group_id": f"benchmark:{case_id}",
+            "thread_id": f"benchmark:{case_id}",
+        }
+        if benchmark_scope
+        else {
+            "project_memory_space_id": "project_001",
+            "group_id": "benchmark_group",
+            "thread_id": "benchmark_thread",
+        }
+    )
     (run_dir / "raw" / "records.json").write_text(
         dumps_json(
             {
@@ -61,11 +75,7 @@ def _write_memwing_ingest_run(
                         "phase": "ingest",
                         "backend": backend,
                         "case_id": case_id,
-                        "scope": {
-                            "project_memory_space_id": "project_001",
-                            "group_id": "benchmark_group",
-                            "thread_id": "benchmark_thread",
-                        },
+                        "scope": scope,
                         "source_event_ids": source_event_ids or ["source_event_001"],
                     }
                 ]
@@ -75,6 +85,282 @@ def _write_memwing_ingest_run(
         encoding="utf-8",
     )
     return run_dir
+
+
+def _write_memwing_config(path: Path) -> None:
+    path.write_text(
+        dumps_json(
+            {
+                "memwing": {
+                    "base_url": "http://127.0.0.1:8000",
+                    "agent_id": "main",
+                    "workspace_id": "workspace_001",
+                    "session_id": "memwing-benchmark",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_cli_search_command_prints_scoped_memwing_hits(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    _write_memwing_config(config_path)
+    calls = []
+
+    class FakeMemWingAdapter:
+        def __init__(self, config):
+            self.config = config
+
+        def health(self):
+            raise AssertionError("--no-health should skip health check")
+
+        def memory_search_details(self, query, *, limit, scope, mode):
+            calls.append((query, limit, scope.project_memory_space_id, mode))
+            return MemorySearchDetails(
+                contexts=["负责人是沈南。"],
+                results=[
+                    {
+                        "rank": 1,
+                        "id": "mem_001",
+                        "source": "memory_item",
+                        "score": 0.91,
+                        "snippet": "负责人是沈南。",
+                        "memory_item_ids": ["mem_001"],
+                        "source_event_ids": ["source_001"],
+                    }
+                ],
+                latency_ms=7,
+                raw={"trace_id": "trace_search"},
+            )
+
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "search",
+            "负责人是谁？",
+            "--config",
+            str(config_path),
+            "--run-id",
+            "run1",
+            "--case-id",
+            "bs001",
+            "--mode",
+            "history",
+            "--limit",
+            "3",
+            "--no-health",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("负责人是谁？", 3, "benchmark:run1:bs001", "history")]
+    assert "query=负责人是谁？" in result.output
+    assert "source=memory_item" in result.output
+    assert "负责人是沈南。" in result.output
+
+
+def test_cli_search_case_command_outputs_probe_json(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    cases_path = tmp_path / "cases"
+    cases_path.mkdir()
+    _write_memwing_config(config_path)
+    (cases_path / "bs001.json").write_text(
+        dumps_json(
+            {
+                "case_id": "bs001",
+                "category": "basic",
+                "probes": [
+                    {
+                        "id": "p1",
+                        "question": "负责人是谁？",
+                        "gold_answer": "沈南",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    class FakeMemWingAdapter:
+        def __init__(self, config):
+            self.config = config
+
+        def health(self):
+            calls.append(("health",))
+
+        def memory_search_details(self, query, *, limit, scope, mode):
+            calls.append(("search", query, limit, scope, mode))
+            return MemorySearchDetails(
+                contexts=["负责人是沈南。"],
+                results=[{"rank": 1, "source": "memory_item", "snippet": "负责人是沈南。"}],
+                latency_ms=3,
+                raw={"trace_id": "trace_search"},
+            )
+
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "search-case",
+            "--config",
+            str(config_path),
+            "--cases",
+            str(cases_path),
+            "--case-id",
+            "bs001",
+            "--limit",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = loads_json(result.output)
+    assert payload["case_id"] == "bs001"
+    assert payload["probes"][0]["probe_id"] == "p1"
+    assert payload["probes"][0]["results"][0]["source"] == "memory_item"
+    assert calls[0] == ("health",)
+    assert calls[1][0:4] == ("search", "负责人是谁？", 2, None)
+
+
+def test_cli_evaluate_preseeded_scores_existing_scope(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    cases_path = tmp_path / "cases"
+    runs_dir = tmp_path / "runs"
+    cases_path.mkdir()
+    _write_memwing_config(config_path)
+    (cases_path / "bs001.json").write_text(
+        dumps_json(
+            {
+                "case_id": "bs001",
+                "category": "basic",
+                "probes": [
+                    {
+                        "id": "bs001_p1",
+                        "question": "负责人是谁？",
+                        "gold_answer": "沈南",
+                        "gold_evidence_ids": ["bs001_m1"],
+                    }
+                ],
+                "expected_memory_items": [
+                    {"id": "bs001_m1", "fact": "负责人是沈南。"},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    class FakeMemWingAdapter:
+        def __init__(self, config):
+            self.config = config
+            self.records = []
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def memory_search_details(self, question, *, max_results, scope):
+            calls.append((question, max_results, scope.project_memory_space_id))
+            self.records.append(
+                {
+                    "kind": "search",
+                    "endpoint": "/v1/memwing/tools/search-memory",
+                    "status_code": 200,
+                }
+            )
+            return MemorySearchDetails(
+                contexts=["负责人是沈南。"],
+                results=[
+                    {
+                        "rank": 1,
+                        "source": "memory_item",
+                        "snippet": "负责人是沈南。",
+                        "source_event_ids": ["source_001"],
+                        "memory_item_ids": ["bs001_m1"],
+                    }
+                ],
+                latency_ms=4,
+                raw={
+                    "trace_id": "trace_search",
+                    "diagnostics": {
+                        "current_truth": {
+                            "branch_timings": [
+                                {
+                                    "branch": "memory_items",
+                                    "latency_ms": 2,
+                                    "result_count": 1,
+                                    "status": "ok",
+                                }
+                            ]
+                        }
+                    },
+                },
+            )
+
+    class FakeJudge:
+        def evaluate_retrieval(self, **kwargs):
+            return JudgeResult(
+                judge_type="offline_retrieval",
+                case_id=kwargs["case_id"],
+                probe_id=kwargs["probe"].id,
+                retrieval=RetrievalJudgeBlock(
+                    recall_at_1=True,
+                    recall_at_3=True,
+                    recall_at_5=True,
+                    matched_gold_memory_ids=kwargs["probe"].gold_evidence_ids,
+                ),
+            )
+
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "evaluate-preseeded",
+            "--config",
+            str(config_path),
+            "--cases",
+            str(cases_path),
+            "--case-id",
+            "bs001",
+            "--run-id",
+            "source-run",
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(result.output.strip().splitlines()[-1])
+    assert (run_dir / "scores.json").exists()
+    scores = loads_json((run_dir / "scores.json").read_text(encoding="utf-8"))
+    config = loads_json((run_dir / "config.json").read_text(encoding="utf-8"))
+    normalized = loads_json((run_dir / "normalized.jsonl").read_text(encoding="utf-8"))
+    assert scores["retrieval_recall_at_1"] == 1.0
+    assert config["phase"] == "evaluate-preseeded"
+    assert config["source_run_id"] == "source-run"
+    assert normalized["raw"]["mode"] == "memwing_preseeded_retrieval"
+    assert normalized["raw"]["memory_search_branch_timings"] == [
+        {
+            "branch": "memory_items",
+            "latency_ms": 2,
+            "result_count": 1,
+            "status": "ok",
+        }
+    ]
+    assert calls == [("负责人是谁？", 20, "benchmark:source-run:bs001")]
 
 
 def test_cli_non_live_creates_run_outputs(tmp_path: Path) -> None:
@@ -419,7 +705,21 @@ def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp
         def health(self):
             self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
 
-        def ingest_seed_messages(self, *, case, run_id):
+        def cleanup_benchmark_scope(self, scope):
+            self.records.append(
+                {
+                    "kind": "benchmark_cleanup",
+                    "endpoint": "/v1/memwing/admin/benchmark/cleanup-scope",
+                    "scope": scope.payload(),
+                }
+            )
+            return {"trace_id": "trace_cleanup"}
+
+        def ingest_seed_messages(self, *, case, run_id, scope):
+            assert scope.project_memory_space_id.startswith("benchmark:")
+            assert scope.project_memory_space_id.endswith(":bs001")
+            assert scope.group_id == "benchmark:bs001"
+            assert scope.thread_id == "benchmark:bs001"
             return [
                 {
                     "case_id": case.case_id,
@@ -485,6 +785,12 @@ def test_cli_memwing_write_ingest_uses_http_ingest_without_live(monkeypatch, tmp
     assert len(normalized["seed_message_ids"]) == 13
     assert raw_records["memwing_ingest"][0]["source_event_id"] == "source_event_001"
     assert raw_records["memory_writes"][0]["phase"] == "ingest"
+    assert raw_records["memory_writes"][0]["scope"] == {
+        "project_memory_space_id": f"benchmark:{run_config['run_id']}:bs001",
+        "group_id": "benchmark:bs001",
+        "thread_id": "benchmark:bs001",
+    }
+    assert raw_records["memwing_scope_cleanup"][0]["scope"] == raw_records["memory_writes"][0]["scope"]
 
 
 def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
@@ -506,9 +812,9 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
 
         def pipeline_await(self, *, scope, source_event_ids, profile):
             assert scope.payload() == {
-                "project_memory_space_id": "project_001",
-                "group_id": "benchmark_group",
-                "thread_id": "benchmark_thread",
+                "project_memory_space_id": "benchmark:20260503-000000:bs001",
+                "group_id": "benchmark:bs001",
+                "thread_id": "benchmark:bs001",
             }
             assert source_event_ids == ["source_event_001"]
             assert profile == "full-derived"
@@ -524,20 +830,20 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
                 {"kind": "search", "endpoint": "/v1/memwing/tools/search-memory", "status_code": 200}
             )
             return MemorySearchDetails(
-                contexts=[f"MemWing memory: {question}"],
+                contexts=[f"MemWing memory: {question}", f"Raw source: {question}"],
                 results=[
                     {
                         "rank": 1,
                         "score": 0.91,
                         "source": "graph_backend",
-                        "snippet": question,
+                        "snippet": f"MemWing memory: {question}",
                         "source_event_ids": [],
                     },
                     {
                         "rank": 2,
                         "score": 0.9,
                         "source": "evidence_index",
-                        "snippet": question,
+                        "snippet": f"Raw source: {question}",
                         "source_event_ids": ["source_event_001"],
                     }
                 ],
@@ -548,6 +854,7 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
     class FakeJudge:
         def evaluate_write(self, **kwargs):
             assert len(kwargs["written_context"]) == 4
+            assert all(not context.startswith("Raw source:") for context in kwargs["written_context"])
             assert "MemWing memory: 云帆看板改造项目负责人是沈南。" in kwargs[
                 "written_context"
             ]
@@ -612,13 +919,164 @@ def test_cli_memwing_write_evaluate_scores_search_without_file_metrics(
     assert normalized["backend"] == "memwing-http"
     assert normalized["write_recall"] == 1.0
     assert normalized["write_precision"] == 1.0
+    assert normalized["write_scored_context_count"] == 4
+    assert normalized["write_target_precision"] == 1.0
+    assert normalized["write_expected_memory_ratio"] == 1.0
+    assert normalized["write_non_target_ratio"] == 0.0
+    assert normalized["write_forbidden_memory_ratio"] == 0.0
     assert normalized["write_changed_file_count"] is None
     assert normalized["raw"]["changed_file_metrics_available"] is False
     assert "HTTP search APIs" in normalized["raw"]["changed_file_metrics_missing_reason"]
     assert raw_records["memory_writes"][0]["changed_file_metrics_available"] is False
+    assert raw_records["memory_writes"][0]["written_context_count"] == 8
+    assert raw_records["memory_writes"][0]["scored_written_context_count"] == 4
+    assert raw_records["memory_writes"][0]["excluded_raw_context_count"] == 4
+    assert all(
+        not context.startswith("Raw source:")
+        for context in raw_records["memory_writes"][0]["scored_written_contexts"]
+    )
     assert raw_records["memory_writes"][0]["readiness"]["ready"] is True
     assert raw_records["memwing_pipeline_awaits"][0]["response"]["ready"] is True
     assert raw_records["memory_searches"][0]["mode"] == "memwing_write_evaluate"
+
+
+def test_cli_memwing_write_evaluate_skips_legacy_default_scope_ingest_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeJudge:
+        def evaluate_write(self, **_kwargs):
+            raise AssertionError("legacy default-scope ingest records must not be judged")
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.config = _config
+            self.records = []
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+        def drain_benchmark_pipeline(self, *_args, **_kwargs):
+            raise AssertionError("legacy default-scope ingest records must not be drained")
+
+        def pipeline_await(self, **_kwargs):
+            raise AssertionError("legacy default-scope ingest records must not be awaited")
+
+        def memory_search_details(self, *_args, **_kwargs):
+            raise AssertionError("legacy default-scope ingest records must not be searched")
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_memwing_ingest_run(
+        tmp_path / "runs",
+        backend="memwing-http",
+        benchmark_scope=False,
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-http",
+            "--mode",
+            "write",
+            "--phase",
+            "evaluate",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "requires source_event_ids from a prior write-ingest run" in result.output
+
+
+def test_cli_memwing_write_evaluate_rejects_explicit_legacy_default_scope_ingest_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeJudge:
+        def evaluate_write(self, **_kwargs):
+            raise AssertionError("legacy default-scope ingest records must not be judged")
+
+    class FakeMemWingAdapter:
+        def __init__(self, _config):
+            self.config = _config
+            self.records = []
+
+        def health(self):
+            self.records.append({"kind": "health", "endpoint": "/healthz", "status_code": 200})
+
+    config_path = tmp_path / "config.local.json"
+    config_path.write_text(
+        dumps_json(
+            {
+                "paths": {"runs_dir": str(tmp_path / "runs")},
+                "memwing": {
+                    "base_url": "http://memwing.test",
+                    "project_memory_space_id": "project_001",
+                    "group_id": "benchmark_group",
+                    "thread_id": "benchmark_thread",
+                },
+                "judge": {"provider": "volcengine-ark", "api_key": "sk_test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_memwing_ingest_run(
+        tmp_path / "runs",
+        backend="memwing-http",
+        run_id="20260503-000000",
+        benchmark_scope=False,
+    )
+    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.cli._build_judge", lambda _config: FakeJudge())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config_path),
+            "--backend",
+            "memwing-http",
+            "--mode",
+            "write",
+            "--phase",
+            "evaluate",
+            "--ingest-run-id",
+            "20260503-000000",
+            "--cases",
+            "datasets",
+            "--case-id",
+            "bs001",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "requires a benchmark-scoped ingest run" in result.output
+    assert "project_memory_space_id=project_001" in result.output
 
 
 def test_cli_memwing_write_evaluate_can_select_explicit_ingest_run(
@@ -1571,6 +2029,117 @@ def test_memwing_retrieval_pg_preseed_flag_uses_real_ingest_pipeline(monkeypatch
     assert "MemWing product pipeline await 完成" in debug_messages
 
 
+def test_memwing_retrieval_preseed_expected_writes_expected_layers() -> None:
+    class FakeAdapter:
+        config = SimpleNamespace(shared_group_id="")
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def cleanup_benchmark_scope(self, scope):
+            self.calls.append(("cleanup", scope.project_memory_space_id))
+            return {"deleted": {"memory_items": 0}, "trace_id": "trace_cleanup"}
+
+        def preseed_expected_memories(self, *, case, run_id, scope):
+            self.calls.append(
+                (
+                    "preseed_expected",
+                    case.case_id,
+                    run_id,
+                    scope.project_memory_space_id,
+                    [item.id for item in case.expected_memory_items],
+                )
+            )
+            return {
+                "source_event_count": 1,
+                "memory_item_count": 1,
+                "page_memory_count": 1,
+                "graph_episode_count": 1,
+                "graph_fact_count": 1,
+                "source_event_ids": ["source_event:bs001_m1"],
+                "memory_item_ids": ["bs001_m1"],
+                "page_ids": ["page:bs001"],
+                "trace_id": "trace_preseed",
+            }
+
+        def memory_search_details(self, question, *, max_results, scope):
+            self.calls.append(("search", question, max_results, scope.project_memory_space_id))
+            return MemorySearchDetails(
+                contexts=["云帆负责人是沈南。"],
+                results=[
+                    {
+                        "rank": 1,
+                        "snippet": "云帆负责人是沈南。",
+                        "source": "memory_item",
+                        "memory_item_ids": ["bs001_m1"],
+                        "source_event_ids": ["source_event:bs001_m1"],
+                    },
+                    {
+                        "rank": 2,
+                        "snippet": "Graphiti fact: 云帆负责人是沈南。",
+                        "source": "graph_backend",
+                        "memory_item_ids": ["bs001_m1"],
+                        "source_event_ids": ["source_event:bs001_m1"],
+                    },
+                ],
+                latency_ms=6,
+                raw={"trace_id": "trace_search"},
+            )
+
+    case = BenchmarkCase(
+        case_id="bs001",
+        category="basic",
+        probes=[
+            Probe(
+                id="bs001_p1",
+                question="云帆负责人是谁？",
+                gold_answer="沈南",
+                gold_evidence_ids=["bs001_m1"],
+            )
+        ],
+        expected_memory_items=[ExpectedMemoryItem(id="bs001_m1", fact="云帆负责人是沈南。")],
+    )
+    adapter = FakeAdapter()
+    raw_records = {
+        "memwing_preseed_expected": [],
+        "memwing_polls": [],
+        "memory_searches": [],
+        "side_effects": [],
+        "debug": [],
+    }
+
+    results = _run_memwing_retrieval_batch(
+        run_id="run1",
+        backend="memwing-http",
+        cases=[case],
+        adapter=adapter,
+        judge=None,
+        raw_records=raw_records,
+        poll_interval_seconds=0.01,
+        timeout_seconds=0,
+        yes=True,
+        ingest_seed_events=False,
+        preseed_expected=True,
+    )
+
+    assert results[0].raw["mode"] == "memwing_expected_preseed_retrieval"
+    assert results[0].seed_message_ids == ["bs001_m1"]
+    assert results[0].retrieved_evidence_ids == ["source_event:bs001_m1"]
+    assert adapter.calls == [
+        ("cleanup", "benchmark:run1:bs001"),
+        (
+            "preseed_expected",
+            "bs001",
+            "run1",
+            "benchmark:run1:bs001",
+            ["bs001_m1"],
+        ),
+        ("search", "云帆负责人是谁？", 20, "benchmark:run1:bs001"),
+    ]
+    assert raw_records["memwing_preseed_expected"][0]["response"]["graph_fact_count"] == 1
+    assert raw_records["memory_searches"][0]["mode"] == "memwing_expected_preseed_retrieval"
+
+
 def test_memwing_readiness_records_server_error() -> None:
     class FakeAdapter:
         def memory_search_details(self, question, *, max_results):
@@ -1668,6 +2237,10 @@ def test_write_live_sends_seed_without_flush_and_scores_memory_diff(
     assert results[0].probe_id == "bs001_write"
     assert results[0].write_recall == 1.0
     assert results[0].write_precision == 1.0
+    assert results[0].write_target_precision == 1.0
+    assert results[0].write_expected_memory_ratio == 1.0
+    assert results[0].write_non_target_ratio == 0.0
+    assert results[0].write_forbidden_memory_ratio == 0.0
     assert results[0].write_changed_file_count == 1
     assert "云帆看板改造项目负责人确定为沈南" in results[0].written_contexts[0]
 

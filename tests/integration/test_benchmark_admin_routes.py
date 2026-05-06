@@ -13,7 +13,7 @@ from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.bootstrap import MemWingApiRuntimeContext
 from memwing.core.memory_search import MemorySearchResult, MemorySearchResultItem
-from memwing.core.models import LongTermFilterItem, SourceEvent
+from memwing.core.models import GraphFact, GraphWriteResult, LongTermFilterItem, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.application.gateway_service import MemoryGateway
@@ -126,9 +126,52 @@ def test_benchmark_admin_cleanup_ingest_drain_readiness_route(monkeypatch) -> No
     assert search.json()["results"][0]["source"] == "evidence_index"
 
 
+def test_benchmark_admin_preseed_expected_route_writes_expected_layers(monkeypatch) -> None:
+    monkeypatch.setenv("MEMWING_BENCHMARK_ADMIN_ENABLED", "true")
+    store = InMemoryDataStore()
+    graph = _RecordingGraphBackend()
+    app = create_app(runtime_context_factory=_runtime_context_factory(store, graph_backend=graph))
+    scope = {
+        "project_memory_space_id": "benchmark:run1:case1",
+        "group_id": "benchmark:case1",
+        "thread_id": "benchmark:case1",
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/memwing/admin/benchmark/preseed-expected",
+            json={
+                "agent_id": "main",
+                "workspace_id": "workspace_001",
+                "session_id": "benchmark:case1",
+                "case_id": "case1",
+                "scope": scope,
+                "expected_memories": [
+                    {"id": "case1_m1", "fact": "云帆看板负责人是沈南。"},
+                    {"id": "case1_m2", "fact": "云帆看板验收人是韩悦。"},
+                ],
+                "layers": ["memory_items", "graph", "page_memory"],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_event_count"] == 2
+    assert body["memory_item_count"] == 2
+    assert body["page_memory_count"] == 1
+    assert body["graph_episode_count"] == 2
+    assert body["graph_fact_count"] == 2
+    assert body["trace_id"].startswith("benchmark_preseed_expected:")
+    assert len(store._state.memory_items) == 2
+    assert len(store._state.memory_pages) == 1
+    assert len(store.memory_graph_links) == 4
+    assert len(graph.requests) == 2
+
+
 def _runtime_context_factory(
     store: InMemoryDataStore | None = None,
     evidence: object | None = None,
+    graph_backend: object | None = None,
 ):
     @asynccontextmanager
     async def context() -> AsyncIterator[MemWingApiRuntimeContext]:
@@ -153,7 +196,7 @@ def _runtime_context_factory(
                 page_memory_worker=_NoopPageMemoryWorker(),
                 graph_write_worker=None,
             ),
-            graph_backend=None,
+            graph_backend=graph_backend,
             evidence_index=evidence_index,
         )
         yield MemWingApiRuntimeContext(runtime=runtime, benchmark_admin=admin)
@@ -191,6 +234,62 @@ class _EvidenceIndex:
             next_cursor=None,
             trace_id=query.trace_id or "trace",
         )
+
+
+class _RecordingGraphBackend:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def ingest_graph_jobs(self, request):
+        from memwing.ports.graph_backend import GraphWriteBatchItemResult, GraphWriteBatchResult
+
+        self.requests.extend(request.requests)
+        return GraphWriteBatchResult(
+            items=tuple(
+                GraphWriteBatchItemResult(
+                    job_id=item.job.id,
+                    result=GraphWriteResult(
+                        backend="graphiti",
+                        facts=(
+                            GraphFact(
+                                backend="graphiti",
+                                fact_id=f"fact:{item.memory_item.id}",
+                                fact_text=item.memory_item.content,
+                                source_event_ids=item.memory_item.source_event_ids,
+                                valid_from=item.memory_item.valid_from,
+                                valid_to=item.memory_item.valid_to,
+                                invalidated_at=None,
+                                confidence=1.0,
+                                metadata={},
+                            ),
+                        ),
+                        invalidated_facts=(),
+                        backend_episode_refs=(f"episode:{item.memory_item.id}",),
+                        backend_fact_refs=(f"fact:{item.memory_item.id}",),
+                    ),
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+                for item in request.requests
+            )
+        )
+
+    async def ingest_graph_job(self, request):
+        result = await self.ingest_graph_jobs(type("Batch", (), {"requests": (request,)})())
+        item = result.items[0]
+        assert item.result is not None
+        return item.result
+
+    async def search_current(self, query) -> MemorySearchResult:
+        return MemorySearchResult(contexts=(), results=(), next_cursor=None, trace_id="graph")
+
+    async def search_history(self, query) -> MemorySearchResult:
+        return MemorySearchResult(contexts=(), results=(), next_cursor=None, trace_id="graph")
+
+    async def mark_source_redacted(self, source_event_id, scope) -> None:
+        return None
 
 
 class _NoopPageMemoryWorker:

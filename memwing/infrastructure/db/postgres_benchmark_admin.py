@@ -27,6 +27,15 @@ class PostgresBenchmarkAdminStore(BenchmarkAdminStorePort):
     def __init__(self, connection: _BenchmarkAdminConnection) -> None:
         self._connection = connection
 
+    async def prepare_scope(
+        self,
+        *,
+        scope: BenchmarkScope,
+        runtime_binding: BenchmarkRuntimeBinding,
+    ) -> None:
+        async with self._connection.transaction():
+            await self._prepare_scope(scope=scope, runtime_binding=runtime_binding)
+
     async def cleanup_scope(
         self,
         *,
@@ -278,4 +287,3 @@ _DELETE_SQL: tuple[tuple[str, str], ...] = (
         """,
     ),
 )
-

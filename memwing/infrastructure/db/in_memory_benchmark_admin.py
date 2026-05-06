@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from memwing.core.scope import GroupMemorySettings, ProjectMemorySpace, RuntimeScopeBinding
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.infrastructure.db.in_memory_state import InMemoryState
 from memwing.ports.benchmark_admin import (
     BenchmarkAdminStorePort,
     BenchmarkCleanupResult,
@@ -15,6 +16,18 @@ from memwing.ports.benchmark_admin import (
 class InMemoryBenchmarkAdminStore(BenchmarkAdminStorePort):
     def __init__(self, store: InMemoryDataStore) -> None:
         self._store = store
+
+    async def prepare_scope(
+        self,
+        *,
+        scope: BenchmarkScope,
+        runtime_binding: BenchmarkRuntimeBinding,
+    ) -> None:
+        _prepare_scope_state(
+            self._store._state,
+            scope=scope,
+            runtime_binding=runtime_binding,
+        )
 
     async def cleanup_scope(
         self,
@@ -163,32 +176,7 @@ class InMemoryBenchmarkAdminStore(BenchmarkAdminStorePort):
             if candidate_id in state.push_candidates
         }
 
-        state.projects[project_id] = ProjectMemorySpace(
-            id=project_id,
-            name=f"Benchmark {project_id}",
-            default_safe_mode_enabled=False,
-        )
-        if scope.group_id is not None:
-            state.group_settings[(project_id, scope.group_id)] = GroupMemorySettings(
-                project_memory_space_id=project_id,
-                group_id=scope.group_id,
-                safe_mode_enabled=True,
-                shared_group_id=scope.shared_group_id,
-            )
-        state.runtime_bindings = [
-            binding
-            for binding in state.runtime_bindings
-            if binding.project_memory_space_id != project_id
-        ]
-        state.runtime_bindings.append(
-            RuntimeScopeBinding(
-                runtime=runtime_binding.runtime,
-                agent_id=runtime_binding.agent_id,
-                workspace_id=runtime_binding.workspace_id,
-                session_key_pattern=runtime_binding.session_id or "",
-                project_memory_space_id=project_id,
-            )
-        )
+        _prepare_scope_state(state, scope=scope, runtime_binding=runtime_binding)
         return BenchmarkCleanupResult(deleted_counts=deleted_counts, prepared=True)
 
 
@@ -197,3 +185,38 @@ def _delete_matching(values: dict[str, object], predicate: Callable[[object], bo
     for key in keys:
         del values[key]
     return len(keys)
+
+
+def _prepare_scope_state(
+    state: InMemoryState,
+    *,
+    scope: BenchmarkScope,
+    runtime_binding: BenchmarkRuntimeBinding,
+) -> None:
+    project_id = scope.project_memory_space_id
+    state.projects[project_id] = ProjectMemorySpace(
+        id=project_id,
+        name=f"Benchmark {project_id}",
+        default_safe_mode_enabled=False,
+    )
+    if scope.group_id is not None:
+        state.group_settings[(project_id, scope.group_id)] = GroupMemorySettings(
+            project_memory_space_id=project_id,
+            group_id=scope.group_id,
+            safe_mode_enabled=True,
+            shared_group_id=scope.shared_group_id,
+        )
+    state.runtime_bindings = [
+        binding
+        for binding in state.runtime_bindings
+        if binding.project_memory_space_id != project_id
+    ]
+    state.runtime_bindings.append(
+        RuntimeScopeBinding(
+            runtime=runtime_binding.runtime,
+            agent_id=runtime_binding.agent_id,
+            workspace_id=runtime_binding.workspace_id,
+            session_key_pattern=runtime_binding.session_id or "",
+            project_memory_space_id=project_id,
+        )
+    )

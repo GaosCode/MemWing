@@ -6,11 +6,12 @@ from datetime import UTC, datetime
 import pytest
 
 from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.benchmark_admin_service import BenchmarkExpectedMemorySeed
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
 from memwing.application.remember_event_records import outbox_job
 from memwing.core.memory_search import MemorySearchResult, MemorySearchResultItem
-from memwing.core.models import LongTermFilterItem, OutboxJob, SourceEvent
+from memwing.core.models import GraphFact, GraphWriteResult, LongTermFilterItem, OutboxJob, SourceEvent
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.db.in_memory_benchmark_admin import InMemoryBenchmarkAdminStore
@@ -185,6 +186,56 @@ def test_drain_coalesces_scope_level_outbox_handlers() -> None:
     asyncio.run(run())
 
 
+def test_preseed_expected_writes_memory_page_and_graph_links() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        graph = _RecordingGraphBackend()
+        service = _service(store, _EvidenceIndex(), graph_backend=graph)
+        scope = BenchmarkScope(
+            project_memory_space_id="benchmark:run:case",
+            group_id="benchmark:case",
+            thread_id="benchmark:case",
+            shared_group_id=None,
+        )
+
+        result = await service.preseed_expected(
+            scope=scope,
+            runtime_binding=_runtime_binding(),
+            case_id="case",
+            expected_memories=(
+                BenchmarkExpectedMemorySeed(id="case_m1", fact="云帆看板负责人是沈南。"),
+                BenchmarkExpectedMemorySeed(id="case_m2", fact="云帆看板验收人是韩悦。"),
+            ),
+            layers=("memory_items", "graph", "page_memory"),
+            now=datetime(2026, 5, 2, tzinfo=UTC),
+        )
+        effective_scope = _effective_scope(scope)
+        async with store.transaction() as tx:
+            source_events = await tx.source_events.list_for_scope(scope=effective_scope, limit=10)
+            memories = await tx.memory_items.list_for_scope(scope=effective_scope, limit=10)
+            pages = await tx.memory_pages.list_for_scope(scope=effective_scope, limit=10)
+            graph_links = []
+            for memory in memories:
+                graph_links.extend(await tx.memory_graph_links.list_by_memory(memory.id))
+
+        assert result.source_event_count == 2
+        assert result.memory_item_count == 2
+        assert result.page_memory_count == 1
+        assert result.graph_episode_count == 2
+        assert result.graph_fact_count == 2
+        assert len(source_events) == 2
+        assert {item.content for item in memories} == {
+            "云帆看板负责人是沈南。",
+            "云帆看板验收人是韩悦。",
+        }
+        assert pages[0].brief == "- 云帆看板负责人是沈南。\n- 云帆看板验收人是韩悦。"
+        assert len(graph.requests) == 2
+        assert len(graph_links) == 4
+        assert {link.backend_object_type for link in graph_links} == {"episode", "fact"}
+
+    asyncio.run(run())
+
+
 def test_derived_outbox_scope_handlers_only_claim_matching_aggregate_key() -> None:
     async def run() -> None:
         store = InMemoryDataStore()
@@ -255,7 +306,12 @@ def test_derived_outbox_scope_handlers_only_claim_matching_aggregate_key() -> No
     asyncio.run(run())
 
 
-def _service(store: InMemoryDataStore, evidence) -> BenchmarkAdminService:
+def _service(
+    store: InMemoryDataStore,
+    evidence,
+    *,
+    graph_backend=None,
+) -> BenchmarkAdminService:
     return BenchmarkAdminService(
         unit_of_work=store,
         admin_store=InMemoryBenchmarkAdminStore(store),
@@ -270,7 +326,7 @@ def _service(store: InMemoryDataStore, evidence) -> BenchmarkAdminService:
             page_memory_worker=None,
             graph_write_worker=None,
         ),
-        graph_backend=None,
+        graph_backend=graph_backend,
         evidence_index=evidence,
     )
 
@@ -369,6 +425,62 @@ class _EvidenceIndex:
 class _UnavailableEvidenceIndex(_EvidenceIndex):
     async def search(self, query) -> MemorySearchResult:
         raise RuntimeError("qdrant unavailable")
+
+
+class _RecordingGraphBackend:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def ingest_graph_jobs(self, request):
+        from memwing.ports.graph_backend import GraphWriteBatchItemResult, GraphWriteBatchResult
+
+        self.requests.extend(request.requests)
+        return GraphWriteBatchResult(
+            items=tuple(
+                GraphWriteBatchItemResult(
+                    job_id=item.job.id,
+                    result=GraphWriteResult(
+                        backend="graphiti",
+                        facts=(
+                            GraphFact(
+                                backend="graphiti",
+                                fact_id=f"fact:{item.memory_item.id}",
+                                fact_text=item.memory_item.content,
+                                source_event_ids=item.memory_item.source_event_ids,
+                                valid_from=item.memory_item.valid_from,
+                                valid_to=item.memory_item.valid_to,
+                                invalidated_at=None,
+                                confidence=1.0,
+                                metadata={},
+                            ),
+                        ),
+                        invalidated_facts=(),
+                        backend_episode_refs=(f"episode:{item.memory_item.id}",),
+                        backend_fact_refs=(f"fact:{item.memory_item.id}",),
+                    ),
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+                for item in request.requests
+            )
+        )
+
+    async def ingest_graph_job(self, request):
+        result = await self.ingest_graph_jobs(type("Batch", (), {"requests": (request,)})())
+        item = result.items[0]
+        assert item.result is not None
+        return item.result
+
+    async def search_current(self, query) -> MemorySearchResult:
+        return MemorySearchResult(contexts=(), results=(), next_cursor=None, trace_id="graph")
+
+    async def search_history(self, query) -> MemorySearchResult:
+        return MemorySearchResult(contexts=(), results=(), next_cursor=None, trace_id="graph")
+
+    async def mark_source_redacted(self, source_event_id, scope) -> None:
+        return None
 
 
 class _NoopLongTermFilter:

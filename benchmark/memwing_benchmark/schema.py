@@ -157,10 +157,15 @@ class NormalizedResult(BaseModel):
     write_noise_count: int | None = None
     write_wrong_count: int | None = None
     write_stale_count: int | None = None
+    write_scored_context_count: int | None = None
     write_changed_file_count: int | None = None
     write_written_claim_count: int | None = None
     write_recall: float | None = None
     write_precision: float | None = None
+    write_target_precision: float | None = None
+    write_expected_memory_ratio: float | None = None
+    write_non_target_ratio: float | None = None
+    write_forbidden_memory_ratio: float | None = None
     memory_availability_latency_ms: int | None = None
     latency_ms: int | None = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)

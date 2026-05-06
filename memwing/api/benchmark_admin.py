@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import datetime
 from enum import Enum
 
 from memwing.api.error_mapping import render_error_body
 from memwing.api.types import JsonObject, JsonValue
 from memwing.api.validation import SchemaValidationError, require_positive_int, require_text
-from memwing.application.benchmark_admin_service import BenchmarkAdminService
+from memwing.application.benchmark_admin_service import (
+    BenchmarkAdminService,
+    BenchmarkExpectedMemorySeed,
+)
+from memwing.core.models import MemoryDisplayType
 from memwing.application.failure_semantics import classify_failure
 from memwing.core.errors import ConfigurationFailure, ValidationFailure
 from memwing.ports.benchmark_admin import BenchmarkRuntimeBinding, BenchmarkScope
@@ -73,6 +78,31 @@ async def handle_benchmark_admin_request(
             return BenchmarkAdminHttpResponse(
                 status_code=status_code,
                 body=_drain_body(result, scope),
+            )
+        if path == "/v1/memwing/admin/benchmark/preseed-expected":
+            _reject_unexpected_payload_fields(
+                payload,
+                {
+                    "scope",
+                    "agent_id",
+                    "workspace_id",
+                    "session_id",
+                    "case_id",
+                    "expected_memories",
+                    "layers",
+                },
+            )
+            scope = _scope(payload)
+            result = await service.preseed_expected(
+                scope=scope,
+                runtime_binding=_runtime_binding(payload, scope),
+                expected_memories=tuple(_expected_memories(payload)),
+                case_id=_optional_text(payload.get("case_id"), "case_id"),
+                layers=tuple(_text_list(payload, "layers")),
+            )
+            return BenchmarkAdminHttpResponse(
+                status_code=200,
+                body=_json_object(result),
             )
         if path == "/v1/memwing/admin/benchmark/readiness":
             _reject_unexpected_payload_fields(
@@ -165,6 +195,86 @@ def _text_list(payload: Mapping[str, object], field_name: str) -> list[str]:
     for index, item in enumerate(value):
         texts.append(require_text(item, f"{field_name}[{index}]"))
     return texts
+
+
+def _expected_memories(payload: Mapping[str, object]) -> list[BenchmarkExpectedMemorySeed]:
+    value = payload.get("expected_memories")
+    if not isinstance(value, list):
+        raise SchemaValidationError("expected_memories must be an array")
+    memories: list[BenchmarkExpectedMemorySeed] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise SchemaValidationError(f"expected_memories[{index}] must be an object")
+        _reject_unexpected_payload_fields(
+            item,
+            {
+                "id",
+                "fact",
+                "title",
+                "display_type",
+                "event_time",
+                "valid_from",
+                "valid_to",
+                "source_event_ids",
+            },
+        )
+        memories.append(
+            BenchmarkExpectedMemorySeed(
+                id=require_text(item.get("id"), f"expected_memories[{index}].id"),
+                fact=require_text(item.get("fact"), f"expected_memories[{index}].fact"),
+                title=_optional_text(item.get("title"), f"expected_memories[{index}].title"),
+                display_type=_display_type(
+                    item.get("display_type"),
+                    f"expected_memories[{index}].display_type",
+                ),
+                event_time=_optional_datetime(
+                    item.get("event_time"),
+                    f"expected_memories[{index}].event_time",
+                ),
+                valid_from=_optional_datetime(
+                    item.get("valid_from"),
+                    f"expected_memories[{index}].valid_from",
+                ),
+                valid_to=_optional_datetime(
+                    item.get("valid_to"),
+                    f"expected_memories[{index}].valid_to",
+                ),
+                source_event_ids=tuple(_mapping_text_list(item, "source_event_ids")),
+            )
+        )
+    return memories
+
+
+def _mapping_text_list(payload: Mapping[str, object], field_name: str) -> list[str]:
+    value = payload.get(field_name)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise SchemaValidationError(f"{field_name} must be an array")
+    texts: list[str] = []
+    for index, item in enumerate(value):
+        texts.append(require_text(item, f"{field_name}[{index}]"))
+    return texts
+
+
+def _display_type(value: object, field_name: str) -> MemoryDisplayType:
+    if value is None:
+        return MemoryDisplayType.NOTE
+    raw = require_text(value, field_name)
+    try:
+        return MemoryDisplayType(raw)
+    except ValueError as exc:
+        raise SchemaValidationError(f"{field_name} is not supported") from exc
+
+
+def _optional_datetime(value: object, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    raw = require_text(value, field_name)
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise SchemaValidationError(f"{field_name} must be an ISO datetime") from exc
 
 
 def _optional_text_tuple(

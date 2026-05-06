@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 
+from memwing.application.benchmark_expected_preseed import (
+    BenchmarkExpectedMemorySeed,
+    BenchmarkExpectedPreseedWriter,
+    BenchmarkPreseedExpectedResult,
+)
 from memwing.core.memory_search import MemorySearchQuery
 from memwing.core.scope import EffectiveScope
 from memwing.ports.benchmark_admin import (
@@ -58,6 +64,32 @@ class BenchmarkAdminService:
         return await self._admin_store.cleanup_scope(
             scope=scope,
             runtime_binding=runtime_binding,
+        )
+
+    async def preseed_expected(
+        self,
+        *,
+        scope: BenchmarkScope,
+        runtime_binding: BenchmarkRuntimeBinding,
+        expected_memories: tuple[BenchmarkExpectedMemorySeed, ...],
+        case_id: str | None,
+        layers: tuple[str, ...],
+        now: datetime | None = None,
+    ) -> BenchmarkPreseedExpectedResult:
+        _require_benchmark_scope(scope)
+        await self._admin_store.prepare_scope(
+            scope=scope,
+            runtime_binding=runtime_binding,
+        )
+        return await BenchmarkExpectedPreseedWriter(
+            unit_of_work=self._unit_of_work,
+            graph_backend=self._graph_backend,
+        ).preseed(
+            scope=scope,
+            expected_memories=expected_memories,
+            case_id=case_id,
+            layers=layers,
+            now=now,
         )
 
     async def drain_scope(

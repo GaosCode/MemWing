@@ -92,6 +92,41 @@ def build_scores(results: list[NormalizedResult]) -> dict[str, Any]:
         "write_precision": _avg(
             [result.write_precision for result in results if result.write_precision is not None]
         ),
+        "write_target_precision": _avg(
+            [
+                result.write_target_precision
+                for result in results
+                if result.write_target_precision is not None
+            ]
+        ),
+        "write_expected_memory_ratio": _avg(
+            [
+                result.write_expected_memory_ratio
+                for result in results
+                if result.write_expected_memory_ratio is not None
+            ]
+        ),
+        "write_non_target_ratio": _avg(
+            [
+                result.write_non_target_ratio
+                for result in results
+                if result.write_non_target_ratio is not None
+            ]
+        ),
+        "write_forbidden_memory_ratio": _avg(
+            [
+                result.write_forbidden_memory_ratio
+                for result in results
+                if result.write_forbidden_memory_ratio is not None
+            ]
+        ),
+        "avg_write_scored_context_count": _avg(
+            [
+                result.write_scored_context_count
+                for result in results
+                if result.write_scored_context_count is not None
+            ]
+        ),
         "avg_write_changed_file_count": _avg(
             [
                 result.write_changed_file_count
@@ -194,6 +229,11 @@ def render_report(
         f"- avg_memory_search_latency_ms: {_fmt(scores.get('avg_memory_search_latency_ms'))}",
         f"- write_recall: {_fmt(scores.get('write_recall'))}",
         f"- write_precision: {_fmt(scores.get('write_precision'))}",
+        f"- write_target_precision: {_fmt(scores.get('write_target_precision'))}",
+        f"- write_expected_memory_ratio: {_fmt(scores.get('write_expected_memory_ratio'))}",
+        f"- write_non_target_ratio: {_fmt(scores.get('write_non_target_ratio'))}",
+        f"- write_forbidden_memory_ratio: {_fmt(scores.get('write_forbidden_memory_ratio'))}",
+        f"- avg_write_scored_context_count: {_fmt(scores.get('avg_write_scored_context_count'))}",
         f"- avg_write_changed_file_count: {_fmt(scores.get('avg_write_changed_file_count'))}",
         f"- avg_write_written_claim_count: {_fmt(scores.get('avg_write_written_claim_count'))}",
         f"- avg_memory_write_latency_ms: {_fmt(scores.get('avg_memory_write_latency_ms'))}",
@@ -270,8 +310,8 @@ def render_report(
                 "",
                 "## Write Results",
                 "",
-                "| case_id | expected | matched | missing | recall | precision | changed_files | claims | noise | wrong | stale | timeout |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+                "| case_id | expected | matched | missing | recall | judge_precision | target_precision | non_target_ratio | forbidden_ratio | scored_contexts | changed_files | claims | noise | wrong | stale | timeout |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
             ]
         )
         for result in results:
@@ -282,6 +322,10 @@ def render_report(
                 f"{_fmt(result.write_matched_expected_count)} | "
                 f"{_fmt(result.write_missing_expected_count)} | "
                 f"{_fmt(result.write_recall)} | {_fmt(result.write_precision)} | "
+                f"{_fmt(result.write_target_precision)} | "
+                f"{_fmt(result.write_non_target_ratio)} | "
+                f"{_fmt(result.write_forbidden_memory_ratio)} | "
+                f"{_fmt(result.write_scored_context_count)} | "
                 f"{_fmt(result.write_changed_file_count)} | "
                 f"{_fmt(result.write_written_claim_count)} | "
                 f"{_fmt(result.write_noise_count)} | {_fmt(result.write_wrong_count)} | "

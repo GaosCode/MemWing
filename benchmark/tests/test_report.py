@@ -110,6 +110,11 @@ def test_write_report_explains_unavailable_file_diff_metrics() -> None:
         write_written_claim_count=1,
         write_recall=1.0,
         write_precision=1.0,
+        write_target_precision=1.0,
+        write_expected_memory_ratio=1.0,
+        write_non_target_ratio=0.0,
+        write_forbidden_memory_ratio=0.0,
+        write_scored_context_count=1,
         raw={
             "mode": "memory_write",
             "changed_file_metrics_available": False,
@@ -127,4 +132,7 @@ def test_write_report_explains_unavailable_file_diff_metrics() -> None:
 
     assert "Write File Metrics Unavailable" in report
     assert "HTTP search APIs" in report
-    assert "| bs001 | 1 | 1 | 0 | 1.0000 | 1.0000 | null | 1 |" in report
+    assert (
+        "| bs001 | 1 | 1 | 0 | 1.0000 | 1.0000 | 1.0000 | "
+        "0.0000 | 0.0000 | 1 | null | 1 |"
+    ) in report

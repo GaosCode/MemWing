@@ -269,14 +269,14 @@ retrieved_context: {payload.retrieved_context}
 
 {schema}"""
         if payload.judge_type == "memory_write":
-            return f"""你是企业协作长期记忆写入评测员。请判断 OpenClaw 写入到 durable memory 文件中的新增内容是否覆盖应写事实，且没有写入噪声、错误或过期事实。
+            return f"""你是企业协作长期记忆写入评测员。请判断写入到 durable memory 或长期派生记忆层中的新增内容是否覆盖应写事实，且没有写入噪声、错误或过期事实。
 只输出 JSON，不要输出解释性段落。
 
 判定规则：
 - gold_memories 是应该写入长期记忆的事实。
 - old_memories 是同批其他 case 的应写事实；它们出现在 written_context 中不算当前 case 命中，也不算 unexpected/noise。
 - noise_memories 是 seed 中不应该写入长期记忆的噪声或临时信息。
-- written_context 是本轮 memory artifact diff 中新增/变化的文本。
+- written_context 是本轮 memory artifact diff 中新增/变化的文本，或 MemWing HTTP write evaluate 排除 evidence_index/raw_events/working_memory 原文层后的长期派生记忆文本。
 - matched_expected_memory_ids 只能填写 gold_memories 中的 id。
 - missing_expected_memory_ids 填写未被 written_context 语义覆盖的 gold ids。
 - unexpected_facts 填写新增内容中没有被 gold_memories 支撑的业务事实。

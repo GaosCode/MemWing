@@ -26,7 +26,7 @@ from memwing_benchmark.config import (
 )
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.evaluators.llm_judge import JudgeResult, LlmJudge
-from memwing_benchmark.json_utils import loads_json
+from memwing_benchmark.json_utils import dumps_json, loads_json
 from memwing_benchmark.metrics.retrieval import recall_at_k, unique_preserve_order
 from memwing_benchmark.models.volcengine_ark import VolcengineArkChatModel
 from memwing_benchmark.report import write_run_outputs
@@ -66,6 +66,111 @@ MEMWING_PLUGIN_CONVERSATION_ACCESS_CONFIG_PATH = (
 )
 MEMWING_FULL_DERIVED_READINESS_PROFILE = "full-derived"
 MEMWING_REAL_SEARCH_MAX_RESULTS = 20
+MEMWING_WRITE_RAW_SOURCES = frozenset({"evidence_index", "raw_events", "working_memory"})
+
+
+@app.command("search")
+def search_command(
+    query: str = typer.Argument(..., help="检索 query。"),
+    config_path: Path = typer.Option(Path("config.example.json"), "--config"),
+    limit: int = typer.Option(10, "--limit", "-k"),
+    mode: str = typer.Option("current", "--mode"),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    case_id: str | None = typer.Option(None, "--case-id"),
+    project_memory_space_id: str | None = typer.Option(None, "--project-memory-space-id"),
+    group_id: str | None = typer.Option(None, "--group-id"),
+    thread_id: str | None = typer.Option(None, "--thread-id"),
+    shared_group_id: str | None = typer.Option(None, "--shared-group-id"),
+    health_check: bool = typer.Option(True, "--health/--no-health"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """直接调用 MemWing HTTP search-memory，打印 top-k 结果。"""
+
+    try:
+        _run_memwing_search_command(
+            config_path=config_path,
+            query=query,
+            limit=limit,
+            mode=mode,
+            run_id=run_id,
+            case_id=case_id,
+            project_memory_space_id=project_memory_space_id,
+            group_id=group_id,
+            thread_id=thread_id,
+            shared_group_id=shared_group_id,
+            health_check=health_check,
+            json_output=json_output,
+        )
+    except BenchmarkError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command("search-case")
+def search_case_command(
+    config_path: Path = typer.Option(Path("config.example.json"), "--config"),
+    cases_path: Path = typer.Option(Path("datasets"), "--cases"),
+    case_id: str = typer.Option(..., "--case-id"),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    limit: int = typer.Option(10, "--limit", "-k"),
+    mode: str = typer.Option("current", "--mode"),
+    project_memory_space_id: str | None = typer.Option(None, "--project-memory-space-id"),
+    group_id: str | None = typer.Option(None, "--group-id"),
+    thread_id: str | None = typer.Option(None, "--thread-id"),
+    shared_group_id: str | None = typer.Option(None, "--shared-group-id"),
+    health_check: bool = typer.Option(True, "--health/--no-health"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """按数据集 case 的 probes 逐条检索，打印每个 probe 的 top-k。"""
+
+    try:
+        _run_memwing_search_case_command(
+            config_path=config_path,
+            cases_path=cases_path,
+            case_id=case_id,
+            run_id=run_id,
+            limit=limit,
+            mode=mode,
+            project_memory_space_id=project_memory_space_id,
+            group_id=group_id,
+            thread_id=thread_id,
+            shared_group_id=shared_group_id,
+            health_check=health_check,
+            json_output=json_output,
+        )
+    except BenchmarkError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command("evaluate-preseeded")
+def evaluate_preseeded_command(
+    config_path: Path = typer.Option(Path("config.example.json"), "--config"),
+    cases_path: Path = typer.Option(Path("datasets"), "--cases"),
+    run_id: str = typer.Option(..., "--run-id"),
+    case_id: str | None = typer.Option(None, "--case-id"),
+    batch: bool = typer.Option(False, "--batch"),
+    limit: int = typer.Option(MEMWING_REAL_SEARCH_MAX_RESULTS, "--limit", "-k"),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir"),
+    health_check: bool = typer.Option(True, "--health/--no-health"),
+) -> None:
+    """评测已经植入的 MemWing benchmark scope，不重新写入记忆。"""
+
+    try:
+        run_dir = _run_memwing_preseeded_evaluate_command(
+            config_path=config_path,
+            cases_path=cases_path,
+            source_run_id=run_id,
+            case_id=case_id,
+            batch=batch,
+            limit=limit,
+            runs_dir=runs_dir,
+            health_check=health_check,
+        )
+        typer.echo(str(run_dir))
+    except BenchmarkError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
 
 
 @app.callback(invoke_without_command=True)
@@ -93,6 +198,7 @@ def main(
     memory_poll_interval_seconds: float = typer.Option(20.0, "--memory-poll-interval-seconds"),
     memory_timeout_seconds: float = typer.Option(60.0, "--memory-timeout-seconds"),
     pg_preseed_per_case: bool = typer.Option(False, "--pg-preseed-per-case"),
+    preseed_expected: bool = typer.Option(False, "--preseed-expected"),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -120,10 +226,323 @@ def main(
             memory_poll_interval_seconds=memory_poll_interval_seconds,
             memory_timeout_seconds=memory_timeout_seconds,
             pg_preseed_per_case=pg_preseed_per_case,
+            preseed_expected=preseed_expected,
         )
     except BenchmarkError as exc:
         typer.secho(str(exc), err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
+
+
+def _run_memwing_search_command(
+    *,
+    config_path: Path,
+    query: str,
+    limit: int,
+    mode: str,
+    run_id: str | None,
+    case_id: str | None,
+    project_memory_space_id: str | None,
+    group_id: str | None,
+    thread_id: str | None,
+    shared_group_id: str | None,
+    health_check: bool,
+    json_output: bool,
+) -> None:
+    config = load_config(config_path)
+    validate_config_for_backend(config, backend=MEMWING_HTTP_BACKEND)
+    scope = _memwing_search_scope(
+        config=config,
+        run_id=run_id,
+        case_id=case_id,
+        project_memory_space_id=project_memory_space_id,
+        group_id=group_id,
+        thread_id=thread_id,
+        shared_group_id=shared_group_id,
+    )
+    adapter = MemWingAdapter(config.memwing)
+    if health_check:
+        adapter.health()
+    details = adapter.memory_search_details(
+        query,
+        limit=limit,
+        scope=scope,
+        mode=mode,
+    )
+    _emit_memwing_search_result(
+        query=query,
+        mode=mode,
+        scope=scope,
+        details=details,
+        json_output=json_output,
+    )
+
+
+def _run_memwing_search_case_command(
+    *,
+    config_path: Path,
+    cases_path: Path,
+    case_id: str,
+    run_id: str | None,
+    limit: int,
+    mode: str,
+    project_memory_space_id: str | None,
+    group_id: str | None,
+    thread_id: str | None,
+    shared_group_id: str | None,
+    health_check: bool,
+    json_output: bool,
+) -> None:
+    config = load_config(config_path)
+    validate_config_for_backend(config, backend=MEMWING_HTTP_BACKEND)
+    case = load_cases(cases_path, case_id=case_id)[0]
+    scope = _memwing_search_scope(
+        config=config,
+        run_id=run_id,
+        case_id=case.case_id if run_id is not None else None,
+        project_memory_space_id=project_memory_space_id,
+        group_id=group_id,
+        thread_id=thread_id,
+        shared_group_id=shared_group_id,
+    )
+    adapter = MemWingAdapter(config.memwing)
+    if health_check:
+        adapter.health()
+    records: list[dict[str, Any]] = []
+    for probe in case.probes:
+        details = adapter.memory_search_details(
+            probe.question,
+            limit=limit,
+            scope=scope,
+            mode=mode,
+        )
+        records.append(
+            {
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                "mode": mode,
+                "scope": scope.payload() if scope is not None else None,
+                "latency_ms": details.latency_ms,
+                "contexts": details.contexts,
+                "results": details.results,
+                "raw": details.raw,
+            }
+        )
+    if json_output:
+        typer.echo(dumps_json({"case_id": case.case_id, "probes": records}))
+        return
+    typer.echo(
+        f"case={case.case_id} probes={len(records)} mode={mode} "
+        f"scope={_scope_label(scope)} limit={limit}"
+    )
+    for record in records:
+        typer.echo("")
+        typer.echo(f"{record['case_id']}/{record['probe_id']}: {record['query']}")
+        _print_search_hits(record["results"], latency_ms=record["latency_ms"])
+
+
+def _run_memwing_preseeded_evaluate_command(
+    *,
+    config_path: Path,
+    cases_path: Path,
+    source_run_id: str,
+    case_id: str | None,
+    batch: bool,
+    limit: int,
+    runs_dir: Path | None,
+    health_check: bool,
+) -> Path:
+    source_run_id = _optional_cli_text(source_run_id, "--run-id") or source_run_id
+    if limit <= 0:
+        raise BenchmarkError("--limit must be greater than 0")
+    config = apply_overrides(load_config(config_path), runs_dir=runs_dir, chat_id=None, trajectory_dir=None)
+    validate_config_for_backend(config, backend=MEMWING_HTTP_BACKEND)
+    cases = load_cases(cases_path, case_id=case_id)
+    if not batch and len(cases) != 1:
+        raise BenchmarkError("non-batch runs require exactly one case; pass --case-id or --batch")
+    judge = _build_judge(config)
+    if judge is None:
+        raise BenchmarkError("evaluate-preseeded requires a configured judge api key")
+
+    eval_run_id = make_run_id()
+    run_day = eval_run_id.split("-", 1)[0]
+    run_mode = "retrieval-evaluate"
+    run_dir = Path(config.paths.runs_dir).expanduser() / run_mode / run_day / eval_run_id
+    started_at = utc_now_iso()
+    raw_records = _empty_raw_records()
+    adapter = MemWingAdapter(config.memwing)
+    if health_check:
+        _preflight_memwing_http(adapter=adapter, raw_records=raw_records)
+    results = _run_memwing_preseeded_retrieval_batch(
+        eval_run_id=eval_run_id,
+        source_run_id=source_run_id,
+        backend=MEMWING_HTTP_BACKEND,
+        cases=cases,
+        adapter=adapter,
+        judge=judge,
+        raw_records=raw_records,
+        limit=limit,
+    )
+    _record_memwing_http_records(raw_records, adapter.records)
+    finished_at = utc_now_iso()
+    write_run_outputs(
+        run_dir=run_dir,
+        run_config={
+            "benchmark_version": "v1",
+            "backend": MEMWING_HTTP_BACKEND,
+            "mode": "retrieval",
+            "phase": "evaluate-preseeded",
+            "run_id": eval_run_id,
+            "run_mode": run_mode,
+            "run_day": run_day,
+            "source_run_id": source_run_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "case_file": str(cases_path),
+            "case_ids": [case.case_id for case in cases],
+            "batch": batch,
+            "chat_id": None,
+            "seed_chat_id": None,
+            "probe_chat_id": None,
+            "live": False,
+            "preseed_expected": False,
+            "memory_pipeline": "preseeded_scope_retrieval",
+            "readiness_profile": "already_preseeded",
+            "config": sanitize_config_for_run(config),
+            "side_effects": raw_records["side_effects"],
+        },
+        results=results,
+        raw_records=raw_records,
+    )
+    return run_dir
+
+
+def _memwing_search_scope(
+    *,
+    config,
+    run_id: str | None,
+    case_id: str | None,
+    project_memory_space_id: str | None,
+    group_id: str | None,
+    thread_id: str | None,
+    shared_group_id: str | None,
+) -> MemWingCaseScope | None:
+    normalized_run_id = _optional_cli_text(run_id, "--run-id")
+    normalized_case_id = _optional_cli_text(case_id, "--case-id")
+    explicit_scope = {
+        "project_memory_space_id": _optional_cli_text(
+            project_memory_space_id,
+            "--project-memory-space-id",
+        ),
+        "group_id": _optional_cli_text(group_id, "--group-id"),
+        "thread_id": _optional_cli_text(thread_id, "--thread-id"),
+        "shared_group_id": _optional_cli_text(shared_group_id, "--shared-group-id"),
+    }
+    has_benchmark_scope = normalized_run_id is not None or normalized_case_id is not None
+    has_explicit_scope = any(value is not None for value in explicit_scope.values())
+    if has_benchmark_scope and has_explicit_scope:
+        raise BenchmarkError("--run-id/--case-id cannot be combined with explicit scope options")
+    if has_benchmark_scope:
+        if normalized_run_id is None or normalized_case_id is None:
+            raise BenchmarkError("--run-id and --case-id must be provided together")
+        return memwing_case_scope(
+            config=config.memwing,
+            run_id=normalized_run_id,
+            case_id=normalized_case_id,
+        )
+    if not has_explicit_scope:
+        return None
+    return MemWingCaseScope(
+        project_memory_space_id=explicit_scope["project_memory_space_id"]
+        or config.memwing.project_memory_space_id,
+        group_id=explicit_scope["group_id"] or config.memwing.group_id,
+        thread_id=explicit_scope["thread_id"] or config.memwing.thread_id,
+        shared_group_id=explicit_scope["shared_group_id"] or config.memwing.shared_group_id or None,
+    )
+
+
+def _optional_cli_text(value: str | None, option_name: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise BenchmarkError(f"{option_name} must not be empty")
+    return normalized
+
+
+def _emit_memwing_search_result(
+    *,
+    query: str,
+    mode: str,
+    scope: MemWingCaseScope | None,
+    details: MemorySearchDetails,
+    json_output: bool,
+) -> None:
+    if json_output:
+        typer.echo(
+            dumps_json(
+                {
+                    "query": query,
+                    "mode": mode,
+                    "scope": scope.payload() if scope is not None else None,
+                    "latency_ms": details.latency_ms,
+                    "contexts": details.contexts,
+                    "results": details.results,
+                    "raw": details.raw,
+                }
+            )
+        )
+        return
+    typer.echo(
+        f"query={query} mode={mode} scope={_scope_label(scope)} "
+        f"hits={len(details.results)} latency_ms={details.latency_ms}"
+    )
+    _print_search_hits(details.results, latency_ms=details.latency_ms)
+
+
+def _print_search_hits(results: list[dict[str, Any]], *, latency_ms: int) -> None:
+    if not results:
+        typer.echo(f"no hits latency_ms={latency_ms}")
+        return
+    for result in results:
+        rank = result.get("rank")
+        source = result.get("source") or "unknown"
+        score = result.get("score")
+        item_id = result.get("id") or "-"
+        memory_ids = ",".join(result.get("memory_item_ids") or [])
+        source_ids = ",".join(result.get("source_event_ids") or [])
+        typer.echo(
+            f"{rank}. source={source} score={_cli_value(score)} id={item_id} "
+            f"memory_ids={memory_ids or '-'} source_event_ids={source_ids or '-'}"
+        )
+        typer.echo(f"   {_one_line(result.get('snippet'))}")
+
+
+def _scope_label(scope: MemWingCaseScope | None) -> str:
+    if scope is None:
+        return "config-default"
+    return (
+        f"{scope.project_memory_space_id}/"
+        f"{scope.group_id}/"
+        f"{scope.thread_id}"
+    )
+
+
+def _one_line(value: object, *, max_chars: int = 180) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = " ".join(value.split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return f"{normalized[: max_chars - 3]}..."
+
+
+def _cli_value(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
 
 
 def run(
@@ -150,6 +569,7 @@ def run(
     memory_poll_interval_seconds: float,
     memory_timeout_seconds: float,
     pg_preseed_per_case: bool,
+    preseed_expected: bool,
 ) -> Path:
     if backend not in SUPPORTED_BACKENDS:
         raise BenchmarkError(
@@ -182,12 +602,24 @@ def run(
         raise BenchmarkError("--memory-timeout-seconds must be greater than or equal to 0")
     if pg_preseed_per_case and mode != "retrieval":
         raise BenchmarkError("--pg-preseed-per-case is only supported with --mode retrieval")
+    if preseed_expected and mode != "retrieval":
+        raise BenchmarkError("--preseed-expected is only supported with --mode retrieval")
+    if preseed_expected and pg_preseed_per_case:
+        raise BenchmarkError("--preseed-expected cannot be combined with --pg-preseed-per-case")
     if pg_preseed_per_case and backend not in {
         MEMWING_HTTP_BACKEND,
         MEMWING_OPENCLAW_PLUGIN_BACKEND,
     }:
         raise BenchmarkError(
             "--pg-preseed-per-case is only supported with --backend memwing-http or "
+            "--backend memwing-openclaw-plugin"
+        )
+    if preseed_expected and backend not in {
+        MEMWING_HTTP_BACKEND,
+        MEMWING_OPENCLAW_PLUGIN_BACKEND,
+    }:
+        raise BenchmarkError(
+            "--preseed-expected is only supported with --backend memwing-http or "
             "--backend memwing-openclaw-plugin"
         )
     config = apply_overrides(
@@ -207,24 +639,7 @@ def run(
     run_dir = Path(config.paths.runs_dir).expanduser() / run_mode / run_day / run_id
     started_at = utc_now_iso()
 
-    raw_records: dict[str, Any] = {
-        "feishu": [],
-        "feishu_commands": [],
-        "memwing": [],
-        "memwing_http_health": [],
-        "memwing_http_search": [],
-        "openclaw_plugin_tool_evidence": [],
-        "pg_preseed": [],
-        "memwing_ingest": [],
-        "memwing_pipeline_drains": [],
-        "memwing_readiness": [],
-        "memwing_polls": [],
-        "openclaw": [],
-        "memory_polls": [],
-        "memory_searches": [],
-        "side_effects": [],
-        "debug": [],
-    }
+    raw_records: dict[str, Any] = _empty_raw_records()
     judge = _build_judge(config)
     if live and judge is None and not (mode == "write" and phase == "ingest"):
         raise BenchmarkError("live benchmark requires a configured judge api key")
@@ -254,6 +669,7 @@ def run(
                 ingest_seed_events=False,
                 config=config,
                 pg_preseed_per_case=pg_preseed_per_case,
+                preseed_expected=preseed_expected,
                 pg_cleanup_cases=pg_cleanup_cases,
             )
         elif phase == "ingest":
@@ -298,8 +714,12 @@ def run(
             "probe_chat_id": None,
             "live": live,
             "pg_preseed_per_case": pg_preseed_per_case,
+            "preseed_expected": preseed_expected,
             "requested_ingest_run_id": ingest_run_id,
-            **_memwing_pipeline_run_config(pg_preseed_per_case=pg_preseed_per_case),
+            **_memwing_pipeline_run_config(
+                pg_preseed_per_case=pg_preseed_per_case,
+                preseed_expected=preseed_expected,
+            ),
             "config": sanitize_config_for_run(config),
             "side_effects": raw_records["side_effects"],
         }
@@ -343,6 +763,7 @@ def run(
                 ingest_seed_events=False,
                 config=config,
                 pg_preseed_per_case=pg_preseed_per_case,
+                preseed_expected=preseed_expected,
                 pg_cleanup_cases=pg_cleanup_cases,
             )
             _record_memwing_http_records(
@@ -370,7 +791,11 @@ def run(
                 "probe_chat_id": None,
                 "live": live,
                 "pg_preseed_per_case": pg_preseed_per_case,
-                **_memwing_pipeline_run_config(pg_preseed_per_case=pg_preseed_per_case),
+                "preseed_expected": preseed_expected,
+                **_memwing_pipeline_run_config(
+                    pg_preseed_per_case=pg_preseed_per_case,
+                    preseed_expected=preseed_expected,
+                ),
                 "config": sanitize_config_for_run(config),
                 "side_effects": raw_records["side_effects"],
             }
@@ -613,13 +1038,46 @@ def _run_mode_name(*, mode: str, phase: str, batch: bool) -> str:
     return f"{mode}{suffix}"
 
 
+def _empty_raw_records() -> dict[str, Any]:
+    return {
+        "feishu": [],
+        "feishu_commands": [],
+        "memwing": [],
+        "memwing_http_health": [],
+        "memwing_http_search": [],
+        "openclaw_plugin_tool_evidence": [],
+        "pg_preseed": [],
+        "memwing_preseed_expected": [],
+        "memwing_ingest": [],
+        "memwing_pipeline_drains": [],
+        "memwing_readiness": [],
+        "memwing_polls": [],
+        "openclaw": [],
+        "memory_polls": [],
+        "memory_searches": [],
+        "side_effects": [],
+        "debug": [],
+    }
+
+
 def _canonical_backend(backend: str) -> str:
     if backend == MEMWING_LEGACY_BACKEND:
         return MEMWING_HTTP_BACKEND
     return backend
 
 
-def _memwing_pipeline_run_config(*, pg_preseed_per_case: bool) -> dict[str, str]:
+def _memwing_pipeline_run_config(
+    *,
+    pg_preseed_per_case: bool,
+    preseed_expected: bool,
+) -> dict[str, str]:
+    if preseed_expected:
+        return {
+            "memory_pipeline": "expected_preseed_per_case",
+            "readiness_profile": "sync_preseed_expected",
+            "graph_backend": "graphiti",
+            "page_memory": "preseed_expected",
+        }
     if not pg_preseed_per_case:
         return {}
     return {
@@ -1257,6 +1715,7 @@ def _run_memwing_retrieval_batch(
     ingest_seed_events: bool = True,
     config: Any | None = None,
     pg_preseed_per_case: bool = False,
+    preseed_expected: bool = False,
     pg_cleanup_cases: list[BenchmarkCase] | None = None,
 ) -> list[NormalizedResult]:
     if poll_interval_seconds <= 0:
@@ -1265,6 +1724,20 @@ def _run_memwing_retrieval_batch(
         raise BenchmarkError("memwing.poll_timeout_seconds must be greater than or equal to 0")
     if ingest_seed_events and any(case.seed_messages for case in cases):
         _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
+    if preseed_expected:
+        _confirm_side_effect(
+            "清理每个 benchmark case scope，并通过 MemWing admin preseed-expected "
+            "写入 expected memory_items、Graphiti graph 和 page_memory",
+            yes,
+        )
+        return _run_memwing_expected_preseed_retrieval_batch(
+            run_id=run_id,
+            backend=backend,
+            cases=cases,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+        )
     if pg_preseed_per_case:
         _confirm_side_effect(
             "通过 MemWing HTTP/OpenClaw ingest endpoint 写入 benchmark Source Events，"
@@ -1318,6 +1791,237 @@ def _run_memwing_real_ingest_retrieval_batch(
             results=results,
         )
     return results
+
+
+def _run_memwing_expected_preseed_retrieval_batch(
+    *,
+    run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+) -> list[NormalizedResult]:
+    results: list[NormalizedResult] = []
+    for case in cases:
+        _run_memwing_expected_preseed_retrieval_case(
+            run_id=run_id,
+            backend=backend,
+            case=case,
+            adapter=adapter,
+            judge=judge,
+            raw_records=raw_records,
+            results=results,
+        )
+    return results
+
+
+def _run_memwing_preseeded_retrieval_batch(
+    *,
+    eval_run_id: str,
+    source_run_id: str,
+    backend: str,
+    cases: list[BenchmarkCase],
+    adapter: MemWingAdapter,
+    judge: LlmJudge,
+    raw_records: dict[str, Any],
+    limit: int,
+) -> list[NormalizedResult]:
+    results: list[NormalizedResult] = []
+    for case in cases:
+        scope = memwing_case_scope(
+            config=adapter.config,
+            run_id=source_run_id,
+            case_id=case.case_id,
+        )
+        _debug(
+            raw_records,
+            "MemWing preseeded retrieval evaluate case 开始",
+            case_id=case.case_id,
+            source_run_id=source_run_id,
+            project_memory_space_id=scope.project_memory_space_id,
+            probe_count=len(case.probes),
+        )
+        for probe in case.probes:
+            details = adapter.memory_search_details(
+                probe.question,
+                max_results=limit,
+                scope=scope,
+            )
+            search_raw = _memory_search_raw(MemorySearchOutcome(details=details))
+            raw_records.setdefault("memory_searches", []).append(
+                {
+                    "mode": "memwing_preseeded_retrieval",
+                    "case_id": case.case_id,
+                    "probe_id": probe.id,
+                    "query": probe.question,
+                    "source_run_id": source_run_id,
+                    **search_raw,
+                }
+            )
+            retrieval_result = _evaluate_retrieval(
+                judge=judge,
+                case=case,
+                probe=probe,
+                retrieved_contexts=details.contexts,
+            )
+            _debug(
+                raw_records,
+                "MemWing preseeded retrieval evaluate search 完成",
+                case_id=case.case_id,
+                probe_id=probe.id,
+                result_count=len(details.results),
+                latency_ms=details.latency_ms,
+                recall_at_1=retrieval_result.retrieval.recall_at_1,
+                recall_at_3=retrieval_result.retrieval.recall_at_3,
+                recall_at_5=retrieval_result.retrieval.recall_at_5,
+            )
+            results.append(
+                _result_from_eval(
+                    run_id=eval_run_id,
+                    backend=backend,
+                    case=case,
+                    probe=probe,
+                    chat_id=None,
+                    seed_message_ids=[item.id for item in case.expected_memory_items],
+                    answer="",
+                    retrieved_contexts=details.contexts,
+                    retrieved_evidence_ids=_source_event_ids_from_results(details.results),
+                    actual_tool_evidence_ids=[],
+                    latency_ms=None,
+                    tokens=TokenUsage(
+                        available=False,
+                        missing_reason="non-live MemWing preseeded retrieval evaluate run",
+                    ),
+                    memory_recall_latency_ms=details.latency_ms,
+                    retrieval_result=retrieval_result,
+                    answer_result=None,
+                    raw={
+                        "mode": "memwing_preseeded_retrieval",
+                        "source_run_id": source_run_id,
+                        **search_raw,
+                    },
+                )
+            )
+    return results
+
+
+def _run_memwing_expected_preseed_retrieval_case(
+    *,
+    run_id: str,
+    backend: str,
+    case: BenchmarkCase,
+    adapter: MemWingAdapter,
+    judge: LlmJudge | None,
+    raw_records: dict[str, Any],
+    results: list[NormalizedResult],
+) -> None:
+    scope = memwing_case_scope(config=adapter.config, run_id=run_id, case_id=case.case_id)
+    _debug(
+        raw_records,
+        "MemWing expected preseed retrieval case 开始",
+        case_id=case.case_id,
+        project_memory_space_id=scope.project_memory_space_id,
+        expected_memory_count=len(case.expected_memory_items),
+        probe_count=len(case.probes),
+    )
+
+    cleanup = adapter.cleanup_benchmark_scope(scope)
+    raw_records.setdefault("memwing_scope_cleanup", []).append(
+        {"case_id": case.case_id, "scope": scope.payload(), "response": cleanup}
+    )
+
+    preseed = adapter.preseed_expected_memories(case=case, run_id=run_id, scope=scope)
+    seed_completed_at = utc_now_iso()
+    raw_records.setdefault("memwing_preseed_expected", []).append(
+        {"case_id": case.case_id, "scope": scope.payload(), "response": preseed}
+    )
+    _debug(
+        raw_records,
+        "MemWing expected preseed 完成",
+        case_id=case.case_id,
+        source_event_count=preseed.get("source_event_count"),
+        memory_item_count=preseed.get("memory_item_count"),
+        page_memory_count=preseed.get("page_memory_count"),
+        graph_episode_count=preseed.get("graph_episode_count"),
+        graph_fact_count=preseed.get("graph_fact_count"),
+    )
+
+    expected_source_event_ids = _text_list_from_mapping(preseed, "source_event_ids")
+    for probe in case.probes:
+        _debug(
+            raw_records,
+            "MemWing expected preseed search 开始",
+            case_id=case.case_id,
+            probe_id=probe.id,
+        )
+        details = adapter.memory_search_details(
+            probe.question,
+            max_results=MEMWING_REAL_SEARCH_MAX_RESULTS,
+            scope=scope,
+        )
+        search_raw = _memory_search_raw(MemorySearchOutcome(details=details))
+        raw_records.setdefault("memory_searches", []).append(
+            {
+                "mode": "memwing_expected_preseed_retrieval",
+                "case_id": case.case_id,
+                "probe_id": probe.id,
+                "query": probe.question,
+                **search_raw,
+            }
+        )
+        retrieval_result = _evaluate_retrieval(
+            judge=judge,
+            case=case,
+            probe=probe,
+            retrieved_contexts=details.contexts,
+        )
+        _debug(
+            raw_records,
+            "MemWing expected preseed search 完成",
+            case_id=case.case_id,
+            probe_id=probe.id,
+            result_count=len(details.results),
+            latency_ms=details.latency_ms,
+            recall_at_1=retrieval_result.retrieval.recall_at_1
+            if retrieval_result
+            else None,
+            recall_at_3=retrieval_result.retrieval.recall_at_3
+            if retrieval_result
+            else None,
+            recall_at_5=retrieval_result.retrieval.recall_at_5
+            if retrieval_result
+            else None,
+        )
+        results.append(
+            _result_from_eval(
+                run_id=run_id,
+                backend=backend,
+                case=case,
+                probe=probe,
+                chat_id=None,
+                seed_message_ids=[item.id for item in case.expected_memory_items],
+                answer="",
+                retrieved_contexts=details.contexts,
+                retrieved_evidence_ids=_source_event_ids_from_results(details.results),
+                actual_tool_evidence_ids=[],
+                latency_ms=None,
+                tokens=TokenUsage(
+                    available=False,
+                    missing_reason="non-live MemWing expected preseed retrieval run",
+                ),
+                memory_recall_latency_ms=details.latency_ms,
+                retrieval_result=retrieval_result,
+                answer_result=None,
+                raw={
+                    "mode": "memwing_expected_preseed_retrieval",
+                    "seed_completed_at": seed_completed_at,
+                    "expected_source_event_ids": expected_source_event_ids,
+                    "preseed_expected": preseed,
+                    **search_raw,
+                },
+            )
+        )
 
 
 def _run_memwing_real_ingest_retrieval_case(
@@ -1619,15 +2323,23 @@ def _run_memwing_write_ingest_batch(
         _confirm_side_effect("向 MemWing HTTP ingest endpoint 写入 benchmark Source Events", yes)
 
     results: list[NormalizedResult] = []
-    scope = _memwing_default_scope(adapter)
     for case in cases:
+        scope = memwing_case_scope(config=adapter.config, run_id=run_id, case_id=case.case_id)
         _debug(
             raw_records,
             "MemWing write ingest case 开始",
             case_id=case.case_id,
             seed_message_count=len(case.seed_messages),
+            project_memory_space_id=scope.project_memory_space_id,
         )
-        ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id)
+        _debug(raw_records, "MemWing write ingest benchmark scope cleanup 开始", case_id=case.case_id)
+        cleanup = adapter.cleanup_benchmark_scope(scope)
+        raw_records.setdefault("memwing_scope_cleanup", []).append(
+            {"case_id": case.case_id, "scope": scope.payload(), "response": cleanup}
+        )
+        _debug(raw_records, "MemWing write ingest benchmark scope cleanup 完成", case_id=case.case_id)
+
+        ingest_records = adapter.ingest_seed_messages(case=case, run_id=run_id, scope=scope)
         seed_completed_at = utc_now_iso()
         raw_records.setdefault("memwing_ingest", []).extend(ingest_records)
         raw_records.setdefault("memory_writes", []).append(
@@ -1714,6 +2426,7 @@ def _run_memwing_write_evaluate_batch(
         )
         searches: list[dict[str, Any]] = []
         written_contexts: list[str] = []
+        scored_written_contexts: list[str] = []
         search_latencies: list[int] = []
         search_errors: list[str] = []
         for item in case.expected_memory_items:
@@ -1733,6 +2446,7 @@ def _run_memwing_write_evaluate_batch(
                 search_errors.append(search.error)
             search_latencies.append(search.details.latency_ms)
             written_contexts.extend(search.details.contexts)
+            scored_written_contexts.extend(_memwing_write_scored_contexts(search.details))
             searches.append(
                 {
                     "case_id": case.case_id,
@@ -1751,11 +2465,14 @@ def _run_memwing_write_evaluate_batch(
                 }
             )
         written_contexts = unique_preserve_order(written_contexts)
+        scored_written_contexts = unique_preserve_order(scored_written_contexts)
         _debug(
             raw_records,
             "MemWing write evaluate search 完成",
             case_id=case.case_id,
             written_context_count=len(written_contexts),
+            scored_context_count=len(scored_written_contexts),
+            excluded_raw_context_count=max(0, len(written_contexts) - len(scored_written_contexts)),
             search_error_count=len(search_errors),
         )
         write_result = _evaluate_write(
@@ -1763,9 +2480,10 @@ def _run_memwing_write_evaluate_batch(
             case_id=case.case_id,
             expected_memories=expected_memories,
             noise_memories=noise_memories,
-            written_contexts=written_contexts,
+            written_contexts=scored_written_contexts,
             allowed_other_memories=allowed_other_memories,
         )
+        write_ratios = _write_quality_ratios(write_result)
         raw_records.setdefault("memory_writes", []).append(
             {
                 "phase": "evaluate",
@@ -1773,6 +2491,12 @@ def _run_memwing_write_evaluate_batch(
                 "case_id": case.case_id,
                 "searches": searches,
                 "written_context_count": len(written_contexts),
+                "scored_written_context_count": len(scored_written_contexts),
+                "excluded_raw_context_count": max(
+                    0,
+                    len(written_contexts) - len(scored_written_contexts),
+                ),
+                "scored_written_contexts": scored_written_contexts,
                 "changed_file_metrics_available": False,
                 "changed_file_metrics_missing_reason": MEMWING_CHANGED_FILE_METRICS_MISSING_REASON,
                 "readiness": readiness_summary,
@@ -1780,6 +2504,7 @@ def _run_memwing_write_evaluate_batch(
                 "selected_ingest_run_dir": str(ingest_record.run_dir) if ingest_record is not None else None,
                 "source_event_ids": ingest_record.source_event_ids if ingest_record is not None else [],
                 "write_judge": write_result.model_dump(mode="json") if write_result else None,
+                "write_quality_ratios": write_ratios,
             }
         )
         results.append(
@@ -1794,6 +2519,7 @@ def _run_memwing_write_evaluate_batch(
                 write_result=write_result,
                 searches=searches,
                 readiness_summary=readiness_summary,
+                scored_context_count=len(scored_written_contexts),
             )
         )
     return results
@@ -1924,11 +2650,24 @@ def _load_memwing_write_ingest_records(
             ]
             if not source_event_ids:
                 continue
+            scope = _memwing_scope_from_raw(
+                write_record.get("scope"),
+                default_scope=_memwing_default_scope(adapter),
+            )
+            if not _is_benchmark_scope(scope):
+                if ingest_run_id is not None:
+                    raise BenchmarkError(
+                        "MemWing write evaluate requires a benchmark-scoped ingest run: "
+                        f"case_id={case_id} ingest_run_id={run_id} "
+                        f"project_memory_space_id={scope.project_memory_space_id}. "
+                        "Rerun write ingest so the scope is benchmark:{run_id}:{case_id}."
+                    )
+                continue
             records[case_id] = MemWingWriteIngestRecord(
                 case_id=case_id,
                 run_id=run_id,
                 run_dir=run_dir,
-                scope=_memwing_scope_from_raw(write_record.get("scope"), default_scope=_memwing_default_scope(adapter)),
+                scope=scope,
                 source_event_ids=unique_preserve_order(source_event_ids),
                 selection="explicit" if ingest_run_id is not None else "latest-compatible",
             )
@@ -1969,6 +2708,10 @@ def _memwing_scope_from_raw(value: Any, *, default_scope: MemWingCaseScope) -> M
         thread_id=thread_id,
         shared_group_id=shared_group_id if isinstance(shared_group_id, str) and shared_group_id else None,
     )
+
+
+def _is_benchmark_scope(scope: MemWingCaseScope) -> bool:
+    return scope.project_memory_space_id.startswith("benchmark:")
 
 
 def _poll_memwing_readiness(
@@ -3151,6 +3894,7 @@ def _result_from_write(
     noise_count = len(write.noise_facts) if write else None
     wrong_count = len(write.wrong_facts) if write else None
     stale_count = len(write.stale_facts) if write else None
+    write_ratios = _write_quality_ratios(write_result)
     memory_write_latency_ms = (
         _latency_ms(seed_completed_at, first_changed_at)
         if seed_completed_at and first_changed_at
@@ -3183,10 +3927,15 @@ def _result_from_write(
         write_noise_count=noise_count,
         write_wrong_count=wrong_count,
         write_stale_count=stale_count,
+        write_scored_context_count=len(written_contexts),
         write_changed_file_count=len(changed_files),
         write_written_claim_count=write.written_claim_count if write else None,
         write_recall=write.write_recall if write else None,
         write_precision=write.write_precision if write else None,
+        write_target_precision=write_ratios["target_precision"],
+        write_expected_memory_ratio=write_ratios["target_precision"],
+        write_non_target_ratio=write_ratios["non_target_ratio"],
+        write_forbidden_memory_ratio=write_ratios["forbidden_memory_ratio"],
         tokens=TokenUsage(available=False, missing_reason="write mode does not collect tokens"),
         observability=Observability(
             memory_write_latency_ms=memory_write_latency_ms,
@@ -3202,6 +3951,7 @@ def _result_from_write(
             "extraction_timeout": timeout,
             "changed_memory_files": changed_files,
             "write_judge": write_result.model_dump(mode="json") if write_result else None,
+            "write_quality_ratios": write_ratios,
         },
     )
 
@@ -3261,6 +4011,7 @@ def _result_from_memwing_write(
     write_result: JudgeResult | None,
     searches: list[dict[str, Any]],
     readiness_summary: dict[str, Any] | None = None,
+    scored_context_count: int | None = None,
 ) -> NormalizedResult:
     expected_count = len(case.expected_memory_items)
     write = write_result.write if write_result else None
@@ -3274,6 +4025,7 @@ def _result_from_memwing_write(
     noise_count = len(write.noise_facts) if write else None
     wrong_count = len(write.wrong_facts) if write else None
     stale_count = len(write.stale_facts) if write else None
+    write_ratios = _write_quality_ratios(write_result)
     memory_recall_latency_ms = sum(search_latencies) if search_latencies else None
     return NormalizedResult(
         run_id=run_id,
@@ -3297,10 +4049,15 @@ def _result_from_memwing_write(
         write_noise_count=noise_count,
         write_wrong_count=wrong_count,
         write_stale_count=stale_count,
+        write_scored_context_count=scored_context_count,
         write_changed_file_count=None,
         write_written_claim_count=write.written_claim_count if write else None,
         write_recall=write.write_recall if write else None,
         write_precision=write.write_precision if write else None,
+        write_target_precision=write_ratios["target_precision"],
+        write_expected_memory_ratio=write_ratios["target_precision"],
+        write_non_target_ratio=write_ratios["non_target_ratio"],
+        write_forbidden_memory_ratio=write_ratios["forbidden_memory_ratio"],
         tokens=TokenUsage(available=False, missing_reason="write mode does not collect tokens"),
         observability=Observability(
             memory_recall_latency_ms=memory_recall_latency_ms,
@@ -3323,6 +4080,7 @@ def _result_from_memwing_write(
             "memory_search_errors": search_errors,
             "readiness": readiness_summary,
             "write_judge": write_result.model_dump(mode="json") if write_result else None,
+            "write_quality_ratios": write_ratios,
         },
     )
 
@@ -3411,6 +4169,59 @@ def _evaluate_write(
     )
 
 
+def _memwing_write_scored_contexts(details: MemorySearchDetails) -> list[str]:
+    contexts: list[str] = []
+    for result in details.results:
+        source = result.get("source")
+        if isinstance(source, str) and source in MEMWING_WRITE_RAW_SOURCES:
+            continue
+        text = _memory_search_result_text(result)
+        if text:
+            contexts.append(text)
+    if contexts or details.results:
+        return unique_preserve_order(contexts)
+    return details.contexts
+
+
+def _memory_search_result_text(result: dict[str, Any]) -> str:
+    for key in ("text", "snippet"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _write_quality_ratios(write_result: JudgeResult | None) -> dict[str, float | None]:
+    if write_result is None:
+        return {
+            "target_precision": None,
+            "non_target_ratio": None,
+            "forbidden_memory_ratio": None,
+        }
+    write = write_result.write
+    expected_count = len(write.matched_expected_memory_ids)
+    non_target_count = len(write.unexpected_facts)
+    forbidden_count = len(write.noise_facts)
+    classified_count = (
+        expected_count
+        + non_target_count
+        + forbidden_count
+        + len(write.wrong_facts)
+        + len(write.stale_facts)
+    )
+    if classified_count <= 0:
+        return {
+            "target_precision": 0.0,
+            "non_target_ratio": 0.0,
+            "forbidden_memory_ratio": 0.0,
+        }
+    return {
+        "target_precision": expected_count / classified_count,
+        "non_target_ratio": non_target_count / classified_count,
+        "forbidden_memory_ratio": forbidden_count / classified_count,
+    }
+
+
 def _gold_memories(case: BenchmarkCase, memory_ids: list[str]) -> list[GoldMemory]:
     by_id = {
         message.id: GoldMemory(id=message.id, time=message.time, fact=message.content)
@@ -3471,6 +4282,8 @@ def _safe_memory_search(
 def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
     top = search.details.results[0] if search.details.results else {}
     raw_warnings = search.details.raw.get("warnings") if search.details.raw else None
+    raw_diagnostics = search.details.raw.get("diagnostics") if search.details.raw else None
+    branch_timings = _current_truth_branch_timings(raw_diagnostics)
     return {
         "memory_search_error": search.error,
         "memory_search_latency_ms": search.details.latency_ms,
@@ -3479,6 +4292,8 @@ def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
         "memory_search_raw": search.details.raw,
         "memory_search_source_mix": _source_mix(search.details.results),
         "memory_search_warnings": raw_warnings if isinstance(raw_warnings, list) else [],
+        "memory_search_diagnostics": raw_diagnostics if isinstance(raw_diagnostics, dict) else {},
+        "memory_search_branch_timings": branch_timings,
         "memory_search_top_score": top.get("score") if isinstance(top, dict) else None,
         "memory_search_top_vector_score": top.get("vectorScore") if isinstance(top, dict) else None,
         "memory_search_top_text_score": top.get("textScore") if isinstance(top, dict) else None,
@@ -3486,6 +4301,18 @@ def _memory_search_raw(search: MemorySearchOutcome) -> dict[str, Any]:
         "memory_search_top_start_line": top.get("startLine") if isinstance(top, dict) else None,
         "memory_search_top_end_line": top.get("endLine") if isinstance(top, dict) else None,
     }
+
+
+def _current_truth_branch_timings(raw_diagnostics: object) -> list[dict[str, Any]]:
+    if not isinstance(raw_diagnostics, dict):
+        return []
+    current_truth = raw_diagnostics.get("current_truth")
+    if not isinstance(current_truth, dict):
+        return []
+    branch_timings = current_truth.get("branch_timings")
+    if not isinstance(branch_timings, list):
+        return []
+    return [item for item in branch_timings if isinstance(item, dict)]
 
 
 def _source_mix(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -3608,6 +4435,13 @@ def _optional_float(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _text_list_from_mapping(data: dict[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _confirm_side_effect(description: str, yes: bool) -> None:
