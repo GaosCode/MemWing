@@ -31,6 +31,19 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
     assert 'PYTHON_BIN="${MEMWING_PYTHON:-python$PYTHON_MAJOR_MINOR}"' in build_script
     assert 'exec "$PYTHON_BIN" -m memwing.cli "$@"' in build_script
     assert 'printf "%s\\n" "$PYTHON_MAJOR_MINOR" > "$ARTIFACT_DIR/PYTHON_MAJOR_MINOR"' in build_script
+    assert '"$ARTIFACT_DIR/memwing-openclaw-plugin/dist"' in build_script
+    assert (
+        'cp "$ROOT/memwing/integrations/openclaw/openclaw.plugin.json" '
+        '"$ARTIFACT_DIR/memwing-openclaw-plugin/"'
+    ) in build_script
+    assert (
+        'cp -R "$ROOT/memwing/integrations/openclaw/dist/." '
+        '"$ARTIFACT_DIR/memwing-openclaw-plugin/dist/"'
+    ) in build_script
+    assert (
+        'cp -R "$ROOT/memwing/integrations/openclaw/dist/." '
+        '"$ARTIFACT_DIR/memwing-openclaw-plugin/"'
+    ) not in build_script
     assert "python_major_minor=" in install_script
     assert 'python_bin="${MEMWING_PYTHON:-python$python_major_minor}"' in install_script
     assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script

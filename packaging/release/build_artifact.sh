@@ -13,7 +13,7 @@ rm -rf "$ARTIFACT_DIR"
 mkdir -p \
   "$ARTIFACT_DIR/bin" \
   "$ARTIFACT_DIR/lib" \
-  "$ARTIFACT_DIR/memwing-openclaw-plugin" \
+  "$ARTIFACT_DIR/memwing-openclaw-plugin/dist" \
   "$ARTIFACT_DIR/default-configs" \
   "$ARTIFACT_DIR/licenses"
 
@@ -51,8 +51,8 @@ chmod +x "$ARTIFACT_DIR/bin/memwing"
 printf "%s\n" "$PYTHON_MAJOR_MINOR" > "$ARTIFACT_DIR/PYTHON_MAJOR_MINOR"
 printf "%s\n" "$PYTHON_EXECUTABLE_NAME" > "$ARTIFACT_DIR/PYTHON_EXECUTABLE"
 
-cp -R "$ROOT/memwing/integrations/openclaw/dist/." "$ARTIFACT_DIR/memwing-openclaw-plugin/"
 cp "$ROOT/memwing/integrations/openclaw/openclaw.plugin.json" "$ARTIFACT_DIR/memwing-openclaw-plugin/"
+cp -R "$ROOT/memwing/integrations/openclaw/dist/." "$ARTIFACT_DIR/memwing-openclaw-plugin/dist/"
 cp "$ROOT/pyproject.toml" "$ARTIFACT_DIR/default-configs/pyproject.toml"
 
 cat > "$ARTIFACT_DIR/README.txt" <<EOF
