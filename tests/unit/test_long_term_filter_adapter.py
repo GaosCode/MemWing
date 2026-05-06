@@ -106,6 +106,42 @@ def test_long_term_filter_adapter_caches_validated_json_by_source_lineage() -> N
     assert adapter.cache_metrics.misses == 1
 
 
+def test_long_term_filter_adapter_uses_v3_prompt_hash_for_cache() -> None:
+    store = InMemoryDataStore()
+    adapter = MemWingLongTermFilterAdapter(
+        FakeLLMClient('{"items":[]}'),
+        cache_unit_of_work=store,
+        cache_runtime="openclaw",
+        cache_model="filter-model",
+        cache_transport="local",
+        now=lambda: datetime(2026, 5, 5, tzinfo=UTC),
+    )
+
+    asyncio.run(adapter.filter_events(_request()))
+
+    entries = tuple(store._state.model_result_cache.values())
+    assert len(entries) == 1
+    assert entries[0].key.prompt_hash == "long_term_filter_prompt:v3"
+
+
+def test_long_term_filter_prompt_defines_noise_and_layer_boundary() -> None:
+    llm = FakeLLMClient('{"items":[]}')
+    adapter = MemWingLongTermFilterAdapter(llm)
+
+    asyncio.run(adapter.filter_events(_request()))
+
+    request = llm.requests[0]
+    assert "Source events and evidence indexes already retain raw messages" in request.system_prompt
+    assert "Do not translate Chinese source facts into English" in request.system_prompt
+    assert "Reject noise" in request.system_prompt
+    assert "transient test alerts" in request.system_prompt
+    assert "Do not bundle unrelated messages into a generic summary" in request.system_prompt
+    assert "输出 JSON 中的 title/content/reason 必须全部使用中文" in request.user_prompt
+    assert "source_events are the authoritative raw record" in request.user_prompt
+    assert "evidence snippets are searchable raw evidence" in request.user_prompt
+    assert "one-off notification" in request.user_prompt
+
+
 def test_long_term_filter_adapter_fills_compact_item_defaults() -> None:
     adapter = MemWingLongTermFilterAdapter(
         FakeLLMClient(

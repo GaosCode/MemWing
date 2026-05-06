@@ -49,6 +49,8 @@ from memwing.ports.event_store import (
 )
 from memwing.ports.graph_backend import (
     GraphBackendPort,
+    GraphFactPreseedRequest,
+    GraphFactPreseedResult,
     GraphWriteBatchItemResult,
     GraphWriteBatchRequest,
     GraphWriteBatchResult,
@@ -150,6 +152,9 @@ def test_graph_backend_port_accepts_adapter_with_required_methods() -> None:
         ) -> GraphWriteBatchResult:
             raise NotImplementedError
 
+        async def preseed_facts(self, request: GraphFactPreseedRequest) -> GraphFactPreseedResult:
+            raise NotImplementedError
+
         async def mark_source_redacted(self, source_event_id: str, scope: EffectiveScope) -> None:
             raise NotImplementedError
 
@@ -177,6 +182,15 @@ def test_graph_backend_port_exposes_batch_ingest_contract() -> None:
     item_hints = get_type_hints(GraphWriteBatchItemResult)
     assert item_hints["error_type"] == str | None
     assert item_hints["retryable"] is bool
+
+
+def test_graph_backend_port_exposes_direct_fact_preseed_contract() -> None:
+    signature = inspect.signature(getattr(GraphBackendPort, "preseed_facts"))
+    parameters = list(signature.parameters.values())
+    hints = get_type_hints(getattr(GraphBackendPort, "preseed_facts"))
+
+    assert hints[parameters[1].name] is GraphFactPreseedRequest
+    assert hints["return"] is GraphFactPreseedResult
 
 
 def test_graph_backend_port_uses_graph_write_request_contract() -> None:

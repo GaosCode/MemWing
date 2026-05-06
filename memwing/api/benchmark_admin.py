@@ -90,6 +90,7 @@ async def handle_benchmark_admin_request(
                     "case_id",
                     "expected_memories",
                     "layers",
+                    "graph_mode",
                 },
             )
             scope = _scope(payload)
@@ -99,6 +100,8 @@ async def handle_benchmark_admin_request(
                 expected_memories=tuple(_expected_memories(payload)),
                 case_id=_optional_text(payload.get("case_id"), "case_id"),
                 layers=tuple(_text_list(payload, "layers")),
+                graph_mode=_optional_text(payload.get("graph_mode"), "graph_mode")
+                or "direct_neo4j",
             )
             return BenchmarkAdminHttpResponse(
                 status_code=200,

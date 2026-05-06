@@ -74,7 +74,7 @@ class MemWingLongTermFilterAdapter(LongTermFilterPort):
                 runtime=cache_runtime,
                 model=cache_model,
                 transport=cache_transport,
-                prompt_hash="long_term_filter_prompt:v1",
+                prompt_hash="long_term_filter_prompt:v3",
                 schema_hash="long_term_filter_schema:v1",
                 now=now or (lambda: datetime.now(UTC)),
             )
@@ -222,9 +222,14 @@ def _debug_ltf(msg: str) -> None:
 
 _LONG_TERM_FILTER_SYSTEM_PROMPT = """\
 You are MemWing LongTermFilter. Return compact JSON only, no markdown.
-Promote only durable facts, decisions, preferences, rules, tasks, or evidence. Use only source_event_ids from input.
+Language policy: when the source events are mainly Chinese, every generated title, content, reason, note, and summary-like field must be Chinese. Do not translate Chinese source facts into English. Preserve original Chinese names, terms, dates, thresholds, metrics, and quoted wording.
+Source events and evidence indexes already retain raw messages; do not promote items just to preserve text.
+Promote only durable, reusable, scope-relevant current facts, decisions, preferences, rules, owners, deadlines, constraints, or project-critical tasks.
+Reject noise: one-off logistics, meeting links or reschedules, shared-doc notices, password resets, routine reminders, procurement/admin chores, transient test alerts, training/material updates, marketing assets, and broad summaries unless they define a lasting project rule, owner, deadline, constraint, or decision.
+Reject stale intermediate states when a later source supersedes them; promote the latest current truth and cite the superseding source.
+Do not bundle unrelated messages into a generic summary. Prefer no item when durability or project relevance is uncertain.
 If nothing is durable, return {"items":[]}.
-Return at most 6 items. Each item must cite 1-2 source_event_ids.
+Return at most 4 items. Each item must cite 1-2 source_event_ids.
 Required minimal shape: {"items":[{"title":str,"content":str,"route":"graph|vector_only|raw_only|manual","display_type":"decision|task|preference|rule|note|evidence","source_event_ids":[str],"reason":str,"confidence":float}]}.
 Omit nullable fields and scoring defaults when redundant.
 """
@@ -254,6 +259,18 @@ def _long_term_filter_user_prompt(request: LongTermFilterRequest) -> str:
             f"History items:\n{_history_items_block(request.history_items)}",
             f"Evidence snippets:\n{_evidence_snippets_block(request.evidence_snippets)}",
             f"Source events:\n{_source_events_block(request.source_events)}",
+            "Language requirement:\n"
+            "- 如果 Source events 主要是中文，输出 JSON 中的 title/content/reason 必须全部使用中文。\n"
+            "- 不要把中文事实翻译成英文；保留原文中的项目名、人名、指标、阈值、时间和引用短语。\n"
+            "- 如果需要压缩表达，只能用中文改写，不能改变事实粒度。",
+            "Layer boundary:\n"
+            "- source_events are the authoritative raw record.\n"
+            "- evidence snippets are searchable raw evidence, not durable memory candidates by default.\n"
+            "- LongTermFilter should output only compact long-term memory_items.",
+            "Durability test:\n"
+            "- Would this still help answer a future project question or decision after days or weeks?\n"
+            "- Is it a current project fact, owner, deadline, scope, rule, constraint, preference, or decision?\n"
+            "- Is it stronger than a one-off notification, transient operational detail, or unrelated side topic?",
             "Classify durable long-term memory candidates now.",
         )
     )

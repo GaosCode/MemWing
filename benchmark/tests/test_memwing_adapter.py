@@ -340,6 +340,7 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
                     "thread_id": "benchmark:bs001",
                 },
                 "layers": ["memory_items", "graph", "page_memory"],
+                "graph_mode": "direct_neo4j",
                 "expected_memories": [{"id": "bs001_m1", "fact": "负责人是沈南。"}],
             },
         ),
@@ -365,7 +366,7 @@ def test_benchmark_admin_methods_post_scope_payloads() -> None:
                 },
                 "source_event_ids": ["source_event_001"],
                 "profile": "retrieval-evaluate",
-                "timeout_seconds": 60,
+                "timeout_seconds": 1200,
             },
         ),
     ]

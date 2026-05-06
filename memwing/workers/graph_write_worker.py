@@ -12,6 +12,7 @@ from memwing.application.graph_write_processor import (
     GraphWriteProcessor,
     GraphWriteProcessorInputError,
 )
+from memwing.core.errors import MemWingFailure
 from memwing.core.models import AuditEvent, GraphWriteJob
 from memwing.ports.event_store import EventStoreUnitOfWorkPort, OutboxLockOwnershipError
 from memwing.ports.graph_backend import GraphBackendPort
@@ -39,8 +40,8 @@ class GraphWriteWorker:
         worker_id: str,
         lock_duration: timedelta = timedelta(minutes=5),
         retry_delay: timedelta = timedelta(minutes=1),
-        backend_timeout: timedelta = timedelta(seconds=30),
-        batch_size: int = 8,
+        backend_timeout: timedelta = timedelta(seconds=900),
+        batch_size: int = 1,
         max_project_concurrency: int = 1,
         max_global_concurrency: int = 16,
     ) -> None:
@@ -233,6 +234,8 @@ class GraphWriteWorker:
 def _safe_error_summary(exc: Exception) -> str:
     if isinstance(exc, GraphWriteProcessorInputError):
         return str(exc)
+    if isinstance(exc, MemWingFailure) and exc.reason_code.startswith("graphiti_"):
+        return exc.safe_message
     return exc.__class__.__name__
 
 

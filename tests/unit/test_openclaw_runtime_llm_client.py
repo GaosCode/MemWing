@@ -13,11 +13,12 @@ from memwing.ports.model_runtime import MemWingModelSelection
 
 
 class FakeOpenClawTransport:
-    def __init__(self, result: OpenClawCommandResult) -> None:
-        self.result = result
+    def __init__(self, result: OpenClawCommandResult | list[OpenClawCommandResult]) -> None:
+        self.results = [result] if isinstance(result, OpenClawCommandResult) else result
         self.calls: list[dict[str, object]] = []
 
     async def run(self, *, command, cwd, env, timeout_seconds):
+        result = self.results[min(len(self.calls), len(self.results) - 1)]
         self.calls.append(
             {
                 "command": tuple(command),
@@ -26,7 +27,7 @@ class FakeOpenClawTransport:
                 "timeout_seconds": timeout_seconds,
             }
         )
-        return self.result
+        return result
 
 
 def test_openclaw_runtime_client_runs_model_probe_through_cli() -> None:
@@ -164,6 +165,88 @@ def test_openclaw_runtime_client_maps_cli_failure_without_leaking_output() -> No
         asyncio.run(scenario())
 
     assert "secret" not in str(exc_info.value)
+    assert "stdout_summary=" in str(exc_info.value)
+    assert "stdout_len=" in str(exc_info.value)
+
+
+def test_openclaw_runtime_client_retries_empty_text_output_failure() -> None:
+    transport = FakeOpenClawTransport(
+        [
+            OpenClawCommandResult(
+                returncode=1,
+                stdout='{"ok":true,"outputs":[]}',
+                stderr='Error: No text output returned for provider "volcengine" model "current".',
+            ),
+            OpenClawCommandResult(
+                returncode=0,
+                stdout='{"ok":true,"provider":"volcengine","model":"current","outputs":[{"text":"done"}]}',
+                stderr="",
+            ),
+        ]
+    )
+    client = OpenClawRuntimeLLMClient(OpenClawRuntimeConfig(), transport=transport)
+
+    async def scenario():
+        return await client.complete(
+            LLMModelRequest(system_prompt="", user_prompt="Ping", trace_id=None)
+        )
+
+    response = asyncio.run(scenario())
+
+    assert response.text == "done"
+    assert len(transport.calls) == 2
+
+
+def test_openclaw_runtime_client_does_not_retry_generic_cli_failure() -> None:
+    transport = FakeOpenClawTransport(
+        [
+            OpenClawCommandResult(
+                returncode=1,
+                stdout="",
+                stderr="provider rate limit",
+            ),
+            OpenClawCommandResult(
+                returncode=0,
+                stdout='{"ok":true,"outputs":[{"text":"done"}]}',
+                stderr="",
+            ),
+        ]
+    )
+    client = OpenClawRuntimeLLMClient(OpenClawRuntimeConfig(), transport=transport)
+
+    async def scenario():
+        return await client.complete(
+            LLMModelRequest(system_prompt="", user_prompt="Ping", trace_id=None)
+        )
+
+    with pytest.raises(LLMProviderError, match="provider rate limit"):
+        asyncio.run(scenario())
+
+    assert len(transport.calls) == 1
+
+
+def test_openclaw_runtime_client_reports_empty_output_after_retries() -> None:
+    empty_output = OpenClawCommandResult(
+        returncode=1,
+        stdout='{"ok":true,"outputs":[]}',
+        stderr='Error: No text output returned for provider "volcengine" model "current".',
+    )
+    transport = FakeOpenClawTransport([empty_output, empty_output, empty_output])
+    client = OpenClawRuntimeLLMClient(OpenClawRuntimeConfig(), transport=transport)
+
+    async def scenario():
+        return await client.complete(
+            LLMModelRequest(system_prompt="", user_prompt="Ping", trace_id=None)
+        )
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        asyncio.run(scenario())
+
+    message = str(exc_info.value)
+    assert "failed after 3 empty-output attempts" in message
+    assert "stdout_summary=" in message
+    assert "stdout_len=" in message
+    assert len(transport.calls) == 3
 
 
 def test_openclaw_runtime_client_rejects_malformed_payload() -> None:

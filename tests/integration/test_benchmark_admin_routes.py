@@ -165,7 +165,8 @@ def test_benchmark_admin_preseed_expected_route_writes_expected_layers(monkeypat
     assert len(store._state.memory_items) == 2
     assert len(store._state.memory_pages) == 1
     assert len(store.memory_graph_links) == 4
-    assert len(graph.requests) == 2
+    assert graph.requests == []
+    assert len(graph.preseed_requests) == 1
 
 
 def _runtime_context_factory(
@@ -239,6 +240,7 @@ class _EvidenceIndex:
 class _RecordingGraphBackend:
     def __init__(self) -> None:
         self.requests = []
+        self.preseed_requests = []
 
     async def ingest_graph_jobs(self, request):
         from memwing.ports.graph_backend import GraphWriteBatchItemResult, GraphWriteBatchResult
@@ -273,6 +275,42 @@ class _RecordingGraphBackend:
                     retryable=False,
                 )
                 for item in request.requests
+            )
+        )
+
+    async def preseed_facts(self, request):
+        from memwing.ports.graph_backend import GraphFactPreseedItemResult, GraphFactPreseedResult
+
+        self.preseed_requests.append(request)
+        return GraphFactPreseedResult(
+            items=tuple(
+                GraphFactPreseedItemResult(
+                    memory_id=item.id,
+                    result=GraphWriteResult(
+                        backend="graphiti",
+                        facts=(
+                            GraphFact(
+                                backend="graphiti",
+                                fact_id=f"fact:{item.id}",
+                                fact_text=item.content,
+                                source_event_ids=item.source_event_ids,
+                                valid_from=item.valid_from,
+                                valid_to=item.valid_to,
+                                invalidated_at=None,
+                                confidence=1.0,
+                                metadata={"preseed_mode": "direct_neo4j"},
+                            ),
+                        ),
+                        invalidated_facts=(),
+                        backend_episode_refs=(f"episode:{item.id}",),
+                        backend_fact_refs=(f"fact:{item.id}",),
+                    ),
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+                for item in request.memory_items
             )
         )
 

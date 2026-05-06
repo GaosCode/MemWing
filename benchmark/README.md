@@ -100,9 +100,9 @@ Use `config.example.json` as the starting point and replace every placeholder in
 ```json
 {
   "judge": {
-    "provider": "volcengine_ark",
+    "provider": "",
     "api_key": "",
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "base_url": "",
     "model": "YOUR_MODEL_ID",
     "temperature": 0
   },
@@ -368,6 +368,182 @@ reads local OpenClaw memory files. With `--backend memwing-http`, ingest and
 evaluate use MemWing HTTP APIs directly and do not use `--live`. With
 `--backend memwing-openclaw-plugin`, ingest sends live Feishu/Lark messages
 through OpenClaw and evaluate still uses MemWing APIs as the evidence source.
+
+### One Write Case Runs
+
+A write case is one JSON file under `datasets/`, for example
+`datasets/bs001.json`. The case contains:
+
+- `seed_messages`: source collaboration messages to ingest.
+- `expected_memory_items`: facts that should become durable memory.
+- optional noise or non-memory material that should not be written as durable
+  facts.
+
+For write evaluation, a seed message is treated as forbidden/noise only when it
+is explicitly marked with `should_write_memory=false`. Other non-target facts
+may still be counted by the judge as `unexpected_facts`, but they are not
+forbidden by default.
+
+Run one case by passing `--case-id` and omitting `--batch`.
+
+OpenClaw-native single-case ingest:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --mode write \
+  --phase ingest \
+  --case-id bs001 \
+  --live \
+  --chat-id YOUR_CHAT_ID \
+  --yes
+```
+
+OpenClaw-native single-case evaluate:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --mode write \
+  --phase evaluate \
+  --case-id bs001 \
+  --yes
+```
+
+MemWing HTTP single-case ingest:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-http \
+  --mode write \
+  --phase ingest \
+  --case-id bs001 \
+  --yes
+```
+
+MemWing HTTP single-case evaluate:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-http \
+  --mode write \
+  --phase evaluate \
+  --case-id bs001 \
+  --yes
+```
+
+If multiple ingest runs exist and you need an exact pairing, copy the `run_id`
+from the ingest run's `config.json` and pass it explicitly:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-http \
+  --mode write \
+  --phase evaluate \
+  --case-id bs001 \
+  --ingest-run-id 20260505-123456 \
+  --yes
+```
+
+For `memwing-openclaw-plugin`, use the same single-case shape as `memwing-http`,
+but add `--live` to the ingest phase because seed messages must pass through
+OpenClaw:
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-openclaw-plugin \
+  --mode write \
+  --phase ingest \
+  --case-id bs001 \
+  --live \
+  --yes
+```
+
+```bash
+uv run memwing-benchmark \
+  --config config.local.json \
+  --backend memwing-openclaw-plugin \
+  --mode write \
+  --phase evaluate \
+  --case-id bs001 \
+  --yes
+```
+
+### Write Ingest Phase
+
+Ingest creates the source material for a later evaluation run. It does not
+score memory quality.
+
+OpenClaw-native ingest:
+
+- Requires `--live`.
+- Sends each `seed_messages[]` item to the configured live ingest chat.
+- Writes run artifacts under `runs/write-ingest/<date>/<run_id>/`.
+- Records sent Feishu messages and a `memory_writes` record with
+  `phase=ingest`.
+- Does not force OpenClaw to flush memory and does not wait for local memory
+  files to change.
+
+MemWing HTTP ingest:
+
+- Must not use `--live`.
+- Posts each `seed_messages[]` item as a Source Event to
+  `/v1/openclaw/events/ingest`.
+- Records accepted Source Event ids in `raw/records.json` under
+  `memory_writes[].source_event_ids`.
+- Uses the configured MemWing scope hints from `config.local.json`.
+- Does not judge memory quality; evaluation handles drain, readiness, search,
+  and judging.
+
+MemWing OpenClaw plugin ingest:
+
+- Requires `--live`.
+- Verifies the OpenClaw MemWing plugin config before sending messages.
+- Sends seed messages through OpenClaw, not directly to MemWing HTTP ingest.
+- Collects plugin/tool evidence proving that OpenClaw reached MemWing.
+- Fails if no stable MemWing plugin evidence is available.
+
+### Write Evaluate Phase
+
+Evaluate measures whether the previously ingested case became durable memory.
+
+OpenClaw-native evaluate:
+
+- Must omit `--live`.
+- Reads the current OpenClaw workspace.
+- Collects `MEMORY.md`, `DREAMS.md`, and `memory/*.md`.
+- Compares the collected memory text against each case's
+  `expected_memory_items`.
+- Uses the write judge to compute write recall, precision, written claim count,
+  noise count, wrong count, and stale count.
+
+MemWing HTTP and MemWing OpenClaw plugin evaluate:
+
+- Must omit `--live`.
+- Loads Source Event ids from the latest compatible write-ingest run, or from
+  `--ingest-run-id` when provided.
+- Calls benchmark admin drain for the case scope.
+- Calls pipeline await with the full derived readiness profile. This waits for
+  evidence, memory items, page memory, and graph write readiness according to
+  the server-side readiness contract.
+- Searches every `expected_memory_items[].fact` through
+  `/v1/memwing/tools/search-memory`.
+- Deduplicates returned contexts and passes them to the write judge.
+- Stores readiness, search evidence, selected ingest run id, selected ingest
+  run dir, and write judge output in `raw/records.json`.
+
+The output run directory is:
+
+```text
+runs/write-evaluate/<date>/<run_id>/
+```
+
+Each evaluate run writes `config.json`, `normalized.jsonl`, `scores.json`,
+`report.md`, and raw records under `raw/`.
 
 Recommended OpenClaw-native batch workflow:
 
@@ -709,7 +885,22 @@ Retrieval metrics:
 Write metrics:
 
 - `write_recall`: matched expected memory count divided by expected memory count.
-- `write_precision`: judge-estimated share of written facts that are correct.
+- `write_precision`: judge-estimated share of scored written facts that are
+  correct. For MemWing HTTP write evaluation, raw source layers
+  (`evidence_index`, `raw_events`, and `working_memory`) are excluded before the
+  write judge runs; they remain visible in search source mix and raw records for
+  retrieval observability.
+- `write_target_precision`: matched expected memory facts divided by all
+  judge-classified non-raw written facts. This is the preferred write accuracy
+  metric for comparing with the 2026-04-27 manual OpenClaw audit's
+  `signal_bullet_precision`.
+- `write_expected_memory_ratio`: legacy alias for `write_target_precision`.
+- `write_non_target_ratio`: judge-classified unexpected/non-target facts divided
+  by all judge-classified non-raw written facts.
+- `write_forbidden_memory_ratio`: judge-classified forbidden/noise facts divided
+  by all judge-classified non-raw written facts.
+- `avg_write_scored_context_count`: average number of non-raw contexts sent to
+  the write judge.
 - `write_changed_file_count`: number of non-empty local memory artifacts
   considered by OpenClaw-native write evaluation. This is `null` for
   `--backend memwing-http` and `--backend memwing-openclaw-plugin` because

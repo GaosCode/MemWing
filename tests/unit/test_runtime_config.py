@@ -26,8 +26,8 @@ def test_runtime_config_reads_graph_and_evidence_defaults() -> None:
     assert qdrant_url_from_env({}) == "http://127.0.0.1:6333"
     assert qdrant_collection_from_env({}) == "memwing_evidence"
     assert evidence_vector_size_from_env({}) == 1536
-    assert graph_write_timeout_seconds_from_env({}) == 180
-    assert graph_write_batch_size_from_env({}) == 8
+    assert graph_write_timeout_seconds_from_env({}) == 900
+    assert graph_write_batch_size_from_env({}) == 1
     assert graph_write_max_project_concurrency_from_env({}) == 1
     assert graph_write_max_global_concurrency_from_env({}) == 16
     assert graphiti_semantic_bulk_enabled_from_env({}) is False

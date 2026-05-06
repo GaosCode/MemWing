@@ -25,6 +25,7 @@ from memwing.core.models import (
 from memwing.ports.benchmark_admin import BenchmarkScope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import (
+    GraphFactPreseedRequest,
     GraphBackendPort,
     GraphWriteBatchRequest,
     GraphWriteRequest,
@@ -56,6 +57,11 @@ class BenchmarkPreseedExpectedResult:
     trace_id: str
 
 
+BenchmarkPreseedGraphMode = str
+_GRAPH_MODE_GRAPHITI = "graphiti"
+_GRAPH_MODE_DIRECT_NEO4J = "direct_neo4j"
+
+
 class BenchmarkExpectedPreseedWriter:
     def __init__(
         self,
@@ -73,11 +79,13 @@ class BenchmarkExpectedPreseedWriter:
         expected_memories: tuple[BenchmarkExpectedMemorySeed, ...],
         case_id: str | None,
         layers: tuple[str, ...],
+        graph_mode: BenchmarkPreseedGraphMode = _GRAPH_MODE_DIRECT_NEO4J,
         now: datetime | None = None,
     ) -> BenchmarkPreseedExpectedResult:
         if not expected_memories:
             raise ValueError("expected_memories must not be empty")
         selected_layers = _validate_preseed_layers(layers)
+        selected_graph_mode = _validate_graph_mode(graph_mode)
         if "graph" in selected_layers and self._graph_backend is None:
             raise ValueError("graph layer requested but graph backend is unavailable")
 
@@ -118,11 +126,17 @@ class BenchmarkExpectedPreseedWriter:
 
         graph_results = ()
         if "graph" in selected_layers:
-            graph_results = await self._preseed_graph(
-                memory_items=memory_items,
-                source_events=sources,
-                now=seeded_at,
-            )
+            if selected_graph_mode == _GRAPH_MODE_DIRECT_NEO4J:
+                graph_results = await self._preseed_graph_direct(
+                    memory_items=memory_items,
+                    source_events=sources,
+                )
+            else:
+                graph_results = await self._preseed_graph_via_graphiti(
+                    memory_items=memory_items,
+                    source_events=sources,
+                    now=seeded_at,
+                )
 
         async with self._unit_of_work.transaction() as tx:
             for source_event in sources:
@@ -186,7 +200,32 @@ class BenchmarkExpectedPreseedWriter:
             trace_id=f"benchmark_preseed_expected:{scope.project_memory_space_id}",
         )
 
-    async def _preseed_graph(
+    async def _preseed_graph_direct(
+        self,
+        *,
+        memory_items: tuple[MemoryItem, ...],
+        source_events: tuple[SourceEvent, ...],
+    ) -> tuple[tuple[MemoryItem, GraphWriteResult], ...]:
+        if self._graph_backend is None:
+            raise ValueError("graph layer requested but graph backend is unavailable")
+        preseed_result = await self._graph_backend.preseed_facts(
+            GraphFactPreseedRequest(memory_items=memory_items, source_events=source_events)
+        )
+        result_by_memory_id = {item.memory_id: item for item in preseed_result.items}
+        graph_results: list[tuple[MemoryItem, GraphWriteResult]] = []
+        for item in memory_items:
+            item_result = result_by_memory_id.get(item.id)
+            if item_result is None or item_result.result is None:
+                reason = (
+                    item_result.reason_code
+                    if item_result is not None and item_result.reason_code is not None
+                    else "graph_preseed_failed"
+                )
+                raise ValueError(reason)
+            graph_results.append((item, item_result.result))
+        return tuple(graph_results)
+
+    async def _preseed_graph_via_graphiti(
         self,
         *,
         memory_items: tuple[MemoryItem, ...],
@@ -231,6 +270,12 @@ def _validate_preseed_layers(layers: tuple[str, ...]) -> tuple[str, ...]:
     if "memory_items" not in requested:
         raise ValueError("memory_items layer is required for expected preseed")
     return tuple(dict.fromkeys(requested))
+
+
+def _validate_graph_mode(graph_mode: BenchmarkPreseedGraphMode) -> BenchmarkPreseedGraphMode:
+    if graph_mode in {_GRAPH_MODE_DIRECT_NEO4J, _GRAPH_MODE_GRAPHITI}:
+        return graph_mode
+    raise ValueError(f"unsupported graph preseed mode: {graph_mode}")
 
 
 def _expected_source_event(

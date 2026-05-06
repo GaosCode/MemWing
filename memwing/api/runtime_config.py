@@ -66,7 +66,7 @@ def graphiti_semantic_bulk_enabled_from_env(env: Mapping[str, str] | None = None
 
 
 def graph_write_timeout_seconds_from_env(env: Mapping[str, str] | None = None) -> float:
-    raw_value = _optional_env(env, "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS") or "180"
+    raw_value = _optional_env(env, "MEMWING_GRAPH_WRITE_TIMEOUT_SECONDS") or "900"
     try:
         timeout_seconds = float(raw_value)
     except ValueError as exc:
@@ -81,7 +81,7 @@ def graph_write_timeout_seconds_from_env(env: Mapping[str, str] | None = None) -
 
 
 def graph_write_batch_size_from_env(env: Mapping[str, str] | None = None) -> int:
-    return _positive_int_env(env, "MEMWING_GRAPH_WRITE_BATCH_SIZE", "8")
+    return _positive_int_env(env, "MEMWING_GRAPH_WRITE_BATCH_SIZE", "1")
 
 
 def graph_write_max_project_concurrency_from_env(env: Mapping[str, str] | None = None) -> int:

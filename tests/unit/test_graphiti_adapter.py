@@ -24,7 +24,12 @@ from memwing.infrastructure.graph.graphiti_adapter import (
 from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedder
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
 from memwing.infrastructure.graph.graphiti_reranker import GraphitiNoProviderReranker
-from memwing.ports.graph_backend import GraphWriteBatchRequest, GraphWriteRequest
+from memwing.infrastructure.llm.errors import LLMProviderError
+from memwing.ports.graph_backend import (
+    GraphFactPreseedRequest,
+    GraphWriteBatchRequest,
+    GraphWriteRequest,
+)
 from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
 
 
@@ -93,6 +98,35 @@ class FakeGraphiti:
         ]
 
 
+class FakeGraphitiWithDriver(FakeGraphiti):
+    def __init__(self) -> None:
+        super().__init__()
+        self.driver = FakeGraphDriver()
+        self.embedder = FakeGraphitiEmbedder()
+
+
+class FakeGraphDriver:
+    def __init__(self) -> None:
+        from graphiti_core.driver.driver import GraphProvider
+
+        self.provider = GraphProvider.NEO4J
+        self.graph_operations_interface = None
+        self.queries: list[tuple[str, dict[str, object]]] = []
+
+    async def execute_query(self, query: str, **kwargs: object):
+        self.queries.append((query, kwargs))
+        return [], None, None
+
+
+class FakeGraphitiEmbedder:
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
+        self.batches.append(input_data_list)
+        return [[float(index + 1)] for index, _ in enumerate(input_data_list)]
+
+
 class FakeSemanticBulkGraphiti(FakeGraphiti):
     def __init__(self) -> None:
         super().__init__()
@@ -115,6 +149,13 @@ class FakeSemanticBulkGraphiti(FakeGraphiti):
             )
             for index, episode in enumerate(bulk_episodes, start=1)
         ]
+
+
+class FailingGraphiti(FakeGraphiti):
+    async def add_episode(self, **kwargs: object) -> FakeAddEpisodeResult:
+        raise LLMProviderError(
+            "OpenClaw runtime model run failed with exit code 1; stderr=provider overloaded"
+        )
 
 
 class FakeLLMClient:
@@ -348,6 +389,32 @@ def test_graphiti_adapter_keeps_semantic_bulk_behind_config_gate() -> None:
     assert all(item.result is not None for item in result.items)
 
 
+def test_graphiti_adapter_preserves_safe_episode_failure_message() -> None:
+    adapter = GraphitiAdapter(FailingGraphiti())
+
+    async def scenario():
+        return await adapter.ingest_graph_jobs(
+            GraphWriteBatchRequest(
+                requests=(
+                    GraphWriteRequest(
+                        job=_graph_job(),
+                        memory_item=_memory_item(),
+                        source_events=(_source_event(),),
+                    ),
+                )
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.items[0].result is None
+    assert result.items[0].error_type == "LLMProviderError"
+    assert result.items[0].reason_code == "graphiti_ordered_episode_failed"
+    assert result.items[0].error_message == (
+        "OpenClaw runtime model run failed with exit code 1; stderr=provider overloaded"
+    )
+
+
 def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     graphiti = FakeGraphiti()
     adapter = GraphitiAdapter(graphiti)
@@ -376,6 +443,37 @@ def test_graphiti_adapter_search_maps_edges_to_memory_results() -> None:
     assert result.results[0].id == "edge_002"
     assert result.results[0].source == "graph_backend"
     assert result.results[0].metadata["backend"] == "graphiti"
+
+
+def test_graphiti_adapter_direct_preseed_writes_graphiti_shape_without_add_episode() -> None:
+    graphiti = FakeGraphitiWithDriver()
+    adapter = GraphitiAdapter(graphiti)
+
+    async def scenario():
+        return await adapter.preseed_facts(
+            GraphFactPreseedRequest(
+                memory_items=(_memory_item(),),
+                source_events=(_source_event(),),
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert graphiti.add_episode_calls == []
+    assert graphiti.embedder.batches == [
+        [
+            "MemWing benchmark expected memory",
+            "Decision: roadmap owner",
+            "Ada owns the roadmap.",
+        ]
+    ]
+    assert len(graphiti.driver.queries) == 4
+    assert any("MERGE (source)-[e:RELATES_TO" in query for query, _ in graphiti.driver.queries)
+    assert result.items[0].memory_id == "memory_001"
+    assert result.items[0].result is not None
+    assert result.items[0].result.backend_episode_refs
+    assert result.items[0].result.facts[0].fact_text == "Ada owns the roadmap."
+    assert result.items[0].result.facts[0].metadata["preseed_mode"] == "direct_neo4j"
 
 
 def test_graphiti_adapter_maps_invalid_project_id_to_safe_group_id() -> None:

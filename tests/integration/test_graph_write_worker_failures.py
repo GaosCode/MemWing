@@ -55,15 +55,20 @@ def test_graph_write_worker_retries_then_dead_letters_backend_failures() -> None
         assert store.graph_write_jobs[0].attempts == 2
         assert store.graph_write_jobs[0].dead_letter_reason == "ProviderTransientFailure"
         assert store.memory_graph_links == ()
-        assert [event.stage for event in store.audit_events] == [
+        failure_events = [
+            event
+            for event in store.audit_events
+            if event.stage in {"graph_write.retry", "graph_write.dead_letter"}
+        ]
+        assert [event.stage for event in failure_events] == [
             "graph_write.retry",
             "graph_write.dead_letter",
         ]
-        assert [event.reason_code for event in store.audit_events] == [
+        assert [event.reason_code for event in failure_events] == [
             "provider_unavailable",
             "provider_unavailable",
         ]
-        assert [event.reason_text for event in store.audit_events] == [
+        assert [event.reason_text for event in failure_events] == [
             "ProviderTransientFailure",
             "ProviderTransientFailure",
         ]
@@ -175,6 +180,35 @@ def test_graph_write_worker_dead_letter_error_summary_excludes_raw_content() -> 
     asyncio.run(scenario())
 
 
+def test_graph_write_worker_audits_graphiti_provider_diagnostic() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source_event())
+            await tx.memory_items.upsert(memory_item())
+            await tx.graph_write_jobs.enqueue(graph_job(max_attempts=1))
+
+        worker = GraphWriteWorker(
+            store,
+            graph_backend=GraphitiDiagnosticFailureBackend(),
+            worker_id="graph_worker_001",
+        )
+
+        result = await worker.run_once(now=NOW)
+        job = store.graph_write_jobs[0]
+
+        assert result.dead_lettered == 1
+        assert job.last_error == (
+            "OpenClaw runtime model run failed with exit code 1; stderr=provider overloaded"
+        )
+        assert store.audit_events[-1].stage == "graph_write.dead_letter"
+        assert store.audit_events[-1].reason_code == "graphiti_ordered_episode_failed"
+        assert store.audit_events[-1].reason_text == job.last_error
+
+    asyncio.run(scenario())
+
+
 class PermanentFailureGraphBackend:
     async def search_current(self, query):
         raise NotImplementedError
@@ -215,6 +249,39 @@ class TransientFailureGraphBackend:
         raise ProviderTransientFailure(
             "provider_unavailable",
             "Provider is temporarily unavailable.",
+        )
+
+    async def mark_source_redacted(self, source_event_id, scope):
+        raise NotImplementedError
+
+
+class GraphitiDiagnosticFailureBackend:
+    async def search_current(self, query):
+        raise NotImplementedError
+
+    async def search_history(self, query):
+        raise NotImplementedError
+
+    async def ingest_graph_job(self, request):
+        raise NotImplementedError
+
+    async def ingest_graph_jobs(self, request):
+        from memwing.ports.graph_backend import GraphWriteBatchItemResult, GraphWriteBatchResult
+
+        return GraphWriteBatchResult(
+            items=(
+                GraphWriteBatchItemResult(
+                    job_id=request.requests[0].job.id,
+                    result=None,
+                    error_type="LLMProviderError",
+                    error_message=(
+                        "OpenClaw runtime model run failed with exit code 1; "
+                        "stderr=provider overloaded"
+                    ),
+                    reason_code="graphiti_ordered_episode_failed",
+                    retryable=True,
+                ),
+            )
         )
 
     async def mark_source_redacted(self, source_event_id, scope):

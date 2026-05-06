@@ -74,7 +74,7 @@ class MemWingPageMemorySynthesisAdapter(PageMemorySynthesisPort):
                 runtime=cache_runtime,
                 model=cache_model,
                 transport=cache_transport,
-                prompt_hash="page_memory_prompt:v1",
+                prompt_hash="page_memory_prompt:v2",
                 schema_hash="page_memory_schema:v1",
                 now=now or (lambda: datetime.now(UTC)),
             )
@@ -235,6 +235,7 @@ def _page_memory_repair_prompt(
 
 _PAGE_MEMORY_SYSTEM_PROMPT = """\
 You are MemWing Page Memory synthesis. Return one compact JSON object only, no markdown and no prose.
+Language policy: when the source events and linked memory items are mainly Chinese, every generated title, brief, topic title, topic summary, open question, and next step must be Chinese. Do not translate Chinese source facts into English. Preserve original Chinese names, terms, dates, thresholds, metrics, and quoted wording.
 Use only ids from the input. Every topic must cite non-empty source_event_ids.
 Do not cover every source event separately. Merge duplicate or similar events.
 Return at most 3 topics. Each topic must cite at most 2 source_event_ids.
@@ -252,6 +253,10 @@ def _page_memory_user_prompt(request: PageMemorySynthesisRequest) -> str:
             f"Existing page memory:\n{_existing_page_block(request.existing_page)}",
             f"Linked memory items:\n{_memory_items_block(request.linked_memory_items)}",
             f"Allowed linked_memory_item_ids: {', '.join(item.id for item in request.linked_memory_items) or 'none'}",
+            "Language requirement:\n"
+            "- 如果 Source events 或 Linked memory items 主要是中文，输出 JSON 中的 title/brief/topics/open_questions/next_steps 必须全部使用中文。\n"
+            "- 不要把中文事实翻译成英文；保留原文中的项目名、人名、指标、阈值、时间和引用短语。\n"
+            "- 如果需要概括，只能用中文概括，不能生成英文泛摘要。",
             (
                 "Synthesize the current page memory now. Return JSON only. "
                 f"Use no more than {_MAX_TOPIC_COUNT} topics and no more than "

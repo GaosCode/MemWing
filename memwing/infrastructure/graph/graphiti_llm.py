@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from memwing.infrastructure.graph.graphiti_cache_context import graphiti_extraction_cache_scope
 from memwing.infrastructure.llm.caching_llm import ValidatedLLMJsonCache, ValidatedLLMJsonCacheMetrics
-from memwing.infrastructure.llm.errors import LLMOutputSchemaError
+from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
 from memwing.infrastructure.llm.structured_output import parse_json_object
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.model_runtime import LLMModelClient, LLMModelRequest
@@ -89,7 +89,15 @@ class GraphitiMemWingLLMClient(LLMClient):
                     schema_hash=schema_hash,
                 ),
             )
-        response = await self._client.complete(request)
+        try:
+            response = await self._client.complete(request)
+        except LLMProviderError as exc:
+            raise LLMProviderError(
+                "Graphiti LLM provider request failed"
+                f" prompt_name={prompt_name or 'default'}"
+                f" response_model={response_model.__name__ if response_model is not None else 'none'}"
+                f"; {exc}"
+            ) from exc
         if self._cache is not None:
             self._cache.metrics.provider_calls += 1
         parsed = parse_json_object(response.text, source="Graphiti MemWing LLM")
@@ -144,7 +152,10 @@ def _request_from_messages(
         user_parts.append(f"Respond with a JSON object matching this schema:\n{schema}")
     if group_id is not None:
         user_parts.append(
-            f"Preserve the source language for extracted information in group {group_id}."
+            "Language requirement: preserve the source language for extracted information "
+            f"in group {group_id}. If the episode or memory item is mainly Chinese, all "
+            "entity names, facts, summaries, attributes, and extracted relationship text "
+            "must be Chinese. Do not translate Chinese source facts into English."
         )
 
     user_prompt = "\n\n".join(user_parts).strip()
@@ -179,7 +190,7 @@ def _cache_input_text(request: LLMModelRequest) -> str:
 
 
 def _prompt_hash(prompt_name: str | None) -> str:
-    return f"graphiti_extraction:{prompt_name or 'default'}:v1"
+    return f"graphiti_extraction:{prompt_name or 'default'}:v2"
 
 
 def _schema_hash(response_model: type[BaseModel] | None) -> str:

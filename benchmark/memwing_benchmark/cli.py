@@ -67,6 +67,7 @@ MEMWING_PLUGIN_CONVERSATION_ACCESS_CONFIG_PATH = (
 MEMWING_FULL_DERIVED_READINESS_PROFILE = "full-derived"
 MEMWING_REAL_SEARCH_MAX_RESULTS = 20
 MEMWING_WRITE_RAW_SOURCES = frozenset({"evidence_index", "raw_events", "working_memory"})
+MEMWING_WRITE_EVALUATE_MIN_PIPELINE_TIMEOUT_SECONDS = 1200.0
 
 
 @app.command("search")
@@ -199,6 +200,7 @@ def main(
     memory_timeout_seconds: float = typer.Option(60.0, "--memory-timeout-seconds"),
     pg_preseed_per_case: bool = typer.Option(False, "--pg-preseed-per-case"),
     preseed_expected: bool = typer.Option(False, "--preseed-expected"),
+    preseed_graph_mode: str = typer.Option("direct_neo4j", "--preseed-graph-mode"),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -227,6 +229,7 @@ def main(
             memory_timeout_seconds=memory_timeout_seconds,
             pg_preseed_per_case=pg_preseed_per_case,
             preseed_expected=preseed_expected,
+            preseed_graph_mode=preseed_graph_mode,
         )
     except BenchmarkError as exc:
         typer.secho(str(exc), err=True, fg=typer.colors.RED)
@@ -570,6 +573,7 @@ def run(
     memory_timeout_seconds: float,
     pg_preseed_per_case: bool,
     preseed_expected: bool,
+    preseed_graph_mode: str,
 ) -> Path:
     if backend not in SUPPORTED_BACKENDS:
         raise BenchmarkError(
@@ -606,6 +610,8 @@ def run(
         raise BenchmarkError("--preseed-expected is only supported with --mode retrieval")
     if preseed_expected and pg_preseed_per_case:
         raise BenchmarkError("--preseed-expected cannot be combined with --pg-preseed-per-case")
+    if preseed_graph_mode not in {"direct_neo4j", "graphiti"}:
+        raise BenchmarkError("--preseed-graph-mode must be direct_neo4j or graphiti")
     if pg_preseed_per_case and backend not in {
         MEMWING_HTTP_BACKEND,
         MEMWING_OPENCLAW_PLUGIN_BACKEND,
@@ -627,6 +633,12 @@ def run(
         runs_dir=runs_dir,
         chat_id=chat_id,
         trajectory_dir=trajectory_dir,
+    )
+    config = _with_memwing_write_evaluate_pipeline_timeout(
+        config,
+        backend=backend,
+        mode=mode,
+        phase=phase,
     )
     validate_config_for_backend(config, backend=backend)
     cases = load_cases(cases_path, case_id=case_id)
@@ -670,6 +682,7 @@ def run(
                 config=config,
                 pg_preseed_per_case=pg_preseed_per_case,
                 preseed_expected=preseed_expected,
+                preseed_graph_mode=preseed_graph_mode,
                 pg_cleanup_cases=pg_cleanup_cases,
             )
         elif phase == "ingest":
@@ -715,6 +728,7 @@ def run(
             "live": live,
             "pg_preseed_per_case": pg_preseed_per_case,
             "preseed_expected": preseed_expected,
+            "preseed_graph_mode": preseed_graph_mode if preseed_expected else None,
             "requested_ingest_run_id": ingest_run_id,
             **_memwing_pipeline_run_config(
                 pg_preseed_per_case=pg_preseed_per_case,
@@ -764,6 +778,7 @@ def run(
                 config=config,
                 pg_preseed_per_case=pg_preseed_per_case,
                 preseed_expected=preseed_expected,
+                preseed_graph_mode=preseed_graph_mode,
                 pg_cleanup_cases=pg_cleanup_cases,
             )
             _record_memwing_http_records(
@@ -792,6 +807,7 @@ def run(
                 "live": live,
                 "pg_preseed_per_case": pg_preseed_per_case,
                 "preseed_expected": preseed_expected,
+                "preseed_graph_mode": preseed_graph_mode if preseed_expected else None,
                 **_memwing_pipeline_run_config(
                     pg_preseed_per_case=pg_preseed_per_case,
                     preseed_expected=preseed_expected,
@@ -1029,6 +1045,27 @@ def run(
     )
     typer.echo(str(run_dir))
     return run_dir
+
+
+def _with_memwing_write_evaluate_pipeline_timeout(
+    config: Any,
+    *,
+    backend: str,
+    mode: str,
+    phase: str,
+) -> Any:
+    if backend not in {MEMWING_HTTP_BACKEND, MEMWING_OPENCLAW_PLUGIN_BACKEND}:
+        return config
+    if mode != "write" or phase not in {"full", "evaluate"}:
+        return config
+    if config.memwing.poll_timeout_seconds >= MEMWING_WRITE_EVALUATE_MIN_PIPELINE_TIMEOUT_SECONDS:
+        return config
+    memwing_config = config.memwing.model_copy(
+        update={
+            "poll_timeout_seconds": MEMWING_WRITE_EVALUATE_MIN_PIPELINE_TIMEOUT_SECONDS,
+        }
+    )
+    return config.model_copy(update={"memwing": memwing_config})
 
 
 def _run_mode_name(*, mode: str, phase: str, batch: bool) -> str:
@@ -1716,6 +1753,7 @@ def _run_memwing_retrieval_batch(
     config: Any | None = None,
     pg_preseed_per_case: bool = False,
     preseed_expected: bool = False,
+    preseed_graph_mode: str = "direct_neo4j",
     pg_cleanup_cases: list[BenchmarkCase] | None = None,
 ) -> list[NormalizedResult]:
     if poll_interval_seconds <= 0:
@@ -1727,7 +1765,7 @@ def _run_memwing_retrieval_batch(
     if preseed_expected:
         _confirm_side_effect(
             "清理每个 benchmark case scope，并通过 MemWing admin preseed-expected "
-            "写入 expected memory_items、Graphiti graph 和 page_memory",
+            "写入 expected memory_items、direct graph preseed 和 page_memory",
             yes,
         )
         return _run_memwing_expected_preseed_retrieval_batch(
@@ -1737,6 +1775,7 @@ def _run_memwing_retrieval_batch(
             adapter=adapter,
             judge=judge,
             raw_records=raw_records,
+            graph_mode=preseed_graph_mode,
         )
     if pg_preseed_per_case:
         _confirm_side_effect(
@@ -1801,6 +1840,7 @@ def _run_memwing_expected_preseed_retrieval_batch(
     adapter: MemWingAdapter,
     judge: LlmJudge | None,
     raw_records: dict[str, Any],
+    graph_mode: str,
 ) -> list[NormalizedResult]:
     results: list[NormalizedResult] = []
     for case in cases:
@@ -1812,6 +1852,7 @@ def _run_memwing_expected_preseed_retrieval_batch(
             judge=judge,
             raw_records=raw_records,
             results=results,
+            graph_mode=graph_mode,
         )
     return results
 
@@ -1915,6 +1956,7 @@ def _run_memwing_expected_preseed_retrieval_case(
     judge: LlmJudge | None,
     raw_records: dict[str, Any],
     results: list[NormalizedResult],
+    graph_mode: str,
 ) -> None:
     scope = memwing_case_scope(config=adapter.config, run_id=run_id, case_id=case.case_id)
     _debug(
@@ -1931,7 +1973,12 @@ def _run_memwing_expected_preseed_retrieval_case(
         {"case_id": case.case_id, "scope": scope.payload(), "response": cleanup}
     )
 
-    preseed = adapter.preseed_expected_memories(case=case, run_id=run_id, scope=scope)
+    preseed = adapter.preseed_expected_memories(
+        case=case,
+        run_id=run_id,
+        scope=scope,
+        graph_mode=graph_mode,
+    )
     seed_completed_at = utc_now_iso()
     raw_records.setdefault("memwing_preseed_expected", []).append(
         {"case_id": case.case_id, "scope": scope.payload(), "response": preseed}

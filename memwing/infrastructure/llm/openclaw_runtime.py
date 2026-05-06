@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 import math
 import os
+import re
 import signal
 import shlex
 import sys
@@ -109,6 +110,8 @@ class OpenClawRuntimeTransport(Protocol):
 
 
 class OpenClawRuntimeLLMClient(LLMModelClient):
+    _MAX_EMPTY_OUTPUT_ATTEMPTS = 3
+
     def __init__(
         self,
         config: OpenClawRuntimeConfig,
@@ -151,16 +154,31 @@ class OpenClawRuntimeLLMClient(LLMModelClient):
         )
 
     async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
-        result = await self._transport.run(
-            command=self._command(request),
-            cwd=self._config.cwd,
-            env=self._config.env,
-            timeout_seconds=self._config.timeout_seconds,
-        )
-        if result.returncode != 0:
-            raise LLMProviderError(
-                f"OpenClaw runtime model run failed with exit code {result.returncode}"
+        result: OpenClawCommandResult | None = None
+        for attempt in range(self._MAX_EMPTY_OUTPUT_ATTEMPTS):
+            result = await self._transport.run(
+                command=self._command(request),
+                cwd=self._config.cwd,
+                env=self._config.env,
+                timeout_seconds=self._config.timeout_seconds,
             )
+            if result.returncode == 0:
+                break
+            if not _is_empty_text_output_failure(result):
+                raise LLMProviderError(_command_failure_message("model run", result))
+            if attempt == self._MAX_EMPTY_OUTPUT_ATTEMPTS - 1:
+                raise LLMProviderError(
+                    _command_failure_message(
+                        f"model run failed after {self._MAX_EMPTY_OUTPUT_ATTEMPTS} empty-output attempts",
+                        result,
+                    )
+                )
+            _debug_log(
+                "OpenClaw model run returned no text output; retrying "
+                f"attempt={attempt + 2}/{self._MAX_EMPTY_OUTPUT_ATTEMPTS}"
+            )
+        if result is None:
+            raise LLMProviderError("OpenClaw runtime model run did not execute")
 
         payload = _parse_cli_json(result.stdout)
         text = _output_text(payload)
@@ -257,9 +275,7 @@ class OpenClawRuntimeEmbeddingClient(EmbeddingModelClient):
             timeout_seconds=self._config.timeout_seconds,
         )
         if result.returncode != 0:
-            raise LLMProviderError(
-                f"OpenClaw runtime embedding run failed with exit code {result.returncode}"
-            )
+            raise LLMProviderError(_command_failure_message("embedding run", result))
 
         payload = _parse_cli_json(result.stdout)
         return _embedding_outputs(payload, expected_texts=inputs)
@@ -298,16 +314,18 @@ class SubprocessOpenClawRuntimeTransport:
             # Use a temp file for stdout to avoid pipe hang on macOS Python 3.13
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
                 stdout_path = tmp.name
+            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+                stderr_path = tmp.name
 
             try:
-                with open(stdout_path, "wb") as out_fh:
+                with open(stdout_path, "wb") as out_fh, open(stderr_path, "wb") as err_fh:
                     proc = _subprocess.Popen(
                         tuple(command),
                         cwd=cwd,
                         env=process_env,
                         stdin=_subprocess.DEVNULL,
                         stdout=out_fh,
-                        stderr=_subprocess.DEVNULL,
+                        stderr=err_fh,
                         start_new_session=True,
                     )
                     _debug_log(f"OpenClaw pid={proc.pid} waiting (max {timeout_seconds:.0f}s)...")
@@ -324,14 +342,23 @@ class SubprocessOpenClawRuntimeTransport:
 
                 with open(stdout_path, "rb") as in_fh:
                     stdout_bytes = in_fh.read()
+                with open(stderr_path, "rb") as in_fh:
+                    stderr_bytes = in_fh.read()
             finally:
                 try:
                     os.unlink(stdout_path)
                 except OSError:
                     pass
+                try:
+                    os.unlink(stderr_path)
+                except OSError:
+                    pass
 
-            _debug_log(f"OpenClaw pid={proc.pid} done rc={proc.returncode} out_len={len(stdout_bytes)}")
-            return proc.returncode, stdout_bytes, b""
+            _debug_log(
+                f"OpenClaw pid={proc.pid} done rc={proc.returncode} "
+                f"out_len={len(stdout_bytes)} err_len={len(stderr_bytes)}"
+            )
+            return proc.returncode, stdout_bytes, stderr_bytes
 
         try:
             returncode, stdout_bytes, stderr_bytes = await asyncio.to_thread(_run_sync)
@@ -355,6 +382,46 @@ def _debug_log(msg: str) -> None:
     if not _DEBUG_OPENCLAW:
         return
     print(f"[openclaw-runtime] {msg}", file=sys.stderr, flush=True)
+
+
+def _command_failure_message(label: str, result: OpenClawCommandResult) -> str:
+    parts = [f"OpenClaw runtime {label} failed with exit code {result.returncode}"]
+    stderr_summary = _safe_process_output_summary(result.stderr)
+    if stderr_summary:
+        parts.append(f"stderr={stderr_summary}")
+    elif result.stderr:
+        parts.append(f"stderr_len={len(result.stderr)}")
+    if result.stdout:
+        stdout_summary = _safe_process_output_summary(result.stdout)
+        if stdout_summary:
+            parts.append(f"stdout_summary={stdout_summary}")
+        parts.append(f"stdout_len={len(result.stdout)}")
+    return "; ".join(parts)
+
+
+def _is_empty_text_output_failure(result: OpenClawCommandResult) -> bool:
+    if result.returncode == 0:
+        return False
+    return "No text output returned" in result.stderr
+
+
+def _safe_process_output_summary(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    summary = " | ".join(lines[-3:])
+    summary = re.sub(r"[\x00-\x1f\x7f]+", " ", summary)
+    summary = re.sub(
+        r"(?i)(authorization|api[_-]?key|token|password|secret)(\s*[:=]\s*)(\S+)",
+        r"\1\2[redacted]",
+        summary,
+    )
+    summary = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", summary)
+    summary = re.sub(r"(?i)secret", "[redacted]", summary)
+    if len(summary) > 500:
+        return f"{summary[:500]}...[truncated]"
+    return summary
 
 
 def _validate_runtime_config(config: OpenClawRuntimeConfig) -> None:

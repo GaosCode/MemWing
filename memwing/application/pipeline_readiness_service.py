@@ -11,6 +11,7 @@ from memwing.application.pipeline_readiness_status import (
     LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
     PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
     build_derived_readiness,
+    profile_terminally_blocked,
     profile_ready,
     warnings_for_readiness,
 )
@@ -163,10 +164,14 @@ class PipelineReadinessService:
             raise ValueError("pipeline await timeout_seconds must be non-negative")
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         last = await self.check(command)
-        while not last.ready and asyncio.get_running_loop().time() < deadline:
+        while (
+            not last.ready
+            and not profile_terminally_blocked(profile=command.profile, derived=last.derived)
+            and asyncio.get_running_loop().time() < deadline
+        ):
             await asyncio.sleep(min(self._poll_interval_seconds, max(0.0, deadline - asyncio.get_running_loop().time())))
             last = await self.check(command)
-        if last.ready:
+        if last.ready or profile_terminally_blocked(profile=command.profile, derived=last.derived):
             return last
         return replace(last, timed_out=True)
 

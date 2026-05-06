@@ -22,6 +22,7 @@ from memwing.ports.graph_backend import (
     GraphBackendPort,
     GraphWriteBatchItemResult,
     GraphWriteBatchRequest,
+    GraphWriteBatchResult,
     GraphWriteRequest,
 )
 from memwing.ports.lifecycle_transition import LifecycleTransitionPort, LifecycleTransitionRequest
@@ -130,7 +131,28 @@ class GraphWriteProcessor:
         if not requests:
             return tuple(build_results)
 
-        await self._record_backend_started(requests, now=now)
+        processed = await self._run_backend_batch(
+            tuple(requests),
+            now=now,
+            fallback_on_timeout=True,
+        )
+        logger.info(
+            "graph_write.processor.batch_completed job_count=%s processed_count=%s duration_ms=%.1f",
+            len(jobs),
+            len(build_results) + len(processed),
+            _elapsed_ms(batch_started),
+        )
+        return (*build_results, *processed)
+
+    async def _run_backend_batch(
+        self,
+        requests: tuple[GraphWriteRequest, ...],
+        *,
+        now: datetime,
+        fallback_on_timeout: bool,
+    ) -> tuple[GraphWriteBatchProcessingItemResult, ...]:
+        timeout_seconds = self._backend_timeout_seconds(len(requests))
+        await self._record_backend_started(requests, now=now, timeout_seconds=timeout_seconds)
         backend_started = perf_counter()
         logger.info(
             "graph_write.processor.backend_batch_started job_count=%s project_memory_space_id=%s "
@@ -138,14 +160,47 @@ class GraphWriteProcessor:
             len(requests),
             requests[0].job.project_memory_space_id,
             requests[0].job.serialization_key,
-            self._backend_timeout.total_seconds(),
+            timeout_seconds,
         )
         try:
             batch_result = await asyncio.wait_for(
                 self._graph_backend.ingest_graph_jobs(
                     GraphWriteBatchRequest(requests=tuple(requests))
                 ),
-                timeout=self._backend_timeout.total_seconds(),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            if fallback_on_timeout and len(requests) > 1:
+                logger.info(
+                    "graph_write.processor.backend_batch_timeout_fallback job_count=%s "
+                    "duration_ms=%.1f",
+                    len(requests),
+                    _elapsed_ms(backend_started),
+                )
+                processed: list[GraphWriteBatchProcessingItemResult] = []
+                for request in requests:
+                    processed.extend(
+                        await self._run_backend_batch(
+                            (request,),
+                            now=now,
+                            fallback_on_timeout=False,
+                        )
+                    )
+                return tuple(processed)
+            logger.info(
+                "graph_write.processor.backend_batch_failed job_count=%s duration_ms=%.1f "
+                "error_type=%s",
+                len(requests),
+                _elapsed_ms(backend_started),
+                exc.__class__.__name__,
+            )
+            return tuple(
+                GraphWriteBatchProcessingItemResult(
+                    job=request.job,
+                    result=None,
+                    error=exc,
+                )
+                for request in requests
             )
         except Exception as exc:
             logger.info(
@@ -155,16 +210,13 @@ class GraphWriteProcessor:
                 _elapsed_ms(backend_started),
                 exc.__class__.__name__,
             )
-            return (
-                *build_results,
-                *(
-                    GraphWriteBatchProcessingItemResult(
-                        job=request.job,
-                        result=None,
-                        error=exc,
-                    )
-                    for request in requests
-                ),
+            return tuple(
+                GraphWriteBatchProcessingItemResult(
+                    job=request.job,
+                    result=None,
+                    error=exc,
+                )
+                for request in requests
             )
         logger.info(
             "graph_write.processor.backend_batch_completed job_count=%s item_count=%s "
@@ -174,8 +226,21 @@ class GraphWriteProcessor:
             _elapsed_ms(backend_started),
         )
 
+        return await self._complete_backend_batch_result(
+            requests=requests,
+            batch_result=batch_result,
+            now=now,
+        )
+
+    async def _complete_backend_batch_result(
+        self,
+        *,
+        requests: tuple[GraphWriteRequest, ...],
+        batch_result: GraphWriteBatchResult,
+        now: datetime,
+    ) -> tuple[GraphWriteBatchProcessingItemResult, ...]:
         result_by_job_id = {item.job_id: item for item in batch_result.items}
-        processed: list[GraphWriteBatchProcessingItemResult] = [*build_results]
+        processed: list[GraphWriteBatchProcessingItemResult] = []
         for request in requests:
             complete_started = perf_counter()
             item = result_by_job_id.get(request.job.id)
@@ -236,19 +301,17 @@ class GraphWriteProcessor:
                         error=None,
                     )
                 )
-        logger.info(
-            "graph_write.processor.batch_completed job_count=%s processed_count=%s duration_ms=%.1f",
-            len(jobs),
-            len(processed),
-            _elapsed_ms(batch_started),
-        )
         return tuple(processed)
+
+    def _backend_timeout_seconds(self, job_count: int) -> float:
+        return self._backend_timeout.total_seconds() * max(1, job_count)
 
     async def _record_backend_started(
         self,
-        requests: list[GraphWriteRequest],
+        requests: tuple[GraphWriteRequest, ...],
         *,
         now: datetime,
+        timeout_seconds: float,
     ) -> None:
         async with self._unit_of_work.transaction() as tx:
             for request in requests:
@@ -265,7 +328,7 @@ class GraphWriteProcessor:
                         reason_code=None,
                         reason_text=(
                             f"batch_size={len(requests)} serialization_key="
-                            f"{request.job.serialization_key}"
+                            f"{request.job.serialization_key} timeout_seconds={timeout_seconds:.1f}"
                         ),
                         source_event_ids=request.job.source_event_ids,
                         latency_ms=None,

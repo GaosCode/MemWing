@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
 from memwing.application.remember_event_records import outbox_job
 from memwing.core.models import (
+    GraphWriteJob,
     MemoryDisplayType,
     MemoryItem,
     MemoryRoute,
@@ -303,6 +304,47 @@ def test_processing_lock_is_classified_as_stale() -> None:
     asyncio.run(run())
 
 
+def test_full_derived_await_returns_immediately_when_graph_dead_letters() -> None:
+    async def run() -> None:
+        store = InMemoryDataStore()
+        source = _source_event("source_001")
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(source)
+            for job_type in (
+                "working_memory.append",
+                "evidence.index_source_event",
+                "page_memory.maybe_rebuild",
+                "long_term_filter.classify",
+            ):
+                await tx.outbox_jobs.enqueue(
+                    replace(outbox_job(source_event=source, job_type=job_type, now=NOW), status="succeeded")
+                )
+            await tx.memory_pages.upsert(_page())
+            await tx.memory_items.upsert(_memory_item())
+            await tx.graph_write_jobs.enqueue(_graph_job(status="dead_letter"))
+
+        result = await PipelineReadinessService(
+            store,
+            evidence_enabled=True,
+            graph_enabled=True,
+            poll_interval_seconds=60,
+        ).await_ready(
+            PipelineReadinessCommand(
+                source_event_ids=("source_001",),
+                scope=_scope(),
+                profile=PipelineReadinessProfile.FULL_DERIVED,
+            ),
+            timeout_seconds=1200,
+        )
+
+        assert result.ready is False
+        assert result.timed_out is False
+        assert result.derived["graph"].reason == "dead_letter"
+        assert "graph:dead_letter" in result.warnings
+
+    asyncio.run(run())
+
+
 def _source_event(source_event_id: str) -> SourceEvent:
     return SourceEvent(
         id=source_event_id,
@@ -408,4 +450,31 @@ def _memory_item() -> MemoryItem:
         hidden_at=None,
         invalidated_at=None,
         removed_at=None,
+    )
+
+
+def _graph_job(*, status: str) -> GraphWriteJob:
+    return GraphWriteJob(
+        id="graph_job_001",
+        backend="graphiti",
+        serialization_key="backend:graphiti:project:project_001",
+        project_memory_space_id="project_001",
+        thread_id="thread_001",
+        saga_id=None,
+        memory_id="memory_001",
+        source_event_ids=("source_001",),
+        route=MemoryRoute.GRAPH,
+        status=status,
+        idempotency_key="graph:memory_001",
+        attempts=3 if status == "dead_letter" else 0,
+        max_attempts=3,
+        priority=100,
+        next_run_at=NOW,
+        dead_letter_reason="TimeoutError" if status == "dead_letter" else None,
+        last_error="TimeoutError" if status == "dead_letter" else None,
+        locked_at=None,
+        locked_by=None,
+        lock_expires_at=None,
+        created_at=NOW,
+        updated_at=NOW,
     )

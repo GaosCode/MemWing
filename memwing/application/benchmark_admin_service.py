@@ -74,6 +74,7 @@ class BenchmarkAdminService:
         expected_memories: tuple[BenchmarkExpectedMemorySeed, ...],
         case_id: str | None,
         layers: tuple[str, ...],
+        graph_mode: str = "direct_neo4j",
         now: datetime | None = None,
     ) -> BenchmarkPreseedExpectedResult:
         _require_benchmark_scope(scope)
@@ -89,6 +90,7 @@ class BenchmarkAdminService:
             expected_memories=expected_memories,
             case_id=case_id,
             layers=layers,
+            graph_mode=graph_mode,
             now=now,
         )
 

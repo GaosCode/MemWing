@@ -63,7 +63,7 @@ class MemWingConfig(BaseModel):
     search_timeout_seconds: float = 30
     settle_seconds: float = 2
     poll_interval_seconds: float = 2
-    poll_timeout_seconds: float = 60
+    poll_timeout_seconds: float = 1200
 
     @field_validator(
         "ingest_timeout_seconds",

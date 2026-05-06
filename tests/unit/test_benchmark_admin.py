@@ -229,7 +229,9 @@ def test_preseed_expected_writes_memory_page_and_graph_links() -> None:
             "云帆看板验收人是韩悦。",
         }
         assert pages[0].brief == "- 云帆看板负责人是沈南。\n- 云帆看板验收人是韩悦。"
-        assert len(graph.requests) == 2
+        assert graph.requests == []
+        assert len(graph.preseed_requests) == 1
+        assert len(graph.preseed_requests[0].memory_items) == 2
         assert len(graph_links) == 4
         assert {link.backend_object_type for link in graph_links} == {"episode", "fact"}
 
@@ -430,6 +432,7 @@ class _UnavailableEvidenceIndex(_EvidenceIndex):
 class _RecordingGraphBackend:
     def __init__(self) -> None:
         self.requests = []
+        self.preseed_requests = []
 
     async def ingest_graph_jobs(self, request):
         from memwing.ports.graph_backend import GraphWriteBatchItemResult, GraphWriteBatchResult
@@ -464,6 +467,42 @@ class _RecordingGraphBackend:
                     retryable=False,
                 )
                 for item in request.requests
+            )
+        )
+
+    async def preseed_facts(self, request):
+        from memwing.ports.graph_backend import GraphFactPreseedItemResult, GraphFactPreseedResult
+
+        self.preseed_requests.append(request)
+        return GraphFactPreseedResult(
+            items=tuple(
+                GraphFactPreseedItemResult(
+                    memory_id=item.id,
+                    result=GraphWriteResult(
+                        backend="graphiti",
+                        facts=(
+                            GraphFact(
+                                backend="graphiti",
+                                fact_id=f"fact:{item.id}",
+                                fact_text=item.content,
+                                source_event_ids=item.source_event_ids,
+                                valid_from=item.valid_from,
+                                valid_to=item.valid_to,
+                                invalidated_at=None,
+                                confidence=1.0,
+                                metadata={"preseed_mode": "direct_neo4j"},
+                            ),
+                        ),
+                        invalidated_facts=(),
+                        backend_episode_refs=(f"episode:{item.id}",),
+                        backend_fact_refs=(f"fact:{item.id}",),
+                    ),
+                    error_type=None,
+                    error_message=None,
+                    reason_code=None,
+                    retryable=False,
+                )
+                for item in request.memory_items
             )
         )
 

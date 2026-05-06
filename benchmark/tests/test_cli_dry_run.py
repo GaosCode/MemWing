@@ -2040,13 +2040,14 @@ def test_memwing_retrieval_preseed_expected_writes_expected_layers() -> None:
             self.calls.append(("cleanup", scope.project_memory_space_id))
             return {"deleted": {"memory_items": 0}, "trace_id": "trace_cleanup"}
 
-        def preseed_expected_memories(self, *, case, run_id, scope):
+        def preseed_expected_memories(self, *, case, run_id, scope, graph_mode):
             self.calls.append(
                 (
                     "preseed_expected",
                     case.case_id,
                     run_id,
                     scope.project_memory_space_id,
+                    graph_mode,
                     [item.id for item in case.expected_memory_items],
                 )
             )
@@ -2132,6 +2133,7 @@ def test_memwing_retrieval_preseed_expected_writes_expected_layers() -> None:
             "bs001",
             "run1",
             "benchmark:run1:bs001",
+            "direct_neo4j",
             ["bs001_m1"],
         ),
         ("search", "云帆负责人是谁？", 20, "benchmark:run1:bs001"),

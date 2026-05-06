@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
 from memwing.infrastructure.graph.graphiti_cache_context import graphiti_model_cache_context
 from memwing.infrastructure.graph.graphiti_llm import GraphitiMemWingLLMClient
-from memwing.infrastructure.llm.errors import LLMOutputSchemaError
+from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
 from memwing.ports.model_runtime import LLMModelRequest, LLMModelResponse
 
 
@@ -28,6 +28,11 @@ class FakeLLMClient:
     async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
         self.requests.append(request)
         return LLMModelResponse(text=self.text, provider="fake", model="fake-model")
+
+
+class FailingLLMClient:
+    async def complete(self, request: LLMModelRequest) -> LLMModelResponse:
+        raise LLMProviderError("provider returned no text output")
 
 
 class ExtractedPayload(BaseModel):
@@ -61,7 +66,10 @@ def test_graphiti_llm_wrapper_validates_response_model() -> None:
                 '{"properties": {"ok": {"title": "Ok", "type": "boolean"}, '
                 '"count": {"title": "Count", "type": "integer"}}, '
                 '"required": ["ok", "count"], "title": "ExtractedPayload", "type": "object"}\n\n'
-                "Preserve the source language for extracted information in group project_001."
+                "Language requirement: preserve the source language for extracted information "
+                "in group project_001. If the episode or memory item is mainly Chinese, all "
+                "entity names, facts, summaries, attributes, and extracted relationship text "
+                "must be Chinese. Do not translate Chinese source facts into English."
             ),
             trace_id=None,
         )
@@ -96,6 +104,7 @@ def test_graphiti_llm_wrapper_caches_validated_graphiti_extraction_by_context() 
     assert len(fake.requests) == 1
     assert fake.requests[0].cache_context is not None
     assert fake.requests[0].cache_context.role == "graphiti_extraction"
+    assert fake.requests[0].cache_context.prompt_hash == "graphiti_extraction:default:v2"
     assert fake.requests[0].cache_context.source_event_ids == ("source_001",)
     assert wrapper.cache_metrics.misses == 1
     assert wrapper.cache_metrics.hits == 1
@@ -176,6 +185,25 @@ def test_graphiti_llm_wrapper_accepts_graphiti_tracer() -> None:
     assert wrapper.tracer is tracer
     assert wrapper.token_tracker is not None
     assert isinstance(wrapper, LLMClient)
+
+
+def test_graphiti_llm_wrapper_adds_prompt_name_to_provider_failures() -> None:
+    wrapper = GraphitiMemWingLLMClient(FailingLLMClient())
+
+    async def scenario() -> None:
+        await wrapper.generate_response(
+            [Message(role="user", content="Ping")],
+            response_model=ExtractedPayload,
+            prompt_name="extract_nodes.extract_summaries_batch",
+        )
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        asyncio.run(scenario())
+
+    message = str(exc_info.value)
+    assert "prompt_name=extract_nodes.extract_summaries_batch" in message
+    assert "response_model=ExtractedPayload" in message
+    assert "provider returned no text output" in message
 
 
 def test_graphiti_llm_wrapper_exposes_graphiti_abstract_method() -> None:

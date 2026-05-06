@@ -65,6 +65,7 @@ def test_page_memory_synthesis_adapter_rejects_malformed_json() -> None:
 
 
 def test_page_memory_synthesis_adapter_caches_validated_json_by_source_lineage() -> None:
+    store = InMemoryDataStore()
     llm = FakeLLMClient(
         """
         {
@@ -82,7 +83,7 @@ def test_page_memory_synthesis_adapter_caches_validated_json_by_source_lineage()
     )
     adapter = MemWingPageMemorySynthesisAdapter(
         llm,
-        cache_unit_of_work=InMemoryDataStore(),
+        cache_unit_of_work=store,
         cache_runtime="openclaw",
         cache_model="page-model",
         cache_transport="local",
@@ -96,6 +97,34 @@ def test_page_memory_synthesis_adapter_caches_validated_json_by_source_lineage()
     assert len(llm.requests) == 1
     assert adapter.cache_metrics.hits == 1
     assert adapter.cache_metrics.misses == 1
+    entries = tuple(store._state.model_result_cache.values())
+    assert len(entries) == 1
+    assert entries[0].key.prompt_hash == "page_memory_prompt:v2"
+
+
+def test_page_memory_synthesis_prompt_requires_chinese_for_chinese_inputs() -> None:
+    llm = FakeLLMClient(
+        """
+        {
+          "title": "项目代号",
+          "brief": "当前项目代号是天际线。",
+          "topics": [
+            {
+              "title": "项目代号",
+              "summary": "团队需要在后续状态更新中使用天际线作为项目代号。",
+              "source_event_ids": ["event_001"]
+            }
+          ]
+        }
+        """
+    )
+    adapter = MemWingPageMemorySynthesisAdapter(llm)
+
+    asyncio.run(adapter.synthesize(_request()))
+
+    request = llm.requests[0]
+    assert "Do not translate Chinese source facts into English" in request.system_prompt
+    assert "输出 JSON 中的 title/brief/topics/open_questions/next_steps 必须全部使用中文" in request.user_prompt
 
 
 def test_page_memory_synthesis_adapter_repairs_schema_once() -> None:

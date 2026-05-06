@@ -138,6 +138,49 @@ def profile_ready(
     raise ValueError(f"unsupported pipeline readiness profile: {profile}")
 
 
+def profile_terminally_blocked(
+    *,
+    profile: PipelineReadinessProfile,
+    derived: dict[str, DerivedLayerReadiness],
+) -> bool:
+    if profile == PipelineReadinessProfile.MINIMAL_INGEST:
+        return False
+    if profile == PipelineReadinessProfile.CONTEXT_ASSEMBLE:
+        return _lane_dead_letter(derived, PipelineLane.WORKING_MEMORY)
+    if profile == PipelineReadinessProfile.WRITE_EVALUATE:
+        return any(
+            _lane_dead_letter(derived, lane)
+            for lane in (PipelineLane.PAGE_MEMORY, PipelineLane.MEMORY_ITEMS)
+        )
+    if profile == PipelineReadinessProfile.FULL_DERIVED:
+        required = (
+            PipelineLane.WORKING_MEMORY,
+            PipelineLane.PAGE_MEMORY,
+            PipelineLane.MEMORY_ITEMS,
+            PipelineLane.EVIDENCE,
+            PipelineLane.GRAPH,
+        )
+        return any(_lane_dead_letter(derived, lane) for lane in required)
+    if profile == PipelineReadinessProfile.RETRIEVAL_EVALUATE:
+        candidate_lanes = (
+            PipelineLane.EVIDENCE,
+            PipelineLane.GRAPH,
+            PipelineLane.MEMORY_ITEMS,
+        )
+        return all(
+            derived[lane.value].reason in {"dead_letter", "evidence_disabled", "graph_disabled"}
+            for lane in candidate_lanes
+        )
+    raise ValueError(f"unsupported pipeline readiness profile: {profile}")
+
+
+def _lane_dead_letter(
+    derived: dict[str, DerivedLayerReadiness],
+    lane: PipelineLane,
+) -> bool:
+    return derived[lane.value].reason == "dead_letter"
+
+
 def _job_type_ready(by_job_type: dict[str, JobStatusCount], job_type: str) -> bool:
     status = by_job_type.get(job_type)
     return status is not None and status.ready

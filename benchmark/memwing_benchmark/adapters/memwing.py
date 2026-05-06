@@ -284,6 +284,7 @@ class MemWingAdapter:
         run_id: str,
         scope: MemWingCaseScope,
         layers: tuple[str, ...] = ("memory_items", "graph", "page_memory"),
+        graph_mode: str = "direct_neo4j",
     ) -> dict[str, Any]:
         payload = {
             "agent_id": self.config.agent_id,
@@ -292,6 +293,7 @@ class MemWingAdapter:
             "case_id": case.case_id,
             "scope": scope.payload(),
             "layers": list(layers),
+            "graph_mode": graph_mode,
             "expected_memories": [
                 {
                     "id": memory.id,
@@ -311,6 +313,7 @@ class MemWingAdapter:
                 "case_id",
                 "scope",
                 "layers",
+                "graph_mode",
                 "expected_memories",
             ],
         )

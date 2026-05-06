@@ -56,13 +56,13 @@ def test_pg_preseed_per_case_orchestrates_real_ingest_without_pg_seed(monkeypatc
 
 
 def test_real_ingest_run_config_records_backend_semantics() -> None:
-    assert _memwing_pipeline_run_config(pg_preseed_per_case=True) == {
+    assert _memwing_pipeline_run_config(pg_preseed_per_case=True, preseed_expected=False) == {
         "memory_pipeline": "real_ingest_per_case",
         "readiness_profile": "full-derived",
         "graph_backend": "graphiti",
         "evidence_backend": "qdrant",
     }
-    assert _memwing_pipeline_run_config(pg_preseed_per_case=False) == {}
+    assert _memwing_pipeline_run_config(pg_preseed_per_case=False, preseed_expected=False) == {}
 
 
 def test_real_ingest_pipeline_fails_when_readiness_times_out() -> None:
