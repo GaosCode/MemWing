@@ -4,9 +4,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha1
+import logging
 from pathlib import Path
 import re
 import sys
+from time import perf_counter
 import uuid
 from typing import Protocol
 
@@ -20,6 +22,15 @@ from memwing.ports.graph_backend import (
     GraphWriteBatchResult,
     GraphWriteRequest,
 )
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_handler)
+logger.propagate = False
 
 
 class GraphitiRuntime(Protocol):
@@ -98,18 +109,33 @@ class GraphitiAdapter:
         return await self._ingest_one(request, previous_episode_uuid=None)
 
     async def ingest_graph_jobs(self, request: GraphWriteBatchRequest) -> GraphWriteBatchResult:
+        started = perf_counter()
+        logger.info(
+            "graphiti_adapter.ingest_batch_started job_count=%s semantic_bulk=%s",
+            len(request.requests),
+            self._semantic_bulk_ingest_enabled,
+        )
         bulk_ingest = (
             getattr(self._graphiti, "add_episode_bulk_semantic", None)
             if self._semantic_bulk_ingest_enabled
             else None
         )
         if bulk_ingest is not None:
-            return await self._ingest_graph_jobs_bulk(request, bulk_ingest=bulk_ingest)
+            result = await self._ingest_graph_jobs_bulk(request, bulk_ingest=bulk_ingest)
+            logger.info(
+                "graphiti_adapter.ingest_batch_completed job_count=%s item_count=%s "
+                "semantic_bulk=true duration_ms=%.1f",
+                len(request.requests),
+                len(result.items),
+                _elapsed_ms(started),
+            )
+            return result
 
         items: list[GraphWriteBatchItemResult] = []
         previous_episode_uuid: str | None = None
         blocked_reason: str | None = None
-        for graph_request in sorted(request.requests, key=_graph_write_request_order):
+        ordered_requests = tuple(sorted(request.requests, key=_graph_write_request_order))
+        for index, graph_request in enumerate(ordered_requests, start=1):
             if blocked_reason is not None:
                 items.append(
                     GraphWriteBatchItemResult(
@@ -123,11 +149,31 @@ class GraphitiAdapter:
                 )
                 continue
             try:
+                episode_started = perf_counter()
+                logger.info(
+                    "graphiti_adapter.episode_started job_id=%s memory_id=%s index=%s/%s "
+                    "project_memory_space_id=%s previous_episode=%s",
+                    graph_request.job.id,
+                    graph_request.memory_item.id,
+                    index,
+                    len(ordered_requests),
+                    graph_request.job.project_memory_space_id,
+                    bool(previous_episode_uuid),
+                )
                 result = await self._ingest_one(
                     graph_request,
                     previous_episode_uuid=previous_episode_uuid,
                 )
             except Exception as exc:
+                logger.info(
+                    "graphiti_adapter.episode_failed job_id=%s index=%s/%s duration_ms=%.1f "
+                    "error_type=%s",
+                    graph_request.job.id,
+                    index,
+                    len(ordered_requests),
+                    _elapsed_ms(episode_started),
+                    exc.__class__.__name__,
+                )
                 items.append(
                     GraphWriteBatchItemResult(
                         job_id=graph_request.job.id,
@@ -143,6 +189,17 @@ class GraphitiAdapter:
 
             if result.backend_episode_refs:
                 previous_episode_uuid = result.backend_episode_refs[-1]
+            logger.info(
+                "graphiti_adapter.episode_completed job_id=%s index=%s/%s episode_ref_count=%s "
+                "fact_count=%s invalidated_fact_count=%s duration_ms=%.1f",
+                graph_request.job.id,
+                index,
+                len(ordered_requests),
+                len(result.backend_episode_refs),
+                len(result.facts),
+                len(result.invalidated_facts),
+                _elapsed_ms(episode_started),
+            )
             items.append(
                 GraphWriteBatchItemResult(
                     job_id=graph_request.job.id,
@@ -153,7 +210,15 @@ class GraphitiAdapter:
                     retryable=False,
                 )
             )
-        return GraphWriteBatchResult(items=tuple(items))
+        result = GraphWriteBatchResult(items=tuple(items))
+        logger.info(
+            "graphiti_adapter.ingest_batch_completed job_count=%s item_count=%s "
+            "semantic_bulk=false duration_ms=%.1f",
+            len(request.requests),
+            len(result.items),
+            _elapsed_ms(started),
+        )
+        return result
 
     async def _ingest_graph_jobs_bulk(
         self,
@@ -170,6 +235,12 @@ class GraphitiAdapter:
 
         try:
             raw_episodes = [_raw_episode(graph_request) for graph_request in ordered_requests]
+            bulk_started = perf_counter()
+            logger.info(
+                "graphiti_adapter.semantic_bulk_started job_count=%s project_memory_space_id=%s",
+                len(ordered_requests),
+                ordered_requests[0].job.project_memory_space_id,
+            )
             with graphiti_model_cache_context(
                 project_memory_space_id=ordered_requests[0].job.project_memory_space_id,
                 source_event_ids=tuple(
@@ -183,12 +254,23 @@ class GraphitiAdapter:
                     group_id=_graphiti_group_id(ordered_requests[0].job.project_memory_space_id),
                 )
         except Exception as exc:
+            logger.info(
+                "graphiti_adapter.semantic_bulk_failed job_count=%s error_type=%s",
+                len(ordered_requests),
+                exc.__class__.__name__,
+            )
             return _blocked_batch_results(
                 ordered_requests,
                 error_type=exc.__class__.__name__,
                 first_reason="graphiti_ordered_episode_failed",
                 blocked_reason="graphiti_ordered_episode_blocked",
             )
+        logger.info(
+            "graphiti_adapter.semantic_bulk_completed job_count=%s result_count=%s duration_ms=%.1f",
+            len(ordered_requests),
+            len(results),
+            _elapsed_ms(bulk_started),
+        )
 
         if len(results) != len(ordered_requests):
             return _blocked_batch_results(
@@ -234,6 +316,16 @@ class GraphitiAdapter:
             project_memory_space_id=request.job.project_memory_space_id,
             source_event_ids=request.job.source_event_ids,
         ):
+            add_episode_started = perf_counter()
+            logger.info(
+                "graphiti_adapter.add_episode_call_started job_id=%s memory_id=%s title=%r "
+                "source_event_count=%s previous_episode=%s",
+                request.job.id,
+                request.memory_item.id,
+                request.memory_item.title,
+                len(request.job.source_event_ids),
+                bool(previous_episode_uuid),
+            )
             result = await self._graphiti.add_episode(
                 name=request.memory_item.title,
                 episode_body=request.memory_item.content,
@@ -242,6 +334,12 @@ class GraphitiAdapter:
                 group_id=_graphiti_group_id(request.job.project_memory_space_id),
                 uuid=_stable_graphiti_episode_uuid(request),
                 previous_episode_uuids=[previous_episode_uuid] if previous_episode_uuid else None,
+            )
+            logger.info(
+                "graphiti_adapter.add_episode_call_completed job_id=%s memory_id=%s duration_ms=%.1f",
+                request.job.id,
+                request.memory_item.id,
+                _elapsed_ms(add_episode_started),
             )
         return _graph_write_result_from_graphiti_result(
             result,
@@ -466,6 +564,10 @@ def _graphiti_group_id(project_memory_space_id: str) -> str:
         readable = "project"
     digest = sha1(project_memory_space_id.encode("utf-8")).hexdigest()[:12]
     return f"mw_{readable[:80]}_{digest}"
+
+
+def _elapsed_ms(started: float) -> float:
+    return (perf_counter() - started) * 1000
 
 
 def _load_graphiti_factory() -> GraphitiFactory:

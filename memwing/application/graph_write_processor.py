@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
+from time import perf_counter
 import uuid
 
 from memwing.core.lifecycle import LifecycleAction
 from memwing.core.errors import ProviderPermanentFailure, ProviderTransientFailure
 from memwing.core.models import (
+    AuditEvent,
     GraphFact,
     GraphWriteJob,
     GraphWriteResult,
@@ -22,6 +25,15 @@ from memwing.ports.graph_backend import (
     GraphWriteRequest,
 )
 from memwing.ports.lifecycle_transition import LifecycleTransitionPort, LifecycleTransitionRequest
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_handler)
+logger.propagate = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,19 +93,53 @@ class GraphWriteProcessor:
         if not jobs:
             return ()
 
+        batch_started = perf_counter()
+        logger.info(
+            "graph_write.processor.batch_started job_count=%s project_memory_space_id=%s",
+            len(jobs),
+            jobs[0].project_memory_space_id,
+        )
         build_results: list[GraphWriteBatchProcessingItemResult] = []
         requests: list[GraphWriteRequest] = []
         for job in jobs:
+            build_started = perf_counter()
             try:
                 requests.append(await self._build_request(job))
             except GraphWriteProcessorInputError as exc:
+                logger.info(
+                    "graph_write.processor.build_failed job_id=%s memory_id=%s duration_ms=%.1f "
+                    "error=%s",
+                    job.id,
+                    job.memory_id,
+                    _elapsed_ms(build_started),
+                    exc,
+                )
                 build_results.append(
                     GraphWriteBatchProcessingItemResult(job=job, result=None, error=exc)
+                )
+            else:
+                logger.info(
+                    "graph_write.processor.build_completed job_id=%s memory_id=%s "
+                    "source_event_count=%s duration_ms=%.1f",
+                    job.id,
+                    job.memory_id,
+                    len(job.source_event_ids),
+                    _elapsed_ms(build_started),
                 )
 
         if not requests:
             return tuple(build_results)
 
+        await self._record_backend_started(requests, now=now)
+        backend_started = perf_counter()
+        logger.info(
+            "graph_write.processor.backend_batch_started job_count=%s project_memory_space_id=%s "
+            "serialization_key=%s timeout_seconds=%.1f",
+            len(requests),
+            requests[0].job.project_memory_space_id,
+            requests[0].job.serialization_key,
+            self._backend_timeout.total_seconds(),
+        )
         try:
             batch_result = await asyncio.wait_for(
                 self._graph_backend.ingest_graph_jobs(
@@ -102,6 +148,13 @@ class GraphWriteProcessor:
                 timeout=self._backend_timeout.total_seconds(),
             )
         except Exception as exc:
+            logger.info(
+                "graph_write.processor.backend_batch_failed job_count=%s duration_ms=%.1f "
+                "error_type=%s",
+                len(requests),
+                _elapsed_ms(backend_started),
+                exc.__class__.__name__,
+            )
             return (
                 *build_results,
                 *(
@@ -113,10 +166,18 @@ class GraphWriteProcessor:
                     for request in requests
                 ),
             )
+        logger.info(
+            "graph_write.processor.backend_batch_completed job_count=%s item_count=%s "
+            "duration_ms=%.1f",
+            len(requests),
+            len(batch_result.items),
+            _elapsed_ms(backend_started),
+        )
 
         result_by_job_id = {item.job_id: item for item in batch_result.items}
         processed: list[GraphWriteBatchProcessingItemResult] = [*build_results]
         for request in requests:
+            complete_started = perf_counter()
             item = result_by_job_id.get(request.job.id)
             if item is None:
                 processed.append(
@@ -145,6 +206,13 @@ class GraphWriteProcessor:
                     now=now,
                 )
             except Exception as exc:
+                logger.info(
+                    "graph_write.processor.complete_failed job_id=%s duration_ms=%.1f "
+                    "error_type=%s",
+                    request.job.id,
+                    _elapsed_ms(complete_started),
+                    exc.__class__.__name__,
+                )
                 processed.append(
                     GraphWriteBatchProcessingItemResult(
                         job=request.job,
@@ -153,6 +221,14 @@ class GraphWriteProcessor:
                     )
                 )
             else:
+                logger.info(
+                    "graph_write.processor.complete_completed job_id=%s link_count=%s "
+                    "invalidated_memory_count=%s duration_ms=%.1f",
+                    request.job.id,
+                    processing_result.link_count,
+                    len(processing_result.invalidated_memory_ids),
+                    _elapsed_ms(complete_started),
+                )
                 processed.append(
                     GraphWriteBatchProcessingItemResult(
                         job=request.job,
@@ -160,7 +236,42 @@ class GraphWriteProcessor:
                         error=None,
                     )
                 )
+        logger.info(
+            "graph_write.processor.batch_completed job_count=%s processed_count=%s duration_ms=%.1f",
+            len(jobs),
+            len(processed),
+            _elapsed_ms(batch_started),
+        )
         return tuple(processed)
+
+    async def _record_backend_started(
+        self,
+        requests: list[GraphWriteRequest],
+        *,
+        now: datetime,
+    ) -> None:
+        async with self._unit_of_work.transaction() as tx:
+            for request in requests:
+                await tx.audit_events.record(
+                    AuditEvent(
+                        id=str(uuid.uuid4()),
+                        trace_id=f"graph_write:{request.job.id}",
+                        entity_type="graph_write_job",
+                        entity_id=request.job.id,
+                        stage="graph_write.backend.started",
+                        input_ref=request.job.id,
+                        output_ref="graph_backend.ingest_graph_jobs",
+                        decision="started",
+                        reason_code=None,
+                        reason_text=(
+                            f"batch_size={len(requests)} serialization_key="
+                            f"{request.job.serialization_key}"
+                        ),
+                        source_event_ids=request.job.source_event_ids,
+                        latency_ms=None,
+                        created_at=now,
+                    )
+                )
 
     async def _complete_graph_result(
         self,
@@ -333,6 +444,10 @@ class GraphWriteProcessor:
 
 class GraphWriteProcessorInputError(RuntimeError):
     pass
+
+
+def _elapsed_ms(started: float) -> float:
+    return (perf_counter() - started) * 1000
 
 
 def _batch_item_error(item: GraphWriteBatchItemResult) -> Exception:

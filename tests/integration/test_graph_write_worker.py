@@ -207,7 +207,14 @@ def test_graph_write_worker_records_mixed_batch_outcomes_without_rolling_back_su
         assert job_by_id["graph_job_dead"].dead_letter_reason == "ProviderPermanentFailure"
         assert job_by_id["graph_job_lock_lost"].status == "processing"
         assert job_by_id["graph_job_lock_lost"].locked_by == "graph_worker_002"
-        assert [event.stage for event in store.audit_events] == [
+        assert [event.stage for event in store.audit_events].count(
+            "graph_write.backend.started"
+        ) == 4
+        assert [
+            event.stage
+            for event in store.audit_events
+            if event.stage != "graph_write.backend.started"
+        ] == [
             "graph_write.succeeded",
             "graph_write.retry",
             "graph_write.dead_letter",
