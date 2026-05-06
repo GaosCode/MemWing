@@ -138,7 +138,7 @@ def test_cli_search_command_prints_scoped_memwing_hits(tmp_path: Path, monkeypat
                 raw={"trace_id": "trace_search"},
             )
 
-    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.search_commands.MemWingAdapter", FakeMemWingAdapter)
 
     result = CliRunner().invoke(
         app,
@@ -206,7 +206,7 @@ def test_cli_search_case_command_outputs_probe_json(tmp_path: Path, monkeypatch)
                 raw={"trace_id": "trace_search"},
             )
 
-    monkeypatch.setattr("memwing_benchmark.cli.MemWingAdapter", FakeMemWingAdapter)
+    monkeypatch.setattr("memwing_benchmark.search_commands.MemWingAdapter", FakeMemWingAdapter)
 
     result = CliRunner().invoke(
         app,
@@ -2623,7 +2623,7 @@ def test_prepare_live_chat_creates_seed_and_probe_chats(monkeypatch) -> None:
             created_names.append(name)
             return {"chat_id": f"oc_{len(created_names)}"}
 
-    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    monkeypatch.setattr("memwing_benchmark.live_workspace.FeishuCli", FakeFeishu)
     config = SimpleNamespace(
         feishu=SimpleNamespace(
             cli_bin="lark-cli",
@@ -2676,7 +2676,7 @@ def test_prepare_live_chat_requires_fresh_chat_creation(monkeypatch) -> None:
         def ensure_ready(self, *, required_scopes):
             raise AssertionError("should fail before checking Feishu readiness")
 
-    monkeypatch.setattr("memwing_benchmark.cli.FeishuCli", FakeFeishu)
+    monkeypatch.setattr("memwing_benchmark.live_workspace.FeishuCli", FakeFeishu)
     config = SimpleNamespace(
         feishu=SimpleNamespace(
             cli_bin="lark-cli",

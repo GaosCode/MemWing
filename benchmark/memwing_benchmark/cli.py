@@ -26,10 +26,23 @@ from memwing_benchmark.config import (
 )
 from memwing_benchmark.errors import BenchmarkError
 from memwing_benchmark.evaluators.llm_judge import JudgeResult, LlmJudge
-from memwing_benchmark.json_utils import dumps_json, loads_json
+from memwing_benchmark.json_utils import loads_json
+from memwing_benchmark.live_workspace import (
+    LiveChatIds,
+    LiveWorkspaceRestore,
+    prepare_live_chat as _prepare_live_chat,
+    prepare_live_workspace as _prepare_live_workspace,
+    prepare_write_ingest_chat as _prepare_write_ingest_chat,
+    restore_live_workspace as _restore_live_workspace,
+)
 from memwing_benchmark.metrics.retrieval import recall_at_k, unique_preserve_order
 from memwing_benchmark.models.volcengine_ark import VolcengineArkChatModel
 from memwing_benchmark.report import write_run_outputs
+from memwing_benchmark.run_support import (
+    confirm_side_effect as _confirm_side_effect,
+    debug as _debug,
+    required_feishu_scopes as _required_feishu_scopes,
+)
 from memwing_benchmark.schema import (
     BenchmarkCase,
     GoldMemory,
@@ -42,9 +55,11 @@ from memwing_benchmark.schema import (
     make_run_id,
     utc_now_iso,
 )
+from memwing_benchmark.search_commands import register_search_commands
 
 
 app = typer.Typer(add_completion=False, invoke_without_command=True)
+register_search_commands(app)
 
 OPENCLAW_NATIVE_BACKEND = "openclaw-native"
 MEMWING_LEGACY_BACKEND = "memwing"
@@ -68,80 +83,6 @@ MEMWING_FULL_DERIVED_READINESS_PROFILE = "full-derived"
 MEMWING_REAL_SEARCH_MAX_RESULTS = 20
 MEMWING_WRITE_RAW_SOURCES = frozenset({"evidence_index", "raw_events", "working_memory"})
 MEMWING_WRITE_EVALUATE_MIN_PIPELINE_TIMEOUT_SECONDS = 1200.0
-
-
-@app.command("search")
-def search_command(
-    query: str = typer.Argument(..., help="检索 query。"),
-    config_path: Path = typer.Option(Path("config.example.json"), "--config"),
-    limit: int = typer.Option(10, "--limit", "-k"),
-    mode: str = typer.Option("current", "--mode"),
-    run_id: str | None = typer.Option(None, "--run-id"),
-    case_id: str | None = typer.Option(None, "--case-id"),
-    project_memory_space_id: str | None = typer.Option(None, "--project-memory-space-id"),
-    group_id: str | None = typer.Option(None, "--group-id"),
-    thread_id: str | None = typer.Option(None, "--thread-id"),
-    shared_group_id: str | None = typer.Option(None, "--shared-group-id"),
-    health_check: bool = typer.Option(True, "--health/--no-health"),
-    json_output: bool = typer.Option(False, "--json"),
-) -> None:
-    """直接调用 MemWing HTTP search-memory，打印 top-k 结果。"""
-
-    try:
-        _run_memwing_search_command(
-            config_path=config_path,
-            query=query,
-            limit=limit,
-            mode=mode,
-            run_id=run_id,
-            case_id=case_id,
-            project_memory_space_id=project_memory_space_id,
-            group_id=group_id,
-            thread_id=thread_id,
-            shared_group_id=shared_group_id,
-            health_check=health_check,
-            json_output=json_output,
-        )
-    except BenchmarkError as exc:
-        typer.secho(str(exc), err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-
-
-@app.command("search-case")
-def search_case_command(
-    config_path: Path = typer.Option(Path("config.example.json"), "--config"),
-    cases_path: Path = typer.Option(Path("datasets"), "--cases"),
-    case_id: str = typer.Option(..., "--case-id"),
-    run_id: str | None = typer.Option(None, "--run-id"),
-    limit: int = typer.Option(10, "--limit", "-k"),
-    mode: str = typer.Option("current", "--mode"),
-    project_memory_space_id: str | None = typer.Option(None, "--project-memory-space-id"),
-    group_id: str | None = typer.Option(None, "--group-id"),
-    thread_id: str | None = typer.Option(None, "--thread-id"),
-    shared_group_id: str | None = typer.Option(None, "--shared-group-id"),
-    health_check: bool = typer.Option(True, "--health/--no-health"),
-    json_output: bool = typer.Option(False, "--json"),
-) -> None:
-    """按数据集 case 的 probes 逐条检索，打印每个 probe 的 top-k。"""
-
-    try:
-        _run_memwing_search_case_command(
-            config_path=config_path,
-            cases_path=cases_path,
-            case_id=case_id,
-            run_id=run_id,
-            limit=limit,
-            mode=mode,
-            project_memory_space_id=project_memory_space_id,
-            group_id=group_id,
-            thread_id=thread_id,
-            shared_group_id=shared_group_id,
-            health_check=health_check,
-            json_output=json_output,
-        )
-    except BenchmarkError as exc:
-        typer.secho(str(exc), err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
 
 
 @app.command("evaluate-preseeded")
@@ -236,114 +177,6 @@ def main(
         raise typer.Exit(code=1) from exc
 
 
-def _run_memwing_search_command(
-    *,
-    config_path: Path,
-    query: str,
-    limit: int,
-    mode: str,
-    run_id: str | None,
-    case_id: str | None,
-    project_memory_space_id: str | None,
-    group_id: str | None,
-    thread_id: str | None,
-    shared_group_id: str | None,
-    health_check: bool,
-    json_output: bool,
-) -> None:
-    config = load_config(config_path)
-    validate_config_for_backend(config, backend=MEMWING_HTTP_BACKEND)
-    scope = _memwing_search_scope(
-        config=config,
-        run_id=run_id,
-        case_id=case_id,
-        project_memory_space_id=project_memory_space_id,
-        group_id=group_id,
-        thread_id=thread_id,
-        shared_group_id=shared_group_id,
-    )
-    adapter = MemWingAdapter(config.memwing)
-    if health_check:
-        adapter.health()
-    details = adapter.memory_search_details(
-        query,
-        limit=limit,
-        scope=scope,
-        mode=mode,
-    )
-    _emit_memwing_search_result(
-        query=query,
-        mode=mode,
-        scope=scope,
-        details=details,
-        json_output=json_output,
-    )
-
-
-def _run_memwing_search_case_command(
-    *,
-    config_path: Path,
-    cases_path: Path,
-    case_id: str,
-    run_id: str | None,
-    limit: int,
-    mode: str,
-    project_memory_space_id: str | None,
-    group_id: str | None,
-    thread_id: str | None,
-    shared_group_id: str | None,
-    health_check: bool,
-    json_output: bool,
-) -> None:
-    config = load_config(config_path)
-    validate_config_for_backend(config, backend=MEMWING_HTTP_BACKEND)
-    case = load_cases(cases_path, case_id=case_id)[0]
-    scope = _memwing_search_scope(
-        config=config,
-        run_id=run_id,
-        case_id=case.case_id if run_id is not None else None,
-        project_memory_space_id=project_memory_space_id,
-        group_id=group_id,
-        thread_id=thread_id,
-        shared_group_id=shared_group_id,
-    )
-    adapter = MemWingAdapter(config.memwing)
-    if health_check:
-        adapter.health()
-    records: list[dict[str, Any]] = []
-    for probe in case.probes:
-        details = adapter.memory_search_details(
-            probe.question,
-            limit=limit,
-            scope=scope,
-            mode=mode,
-        )
-        records.append(
-            {
-                "case_id": case.case_id,
-                "probe_id": probe.id,
-                "query": probe.question,
-                "mode": mode,
-                "scope": scope.payload() if scope is not None else None,
-                "latency_ms": details.latency_ms,
-                "contexts": details.contexts,
-                "results": details.results,
-                "raw": details.raw,
-            }
-        )
-    if json_output:
-        typer.echo(dumps_json({"case_id": case.case_id, "probes": records}))
-        return
-    typer.echo(
-        f"case={case.case_id} probes={len(records)} mode={mode} "
-        f"scope={_scope_label(scope)} limit={limit}"
-    )
-    for record in records:
-        typer.echo("")
-        typer.echo(f"{record['case_id']}/{record['probe_id']}: {record['query']}")
-        _print_search_hits(record["results"], latency_ms=record["latency_ms"])
-
-
 def _run_memwing_preseeded_evaluate_command(
     *,
     config_path: Path,
@@ -420,50 +253,6 @@ def _run_memwing_preseeded_evaluate_command(
     return run_dir
 
 
-def _memwing_search_scope(
-    *,
-    config,
-    run_id: str | None,
-    case_id: str | None,
-    project_memory_space_id: str | None,
-    group_id: str | None,
-    thread_id: str | None,
-    shared_group_id: str | None,
-) -> MemWingCaseScope | None:
-    normalized_run_id = _optional_cli_text(run_id, "--run-id")
-    normalized_case_id = _optional_cli_text(case_id, "--case-id")
-    explicit_scope = {
-        "project_memory_space_id": _optional_cli_text(
-            project_memory_space_id,
-            "--project-memory-space-id",
-        ),
-        "group_id": _optional_cli_text(group_id, "--group-id"),
-        "thread_id": _optional_cli_text(thread_id, "--thread-id"),
-        "shared_group_id": _optional_cli_text(shared_group_id, "--shared-group-id"),
-    }
-    has_benchmark_scope = normalized_run_id is not None or normalized_case_id is not None
-    has_explicit_scope = any(value is not None for value in explicit_scope.values())
-    if has_benchmark_scope and has_explicit_scope:
-        raise BenchmarkError("--run-id/--case-id cannot be combined with explicit scope options")
-    if has_benchmark_scope:
-        if normalized_run_id is None or normalized_case_id is None:
-            raise BenchmarkError("--run-id and --case-id must be provided together")
-        return memwing_case_scope(
-            config=config.memwing,
-            run_id=normalized_run_id,
-            case_id=normalized_case_id,
-        )
-    if not has_explicit_scope:
-        return None
-    return MemWingCaseScope(
-        project_memory_space_id=explicit_scope["project_memory_space_id"]
-        or config.memwing.project_memory_space_id,
-        group_id=explicit_scope["group_id"] or config.memwing.group_id,
-        thread_id=explicit_scope["thread_id"] or config.memwing.thread_id,
-        shared_group_id=explicit_scope["shared_group_id"] or config.memwing.shared_group_id or None,
-    )
-
-
 def _optional_cli_text(value: str | None, option_name: str) -> str | None:
     if value is None:
         return None
@@ -471,81 +260,6 @@ def _optional_cli_text(value: str | None, option_name: str) -> str | None:
     if not normalized:
         raise BenchmarkError(f"{option_name} must not be empty")
     return normalized
-
-
-def _emit_memwing_search_result(
-    *,
-    query: str,
-    mode: str,
-    scope: MemWingCaseScope | None,
-    details: MemorySearchDetails,
-    json_output: bool,
-) -> None:
-    if json_output:
-        typer.echo(
-            dumps_json(
-                {
-                    "query": query,
-                    "mode": mode,
-                    "scope": scope.payload() if scope is not None else None,
-                    "latency_ms": details.latency_ms,
-                    "contexts": details.contexts,
-                    "results": details.results,
-                    "raw": details.raw,
-                }
-            )
-        )
-        return
-    typer.echo(
-        f"query={query} mode={mode} scope={_scope_label(scope)} "
-        f"hits={len(details.results)} latency_ms={details.latency_ms}"
-    )
-    _print_search_hits(details.results, latency_ms=details.latency_ms)
-
-
-def _print_search_hits(results: list[dict[str, Any]], *, latency_ms: int) -> None:
-    if not results:
-        typer.echo(f"no hits latency_ms={latency_ms}")
-        return
-    for result in results:
-        rank = result.get("rank")
-        source = result.get("source") or "unknown"
-        score = result.get("score")
-        item_id = result.get("id") or "-"
-        memory_ids = ",".join(result.get("memory_item_ids") or [])
-        source_ids = ",".join(result.get("source_event_ids") or [])
-        typer.echo(
-            f"{rank}. source={source} score={_cli_value(score)} id={item_id} "
-            f"memory_ids={memory_ids or '-'} source_event_ids={source_ids or '-'}"
-        )
-        typer.echo(f"   {_one_line(result.get('snippet'))}")
-
-
-def _scope_label(scope: MemWingCaseScope | None) -> str:
-    if scope is None:
-        return "config-default"
-    return (
-        f"{scope.project_memory_space_id}/"
-        f"{scope.group_id}/"
-        f"{scope.thread_id}"
-    )
-
-
-def _one_line(value: object, *, max_chars: int = 180) -> str:
-    if not isinstance(value, str):
-        return ""
-    normalized = " ".join(value.split())
-    if len(normalized) <= max_chars:
-        return normalized
-    return f"{normalized[: max_chars - 3]}..."
-
-
-def _cli_value(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, float):
-        return f"{value:.3f}"
-    return str(value)
 
 
 def run(
@@ -1126,20 +840,6 @@ def _memwing_pipeline_run_config(
 
 
 @dataclass(frozen=True)
-class LiveChatIds:
-    seed_chat_id: str
-    probe_chat_id: str
-
-
-@dataclass(frozen=True)
-class LiveWorkspaceRestore:
-    original_workspace: str
-    memory_flush_touched: bool
-    memory_flush_present: bool
-    memory_flush_value: Any = None
-
-
-@dataclass(frozen=True)
 class DurablePollResult:
     retrieved_contexts: list[str]
     search_error: str | None
@@ -1180,100 +880,6 @@ class MemoryArtifactPollResult:
     changed_files: list[dict[str, Any]]
     first_changed_at: str | None
     timeout: bool
-
-
-def _prepare_live_workspace(
-    *,
-    adapter: OpenClawNativeAdapter,
-    raw_records: dict[str, Any],
-    run_dir: Path,
-    force_memory_flush: bool,
-    yes: bool,
-) -> LiveWorkspaceRestore:
-    _debug(raw_records, "读取 OpenClaw 当前 workspace")
-    original_workspace = adapter.get_default_workspace()
-    original_memory_flush = None
-    if force_memory_flush:
-        _debug(raw_records, "读取 OpenClaw memoryFlush 配置", workspace=original_workspace)
-        original_memory_flush = adapter.get_config_value("agents.defaults.compaction.memoryFlush")
-    workspace_dir = run_dir / "openclaw-workspace"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    _confirm_side_effect(
-        "切换 OpenClaw 到本轮 benchmark 独立 workspace 并重启 gateway",
-        yes,
-    )
-    _debug(raw_records, "切换 OpenClaw workspace", workspace=str(workspace_dir))
-    adapter.set_default_workspace(workspace_dir)
-    if force_memory_flush:
-        next_memory_flush = (
-            dict(original_memory_flush.value)
-            if isinstance(original_memory_flush.value, dict)
-            else {}
-        )
-        next_memory_flush["enabled"] = True
-        next_memory_flush["forceFlushTranscriptBytes"] = 1
-        _debug(raw_records, "写入 OpenClaw memoryFlush 配置", value=next_memory_flush)
-        adapter.set_config_json("agents.defaults.compaction.memoryFlush", next_memory_flush)
-    _debug(raw_records, "重启 OpenClaw gateway 以加载 workspace")
-    adapter.restart_gateway()
-    raw_records["side_effects"].append(
-        {
-            "action": "isolate_openclaw_workspace",
-            "original_workspace": original_workspace,
-            "workspace": str(workspace_dir),
-        }
-    )
-    if original_memory_flush is not None:
-        raw_records["side_effects"].append(
-            {
-                "action": "force_openclaw_memory_flush",
-                "path": "agents.defaults.compaction.memoryFlush",
-                "original_present": original_memory_flush.present,
-            }
-        )
-    return LiveWorkspaceRestore(
-        original_workspace=original_workspace,
-        memory_flush_touched=original_memory_flush is not None,
-        memory_flush_present=original_memory_flush.present if original_memory_flush else False,
-        memory_flush_value=original_memory_flush.value if original_memory_flush else None,
-    )
-
-
-def _restore_live_workspace(
-    *,
-    adapter: OpenClawNativeAdapter,
-    raw_records: dict[str, Any],
-    restore: LiveWorkspaceRestore,
-) -> None:
-    _debug(raw_records, "恢复 OpenClaw workspace", workspace=restore.original_workspace)
-    adapter.set_default_workspace(Path(restore.original_workspace))
-    if restore.memory_flush_touched:
-        if restore.memory_flush_present:
-            _debug(
-                raw_records,
-                "恢复 OpenClaw memoryFlush 配置",
-                value=restore.memory_flush_value,
-            )
-            adapter.set_config_json(
-                "agents.defaults.compaction.memoryFlush",
-                restore.memory_flush_value,
-            )
-        else:
-            _debug(raw_records, "删除临时 OpenClaw memoryFlush 配置")
-            adapter.unset_config_value("agents.defaults.compaction.memoryFlush")
-    _debug(raw_records, "重启 OpenClaw gateway 以恢复原配置")
-    adapter.restart_gateway()
-    raw_records["side_effects"].append(
-        {"action": "restore_openclaw_workspace", "workspace": restore.original_workspace}
-    )
-    if restore.memory_flush_touched:
-        raw_records["side_effects"].append(
-            {
-                "action": "restore_openclaw_memory_flush",
-                "path": "agents.defaults.compaction.memoryFlush",
-                "restored_present": restore.memory_flush_present,
-            }
-        )
 
 
 def _preflight_memwing_http(*, adapter: MemWingAdapter, raw_records: dict[str, Any]) -> None:
@@ -1358,175 +964,6 @@ def _preflight_memwing_openclaw_plugin(
 
 def _normalized_url(value: str) -> str:
     return value.strip().rstrip("/")
-
-
-def _prepare_live_chat(
-    *,
-    config,
-    adapter: OpenClawNativeAdapter,
-    raw_records: dict[str, Any],
-    run_id: str,
-    create_chat: bool,
-    configure_openclaw: bool,
-    restart_gateway: bool,
-    require_mention: bool,
-    yes: bool,
-) -> LiveChatIds:
-    _debug(raw_records, "准备 Feishu live 群")
-    feishu = FeishuCli(config.feishu.cli_bin)
-    should_create = create_chat or config.feishu.create_chat_if_missing
-    if not should_create:
-        raise BenchmarkError(
-            "formal live cross_chat_durable requires fresh seed/probe chats for every run; "
-            "use --create-chat or set feishu.create_chat_if_missing=true"
-        )
-    required_scopes = _required_feishu_scopes(will_create_chat=True)
-    _debug(raw_records, "检查 Feishu CLI 登录和 scope", scopes=required_scopes)
-    feishu.ensure_ready(required_scopes=required_scopes)
-    created_chat_ids: list[str] = []
-    _confirm_side_effect("创建飞书 seed/probe 两个测试群并邀请机器人", yes)
-    _debug(raw_records, "读取 Feishu CLI 当前 app id")
-    cli_bot_app_id = feishu.current_app_id()
-    _debug(raw_records, "Feishu CLI app id 已读取", cli_bot_app_id=cli_bot_app_id)
-    seed_chat_id = _create_named_chat(
-        feishu=feishu,
-        config=config,
-        run_id=run_id,
-        role="Seed",
-        cli_bot_app_id=cli_bot_app_id,
-        raw_records=raw_records,
-    )
-    created_chat_ids.append(seed_chat_id)
-    _debug(raw_records, "Seed 群创建完成", chat_id=seed_chat_id)
-    probe_chat_id = _create_named_chat(
-        feishu=feishu,
-        config=config,
-        run_id=run_id,
-        role="Probe",
-        cli_bot_app_id=cli_bot_app_id,
-        raw_records=raw_records,
-    )
-    created_chat_ids.append(probe_chat_id)
-    _debug(raw_records, "Probe 群创建完成", chat_id=probe_chat_id)
-    if seed_chat_id == probe_chat_id:
-        raise BenchmarkError(
-            "cross_chat_durable requires different feishu.seed_chat_id and feishu.probe_chat_id"
-        )
-    allowlist_chat_ids = (
-        [seed_chat_id, probe_chat_id]
-        if configure_openclaw or config.openclaw.configure_allowlist
-        else created_chat_ids
-    )
-    if allowlist_chat_ids:
-        _confirm_side_effect("修改 OpenClaw 飞书 group allowlist/config", yes)
-        configured_chat_ids = unique_preserve_order(allowlist_chat_ids)
-        _debug(raw_records, "配置 OpenClaw 飞书群 allowlist", chat_ids=configured_chat_ids)
-        adapter.configure_feishu_groups(configured_chat_ids, require_mention=require_mention)
-        for chat_id in configured_chat_ids:
-            raw_records["side_effects"].append(
-                {
-                    "action": "configure_openclaw",
-                    "chat_id": chat_id,
-                    "require_mention": require_mention,
-                }
-            )
-    if restart_gateway or config.openclaw.restart_gateway:
-        _confirm_side_effect("重启 OpenClaw gateway", yes)
-        _debug(raw_records, "重启 OpenClaw gateway 以加载群配置")
-        adapter.restart_gateway()
-        raw_records["side_effects"].append({"action": "restart_gateway"})
-    raw_records["feishu_commands"].extend(
-        command.model_dump(mode="json") for command in feishu.commands
-    )
-    return LiveChatIds(seed_chat_id=seed_chat_id, probe_chat_id=probe_chat_id)
-
-
-def _prepare_write_ingest_chat(
-    *,
-    config,
-    adapter: OpenClawNativeAdapter,
-    raw_records: dict[str, Any],
-    run_id: str,
-    create_chat: bool,
-    configure_openclaw: bool,
-    restart_gateway: bool,
-    yes: bool,
-) -> LiveChatIds:
-    _debug(raw_records, "准备 Feishu write ingest 群")
-    feishu = FeishuCli(config.feishu.cli_bin)
-    should_create = create_chat or config.feishu.create_chat_if_missing
-    if should_create:
-        required_scopes = _required_feishu_scopes(will_create_chat=True)
-        _debug(raw_records, "检查 Feishu CLI 登录和 scope", scopes=required_scopes)
-        feishu.ensure_ready(required_scopes=required_scopes)
-        _confirm_side_effect("创建飞书 write ingest 测试群并邀请机器人", yes)
-        _debug(raw_records, "读取 Feishu CLI 当前 app id")
-        cli_bot_app_id = feishu.current_app_id()
-        _debug(raw_records, "Feishu CLI app id 已读取", cli_bot_app_id=cli_bot_app_id)
-        chat_id = _create_named_chat(
-            feishu=feishu,
-            config=config,
-            run_id=run_id,
-            role="Ingest",
-            cli_bot_app_id=cli_bot_app_id,
-            raw_records=raw_records,
-        )
-        _debug(raw_records, "Ingest 群创建完成", chat_id=chat_id)
-    else:
-        chat_id = config.feishu.seed_chat_id or config.feishu.chat_id
-        if not chat_id:
-            raise BenchmarkError(
-                "write ingest requires --chat-id, feishu.chat_id, or --create-chat"
-            )
-        _debug(raw_records, "使用已有 Feishu write ingest 群", chat_id=chat_id)
-        feishu.ensure_ready(required_scopes=_required_feishu_scopes(will_create_chat=False))
-
-    if configure_openclaw or config.openclaw.configure_allowlist or should_create:
-        _confirm_side_effect("修改 OpenClaw 飞书 group allowlist/config", yes)
-        _debug(raw_records, "配置 OpenClaw 飞书 ingest 群 allowlist", chat_id=chat_id)
-        adapter.configure_feishu_group(chat_id, require_mention=False)
-        raw_records["side_effects"].append(
-            {
-                "action": "configure_openclaw",
-                "chat_id": chat_id,
-                "require_mention": False,
-            }
-        )
-    if restart_gateway or config.openclaw.restart_gateway or should_create:
-        _confirm_side_effect("重启 OpenClaw gateway", yes)
-        _debug(raw_records, "重启 OpenClaw gateway 以加载 ingest 群配置")
-        adapter.restart_gateway()
-        raw_records["side_effects"].append({"action": "restart_gateway"})
-    raw_records["feishu_commands"].extend(
-        command.model_dump(mode="json") for command in feishu.commands
-    )
-    return LiveChatIds(seed_chat_id=chat_id, probe_chat_id=chat_id)
-
-
-def _create_named_chat(
-    *,
-    feishu: FeishuCli,
-    config,
-    run_id: str,
-    role: str,
-    cli_bot_app_id: str,
-    raw_records: dict[str, Any],
-) -> str:
-    _debug(
-        raw_records,
-        f"开始创建 {role} 群",
-        name=f"{config.feishu.chat_name_prefix} {run_id} {role}",
-        bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
-    )
-    created = feishu.create_chat(
-        name=f"{config.feishu.chat_name_prefix} {run_id} {role}",
-        bot_app_ids=[config.feishu.bot_app_id, cli_bot_app_id],
-    )
-    chat_id = str(created["chat_id"])
-    raw_records["side_effects"].append(
-        {"action": f"create_{role.lower()}_chat", "chat_id": chat_id}
-    )
-    return chat_id
 
 
 def _run_offline(
@@ -4489,30 +3926,6 @@ def _text_list_from_mapping(data: dict[str, Any], key: str) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
-
-
-def _confirm_side_effect(description: str, yes: bool) -> None:
-    if yes:
-        return
-    confirmed = typer.confirm(f"将执行外部副作用：{description}。是否继续？")
-    if not confirmed:
-        raise BenchmarkError(f"用户取消：{description}")
-
-
-def _debug(raw_records: dict[str, Any], message: str, **fields: Any) -> None:
-    record = {"at": utc_now_iso(), "message": message, **fields}
-    raw_records.setdefault("debug", []).append(record)
-    suffix = ""
-    if fields:
-        suffix = " " + " ".join(f"{key}={value!r}" for key, value in fields.items())
-    typer.echo(f"[debug] {message}{suffix}", err=True)
-
-
-def _required_feishu_scopes(*, will_create_chat: bool) -> list[str]:
-    scopes = ["im:message.send_as_user"]
-    if will_create_chat:
-        scopes.append("im:chat:create_by_user")
-    return scopes
 
 
 def make_idempotency_key(*, run_id: str, backend: str, case_id: str, item_id: str) -> str:
