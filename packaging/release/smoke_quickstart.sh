@@ -12,8 +12,22 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
 )}"
+CONTROL_PLANE_PORT="${MEMWING_CONTROL_PLANE_SMOKE_PORT:-$(python3 - <<'PY'
+import socket
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+)}"
 
 cleanup_runtime() {
+  if [ -f "$SMOKE_HOME/control-plane.pid" ]; then
+    control_plane_pid="$(cat "$SMOKE_HOME/control-plane.pid")"
+    if [ -n "$control_plane_pid" ]; then
+      kill "$control_plane_pid" >/dev/null 2>&1 || true
+    fi
+  fi
   if [ -f "$SMOKE_HOME/runtime.pid" ]; then
     runtime_pid="$(cat "$SMOKE_HOME/runtime.pid")"
     if [ -n "$runtime_pid" ]; then
@@ -74,4 +88,34 @@ MEMWING_HOME="$SMOKE_HOME" python3 - <<PY
 import urllib.request
 
 urllib.request.urlopen("http://127.0.0.1:$SMOKE_PORT/healthz", timeout=5).read()
+PY
+
+MEMWING_HOME="$SMOKE_HOME" \
+  memwing control-plane \
+    --host 127.0.0.1 \
+    --port "$CONTROL_PLANE_PORT" \
+    --api-base-url "http://127.0.0.1:$SMOKE_PORT" \
+    > "$SMOKE_HOME/control-plane.log" 2>&1 &
+echo "$!" > "$SMOKE_HOME/control-plane.pid"
+
+MEMWING_HOME="$SMOKE_HOME" python3 - <<PY
+import time
+import urllib.request
+
+deadline = time.monotonic() + 5
+last_error = None
+while time.monotonic() < deadline:
+    try:
+        body = urllib.request.urlopen(
+            "http://127.0.0.1:$CONTROL_PLANE_PORT/",
+            timeout=1,
+        ).read().decode("utf-8")
+        if "MemWing" in body:
+            break
+        last_error = "Control Plane index did not contain MemWing"
+    except Exception as exc:  # noqa: BLE001
+        last_error = exc
+    time.sleep(0.1)
+else:
+    raise SystemExit(f"Control Plane smoke failed: {last_error}")
 PY

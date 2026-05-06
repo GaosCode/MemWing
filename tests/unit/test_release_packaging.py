@@ -80,6 +80,10 @@ def test_release_packaging_has_real_quickstart_smoke() -> None:
     assert "/healthz" in smoke_script
     assert "MEMWING_HOME=" in smoke_script
     assert 'PATH="$PREFIX/bin:$PATH"' in smoke_script
+    assert "MEMWING_CONTROL_PLANE_SMOKE_PORT" in smoke_script
+    assert "memwing control-plane" in smoke_script
+    assert '--api-base-url "http://127.0.0.1:$SMOKE_PORT"' in smoke_script
+    assert 'http://127.0.0.1:$CONTROL_PLANE_PORT/' in smoke_script
 
 
 def test_python_package_includes_openclaw_plugin_artifact() -> None:
