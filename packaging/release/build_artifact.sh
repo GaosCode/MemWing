@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${MEMWING_VERSION:-0.1.0}"
 OUT_DIR="$ROOT/dist/release"
 ARTIFACT_DIR="$OUT_DIR/memwing-$VERSION"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-python3.13}"
 PYTHON_MAJOR_MINOR="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 PYTHON_EXECUTABLE_NAME="python$PYTHON_MAJOR_MINOR"
 

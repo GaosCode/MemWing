@@ -14,6 +14,10 @@ def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() ->
     assert "sha256 :no_check" in formula
     assert 'prefix.install Dir["*"]' in formula
     assert "python@3.13" in formula
+    assert 'artifact_python = (prefix/"PYTHON_MAJOR_MINOR").read.strip' in formula
+    assert 'unless artifact_python == "3.13"' in formula
+    assert '(prefix/"PYTHON_MAJOR_MINOR").write' not in formula
+    assert '(prefix/"PYTHON_EXECUTABLE").write' not in formula
 
 
 def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -> None:
@@ -22,6 +26,7 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
 
     assert '--target "$ARTIFACT_DIR/lib/python"' in build_script
     assert 'PYTHONPATH="$ROOT/lib/python:' in build_script
+    assert 'PYTHON_BIN="${PYTHON_BIN:-python3.13}"' in build_script
     assert 'PYTHON_MAJOR_MINOR="$("$PYTHON_BIN" -c' in build_script
     assert 'PYTHON_BIN="${MEMWING_PYTHON:-python$PYTHON_MAJOR_MINOR}"' in build_script
     assert 'exec "$PYTHON_BIN" -m memwing.cli "$@"' in build_script

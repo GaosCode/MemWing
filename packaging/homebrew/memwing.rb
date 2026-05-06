@@ -10,9 +10,9 @@ class Memwing < Formula
   def install
     prefix.install Dir["*"]
     python = Formula["python@3.13"].opt_bin/"python3.13"
+    artifact_python = (prefix/"PYTHON_MAJOR_MINOR").read.strip
+    odie "MemWing artifact was built for Python #{artifact_python}, but this formula runs Python 3.13" unless artifact_python == "3.13"
     inreplace prefix/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
-    (prefix/"PYTHON_MAJOR_MINOR").write("3.13\n")
-    (prefix/"PYTHON_EXECUTABLE").write("python3.13\n")
   end
 
   test do
