@@ -15,7 +15,7 @@ class Memwing < Formula
       odie "MemWing artifact was built for Python #{artifact_python}, but this formula runs Python 3.13"
     end
     inreplace libexec/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
-    bin.write_exec_script libexec/"bin/memwing"
+    bin.install_symlink libexec/"bin/memwing"
   end
 
   test do
