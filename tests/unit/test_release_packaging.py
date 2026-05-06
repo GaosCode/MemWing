@@ -22,5 +22,10 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
 
     assert '--target "$ARTIFACT_DIR/lib/python"' in build_script
     assert 'PYTHONPATH="$ROOT/lib/python:' in build_script
+    assert 'PYTHON_MAJOR_MINOR="$("$PYTHON_BIN" -c' in build_script
+    assert 'PYTHON_BIN="${MEMWING_PYTHON:-python$PYTHON_MAJOR_MINOR}"' in build_script
     assert 'exec "$PYTHON_BIN" -m memwing.cli "$@"' in build_script
+    assert 'printf "%s\\n" "$PYTHON_MAJOR_MINOR" > "$ARTIFACT_DIR/PYTHON_MAJOR_MINOR"' in build_script
+    assert "python_major_minor=" in install_script
+    assert 'python_bin="${MEMWING_PYTHON:-python$python_major_minor}"' in install_script
     assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script

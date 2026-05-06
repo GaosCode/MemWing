@@ -23,6 +23,17 @@ if [ ! -d "$tmp_dir/extract/memwing-$VERSION" ]; then
   echo "Release artifact does not contain memwing-$VERSION" >&2
   exit 1
 fi
+if [ ! -f "$tmp_dir/extract/memwing-$VERSION/PYTHON_MAJOR_MINOR" ]; then
+  echo "Release artifact is missing PYTHON_MAJOR_MINOR" >&2
+  exit 1
+fi
+python_major_minor="$(cat "$tmp_dir/extract/memwing-$VERSION/PYTHON_MAJOR_MINOR")"
+python_bin="${MEMWING_PYTHON:-python$python_major_minor}"
+if ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "MemWing $VERSION requires Python $python_major_minor for bundled native wheels." >&2
+  echo "Install python$python_major_minor or set MEMWING_PYTHON to a compatible interpreter." >&2
+  exit 1
+fi
 cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"
 
 echo "Installed. Add $PREFIX/bin to PATH if needed."

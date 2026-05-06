@@ -11,6 +11,8 @@ class Memwing < Formula
     prefix.install Dir["*"]
     python = Formula["python@3.13"].opt_bin/"python3.13"
     inreplace prefix/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
+    (prefix/"PYTHON_MAJOR_MINOR").write("3.13\n")
+    (prefix/"PYTHON_EXECUTABLE").write("python3.13\n")
   end
 
   test do
