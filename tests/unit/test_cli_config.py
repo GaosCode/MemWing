@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,109 @@ def test_memwing_start_print_env_uses_redacted_effective_runtime_env(
     assert env["MEMWING_EVIDENCE_BACKEND"] == "disabled"
     assert env["MEMWING_GRAPHITI_NEO4J_PASSWORD"] == "<redacted>"
     assert "DATABASE_URL" not in env
+
+
+def test_memwing_start_passes_config_derived_env_into_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+    for name in (
+        "DATABASE_URL",
+        "MEMWING_PROFILE",
+        "MEMWING_API_PORT",
+        "MEMWING_STORAGE_BACKEND",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    captured: dict[str, object] = {}
+
+    def fake_runtime_main(argv: list[str]) -> None:
+        captured["argv"] = argv
+        captured["env"] = dict(os.environ)
+
+    monkeypatch.setattr("memwing.runtime_runner.main", fake_runtime_main)
+
+    with pytest.raises(SystemExit):
+        main(["config", "set", "profile", "production"])
+    with pytest.raises(SystemExit):
+        main(["config", "set", "database.url", "postgresql://memwing@localhost/memwing"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["start", "--port", "9123", "--api-only"])
+
+    assert exit_info.value.code == 0
+    assert captured["argv"] == ["--host", "127.0.0.1", "--port", "9123", "--api-only"]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["MEMWING_PROFILE"] == "production"
+    assert env["DATABASE_URL"] == "postgresql://memwing@localhost/memwing"
+    assert env["MEMWING_API_PORT"] == "9123"
+
+
+def test_memwing_doctor_lite_command_reports_profile_without_full_local_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("OPENCLAW_CLI", "python")
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["doctor", "--profile", "lite"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "profile: lite" in output
+    assert "Lite does not require Neo4j" in output
+    assert "database.url is required" not in output
+
+
+def test_memwing_status_command_can_skip_api_health_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["status", "--profile", "lite", "--no-health", "--json"])
+
+    assert exit_info.value.code == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["profile"] == "lite"
+    assert status["api_health"] == "not checked"
+    assert status["storage_backend"] == "sqlite"
+
+
+def test_memwing_openclaw_install_dry_run_uses_packaged_plugin_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+    plugin_dir = tmp_path / "plugin"
+    (plugin_dir / "dist").mkdir(parents=True)
+    (plugin_dir / "openclaw.plugin.json").write_text('{"id":"memwing"}', encoding="utf-8")
+    (plugin_dir / "dist" / "index.js").write_text("module.exports = {}", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "openclaw",
+                "install",
+                "--dry-run",
+                "--plugin-dir",
+                str(plugin_dir),
+                "--base-url",
+                "http://memwing.test",
+            ]
+        )
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "openclaw plugins install --link" in output
+    assert "openclaw config set --batch-json" in output
+    assert "http://memwing.test" in output
 
 
 def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(

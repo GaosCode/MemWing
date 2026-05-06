@@ -21,13 +21,28 @@ from memwing.config_store import (
     unset_config_value,
     write_user_config,
 )
+from memwing.doctor import (
+    build_runtime_status,
+    dumps_report_json,
+    render_doctor_text,
+    render_status_text,
+    run_doctor,
+)
+from memwing.openclaw_installer import (
+    OpenClawInstallerError,
+    build_install_plan,
+    install_openclaw_plugin,
+    openclaw_status,
+    render_install_dry_run,
+    render_status_text as render_openclaw_status_text,
+)
 from memwing.runtime_env import build_runtime_env
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     try:
         raise SystemExit(_run(_parser().parse_args(argv)))
-    except ConfigStoreError as exc:
+    except (ConfigStoreError, OpenClawInstallerError) as exc:
         print(f"memwing: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
@@ -39,6 +54,12 @@ def _run(args: argparse.Namespace) -> int:
         return _run_start(args)
     if args.command == "quickstart":
         return _run_quickstart(args)
+    if args.command == "doctor":
+        return _run_doctor(args)
+    if args.command == "status":
+        return _run_status(args)
+    if args.command == "openclaw":
+        return _run_openclaw(args)
     raise ConfigStoreError("command is required")
 
 
@@ -74,18 +95,23 @@ def _run_start(args: argparse.Namespace) -> int:
         print(json.dumps(runtime_env.redacted(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
-    os.environ.update(runtime_env.env)
-    from memwing.runtime_runner import main as runtime_main
+    previous_env = dict(os.environ)
+    try:
+        os.environ.update(runtime_env.env)
+        from memwing.runtime_runner import main as runtime_main
 
-    runtime_args = [
-        "--host",
-        runtime_env.env["MEMWING_API_HOST"],
-        "--port",
-        runtime_env.env["MEMWING_API_PORT"],
-    ]
-    if args.api_only:
-        runtime_args.append("--api-only")
-    runtime_main(runtime_args)
+        runtime_args = [
+            "--host",
+            runtime_env.env["MEMWING_API_HOST"],
+            "--port",
+            runtime_env.env["MEMWING_API_PORT"],
+        ]
+        if args.api_only:
+            runtime_args.append("--api-only")
+        runtime_main(runtime_args)
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_env)
     return 0
 
 
@@ -119,17 +145,69 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     print(f"state: {sqlite_path}")
     print("graph: disabled")
     print("evidence: disabled")
-    print("openclaw: install/configure is handled by `memwing openclaw install` in M3")
+    print("openclaw: run `memwing openclaw install` to link and configure the plugin")
     return 0
 
 
+def _run_doctor(args: argparse.Namespace) -> int:
+    config = load_effective_config()
+    _apply_profile_override(config, args)
+    report = run_doctor(config, fix=args.fix)
+    print(dumps_report_json(report) if args.json else render_doctor_text(report))
+    return report.exit_code()
+
+
+def _run_status(args: argparse.Namespace) -> int:
+    config = load_effective_config()
+    _apply_profile_override(config, args)
+    status = build_runtime_status(
+        config,
+        config_path=str(default_user_config_path()),
+        check_health=not args.no_health,
+    )
+    print(dumps_report_json(status) if args.json else render_status_text(status))
+    return 0
+
+
+def _run_openclaw(args: argparse.Namespace) -> int:
+    config = load_effective_config()
+    if args.openclaw_command == "install":
+        plan = build_install_plan(
+            config,
+            plugin_dir=args.plugin_dir,
+            base_url=args.base_url,
+            workspace_id=args.workspace_id,
+            project_memory_space_id=args.project_memory_space_id,
+            openclaw_cli=args.openclaw_cli,
+        )
+        if args.dry_run:
+            print(render_install_dry_run(plan, include_smoke=not args.skip_smoke))
+            return 0
+        install_openclaw_plugin(plan, smoke=not args.skip_smoke)
+        print(f"installed: {plan.plugin_dir}")
+        print(f"configured: {plan.memwing_base_url}")
+        if not args.skip_smoke:
+            print("smoke: ok")
+        return 0
+    if args.openclaw_command == "status":
+        plan = build_install_plan(config, openclaw_cli=args.openclaw_cli, validate_plugin=False)
+        inspect, slot = openclaw_status(plan)
+        print(render_openclaw_status_text(inspect, slot))
+        return 0
+    raise ConfigStoreError("openclaw command is required")
+
+
 def _apply_flag_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
-    if args.profile is not None:
-        set_config_value(config, "profile", args.profile)
+    _apply_profile_override(config, args)
     if args.port is not None:
         set_config_value(config, "api.port", args.port)
     if args.openclaw_runtime:
         set_config_value(config, "runtime.modelRuntime", "openclaw")
+
+
+def _apply_profile_override(config: dict[str, Any], args: argparse.Namespace) -> None:
+    if getattr(args, "profile", None) is not None:
+        set_config_value(config, "profile", args.profile)
 
 
 def _merge(target: dict[str, Any], source: dict[str, Any]) -> None:
@@ -164,6 +242,29 @@ def _parser() -> argparse.ArgumentParser:
 
     quickstart = subcommands.add_parser("quickstart")
     quickstart.add_argument("--profile", choices=("lite", "full-local", "production"), default="lite")
+
+    doctor = subcommands.add_parser("doctor")
+    doctor.add_argument("--profile", choices=("lite", "full-local", "production"))
+    doctor.add_argument("--fix", action="store_true")
+    doctor.add_argument("--json", action="store_true")
+
+    status = subcommands.add_parser("status")
+    status.add_argument("--profile", choices=("lite", "full-local", "production"))
+    status.add_argument("--json", action="store_true")
+    status.add_argument("--no-health", action="store_true")
+
+    openclaw = subcommands.add_parser("openclaw")
+    openclaw_commands = openclaw.add_subparsers(dest="openclaw_command", required=True)
+    openclaw_install = openclaw_commands.add_parser("install")
+    openclaw_install.add_argument("--dry-run", action="store_true")
+    openclaw_install.add_argument("--skip-smoke", action="store_true")
+    openclaw_install.add_argument("--base-url")
+    openclaw_install.add_argument("--workspace-id")
+    openclaw_install.add_argument("--project-memory-space-id")
+    openclaw_install.add_argument("--plugin-dir", type=Path)
+    openclaw_install.add_argument("--openclaw-cli")
+    openclaw_status_cmd = openclaw_commands.add_parser("status")
+    openclaw_status_cmd.add_argument("--openclaw-cli")
     return parser
 
 

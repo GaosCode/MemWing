@@ -40,9 +40,34 @@ Tool calls can still provide a more specific scope in their tool parameters.
 
 ```bash
 npm run build
-openclaw plugin link "$(pwd)"
-openclaw plugin unlink memwing
+openclaw plugins install --link "$(pwd)"
+openclaw plugins uninstall memwing
 ```
+
+## MemWing CLI install
+
+Released MemWing artifacts include a prebuilt `memwing-openclaw-plugin`
+directory. Users should configure OpenClaw through the MemWing CLI, which links
+that packaged artifact and applies the required plugin config in one batch:
+
+```bash
+memwing openclaw install --dry-run
+memwing openclaw install
+memwing openclaw status
+```
+
+The installer runs:
+
+```bash
+openclaw plugins install --link <memwing-openclaw-plugin>
+openclaw config set --batch-json '[...]'
+openclaw plugins inspect memwing --runtime --json
+openclaw config get plugins.slots.contextEngine --json
+```
+
+`--dry-run` prints the exact link command, batch config writes, selected
+`memwingBaseUrl`, `workspaceId`, and `project_memory_space_id` without mutating
+OpenClaw config. Release users do not need Node or npm for this path.
 
 ## Verification
 
