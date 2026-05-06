@@ -27,10 +27,16 @@ write_sha256() {
 rm -rf "$ARTIFACT_DIR"
 mkdir -p \
   "$ARTIFACT_DIR/bin" \
+  "$ARTIFACT_DIR/control-plane" \
   "$ARTIFACT_DIR/lib" \
   "$ARTIFACT_DIR/memwing-openclaw-plugin/dist" \
   "$ARTIFACT_DIR/default-configs" \
   "$ARTIFACT_DIR/licenses"
+
+(
+  cd "$ROOT/frontend"
+  npm run build
+)
 
 (
   cd "$ROOT/memwing/integrations/openclaw"
@@ -68,6 +74,8 @@ printf "%s\n" "$PYTHON_EXECUTABLE_NAME" > "$ARTIFACT_DIR/PYTHON_EXECUTABLE"
 
 cp "$ROOT/memwing/integrations/openclaw/openclaw.plugin.json" "$ARTIFACT_DIR/memwing-openclaw-plugin/"
 cp -R "$ROOT/memwing/integrations/openclaw/dist/." "$ARTIFACT_DIR/memwing-openclaw-plugin/dist/"
+cp -R "$ROOT/frontend/dist/." "$ARTIFACT_DIR/control-plane/"
+cp "$ROOT/LICENSE" "$ARTIFACT_DIR/licenses/LICENSE"
 cp "$ROOT/pyproject.toml" "$ARTIFACT_DIR/default-configs/pyproject.toml"
 
 cat > "$ARTIFACT_DIR/README.txt" <<EOF

@@ -3,7 +3,7 @@ set -eu
 
 VERSION="${MEMWING_VERSION:-0.1.0}"
 PREFIX="${MEMWING_INSTALL_PREFIX:-$HOME/.local}"
-BASE_URL="${MEMWING_RELEASE_BASE_URL:-https://github.com/memwing/memwing/releases/download/v$VERSION}"
+BASE_URL="${MEMWING_RELEASE_BASE_URL:-https://github.com/GaosCode/MemWing/releases/download/v$VERSION}"
 
 artifact="memwing-$VERSION.tar.gz"
 url="$BASE_URL/$artifact"

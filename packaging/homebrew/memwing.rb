@@ -1,8 +1,8 @@
 class Memwing < Formula
   desc "Local memory control plane for OpenClaw"
   homepage "https://memwing.dev"
-  url "https://github.com/memwing/memwing/releases/download/v0.1.0/memwing-0.1.0.tar.gz"
-  sha256 "93db283fc96bb79be23dcd3680d13b92be2cc139f60cf63d734992dc019b108c"
+  url "https://github.com/GaosCode/MemWing/releases/download/v0.1.0/memwing-0.1.0.tar.gz"
+  sha256 "118fb4ef1fb0f026634660364ed3f5480a07cbce288dbda2267e67a5b22d15c9"
   license "Apache-2.0"
 
   depends_on "python@3.13"

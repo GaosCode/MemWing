@@ -9,10 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() -> None:
     formula = (ROOT / "packaging/homebrew/memwing.rb").read_text(encoding="utf-8")
 
+    assert (
+        "https://github.com/GaosCode/MemWing/releases/download/v0.1.0/"
+        "memwing-0.1.0.tar.gz"
+    ) in formula
+    assert "github.com/memwing/memwing" not in formula
     assert "REPLACE_WITH_RELEASE_SHA256" not in formula
     assert "virtualenv_install_with_resources" not in formula
     assert "sha256 :no_check" not in formula
-    assert 'sha256 "93db283fc96bb79be23dcd3680d13b92be2cc139f60cf63d734992dc019b108c"' in formula
+    assert 'sha256 "118fb4ef1fb0f026634660364ed3f5480a07cbce288dbda2267e67a5b22d15c9"' in formula
     assert 'prefix.install Dir["*"]' in formula
     assert "python@3.13" in formula
     assert 'artifact_python = (prefix/"PYTHON_MAJOR_MINOR").read.strip' in formula
@@ -45,7 +50,14 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
         'cp -R "$ROOT/memwing/integrations/openclaw/dist/." '
         '"$ARTIFACT_DIR/memwing-openclaw-plugin/"'
     ) not in build_script
+    assert '"$ARTIFACT_DIR/control-plane"' in build_script
+    assert 'cd "$ROOT/frontend"' in build_script
+    assert "npm run build" in build_script
+    assert 'cp -R "$ROOT/frontend/dist/." "$ARTIFACT_DIR/control-plane/"' in build_script
+    assert 'cp "$ROOT/LICENSE" "$ARTIFACT_DIR/licenses/LICENSE"' in build_script
     assert "python_major_minor=" in install_script
+    assert "https://github.com/GaosCode/MemWing/releases/download/v$VERSION" in install_script
+    assert "github.com/memwing/memwing" not in install_script
     assert 'python_bin="${MEMWING_PYTHON:-python$python_major_minor}"' in install_script
     assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script
     assert 'expected_sha256="${MEMWING_ARTIFACT_SHA256:-}"' in install_script
@@ -55,6 +67,7 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
         install_script.index('tar -xzf "$tmp_dir/$artifact"')
     )
     assert 'write_sha256 "$tar_path" "$tar_path.sha256"' in build_script
+    assert 'tar_path="$OUT_DIR/memwing-$VERSION.tar.gz"' in build_script
     assert build_script.index("npm run build:release") < build_script.index("uv build --wheel")
 
 
@@ -72,6 +85,9 @@ def test_release_packaging_has_real_quickstart_smoke() -> None:
 def test_python_package_includes_openclaw_plugin_artifact() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
+    assert 'license = "Apache-2.0"' in pyproject
+    assert 'license-files = ["LICENSE"]' in pyproject
+    assert '"setuptools>=77.0.0"' in pyproject
     assert '[tool.setuptools.package-data]' in pyproject
     assert '"memwing.integrations.openclaw"' in pyproject
     assert '"openclaw.plugin.json"' in pyproject
