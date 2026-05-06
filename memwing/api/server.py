@@ -21,7 +21,7 @@ from memwing.application.control_service import ControlService
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.application.source_redaction_service import SourceRedactionService
-from memwing.bootstrap import MemWingApiRuntimeContext, postgres_runtime_context
+from memwing.bootstrap import MemWingApiRuntimeContext, runtime_context_from_env
 from memwing.ports.agent_runtime import AgentRuntimePort
 
 
@@ -33,7 +33,7 @@ load_app_env()
 
 def create_app(
     *,
-    runtime_context_factory: RuntimeContextFactory = postgres_runtime_context,
+    runtime_context_factory: RuntimeContextFactory = runtime_context_from_env,
 ) -> FastAPI:
     state: dict[
         str,

@@ -35,6 +35,7 @@ include = ["memwing*", "graphiti_core*"]
 exclude = ["memwing.infrastructure.graph.graphiti_core*"]
 
 [project.scripts]
+memwing = "memwing.cli:main"
 memwing-api = "memwing.api_runner:main"
 memwing-pipeline = "memwing.pipeline_runner:main"
 memwing-runtime = "memwing.runtime_runner:main"

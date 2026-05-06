@@ -75,7 +75,7 @@ def _child_specs(args: argparse.Namespace) -> tuple[ChildSpec, ...]:
         )
         + (("--reload",) if args.reload else ()),
     )
-    if args.allow_degraded_pipeline:
+    if getattr(args, "api_only", False) or args.allow_degraded_pipeline:
         return (api,)
     pipeline = ChildSpec(
         name="memwing-pipeline",
@@ -126,6 +126,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--reload", action="store_true")
+    parser.add_argument("--api-only", action="store_true")
     parser.add_argument("--allow-degraded-pipeline", action="store_true")
     parser.add_argument("--startup-grace-seconds", type=float, default=1.0)
     return parser

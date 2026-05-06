@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+import os
 
 from memwing.api.runtime_config import (
     database_url_from_env,
@@ -34,6 +35,7 @@ from memwing.infrastructure.db.postgres import PostgresDataStore
 from memwing.infrastructure.db.postgres_benchmark_admin import PostgresBenchmarkAdminStore
 from memwing.infrastructure.db.postgres_connection import PooledPostgresConnection
 from memwing.infrastructure.db.postgres_schema import ensure_postgres_schema_compatibility
+from memwing.infrastructure.db.sqlite_store import SQLiteDataStore
 from memwing.infrastructure.evidence.qdrant_index import QdrantEvidenceConfig, QdrantEvidenceIndex
 from memwing.infrastructure.graph.graphiti_adapter import GraphitiAdapter, GraphitiConnectionConfig
 from memwing.infrastructure.graph.graphiti_embedder import GraphitiMemWingEmbedder
@@ -200,6 +202,21 @@ async def create_worker_runner_from_env(
     max_size: int = 10,
     worker_id: str = "memwing_worker",
 ) -> MemWingWorkerRuntimeHandle:
+    if _storage_backend_from_env(env) == "sqlite":
+        store = SQLiteDataStore.from_path(_lite_db_path_from_env(env))
+        runner = _worker_runner_from_store(
+            store,
+            graph_backend=None,
+            evidence_index=None,
+            env=env,
+            worker_id=worker_id,
+        )
+        return MemWingWorkerRuntimeHandle(
+            runner=runner,
+            connection=_NoopConnection(),
+            graph_backend=None,
+            evidence_index=None,
+        )
     connection = await PooledPostgresConnection.connect(
         database_url_from_env(env),
         min_size=min_size,
@@ -208,44 +225,14 @@ async def create_worker_runner_from_env(
     try:
         await ensure_postgres_schema_compatibility(connection)
         store = PostgresDataStore(connection)
-        resolver = MemWingModelConfigResolver.from_env(env)
         graph_backend = _graph_backend_from_env(env, store=store)
         evidence_index = _evidence_index_from_env(env, store=store)
-        scope_resolver = ScopeResolver(store)
-        lifecycle_transition = LifecycleTransitionService(store)
-        long_term_filter = LongTermFilterService(
+        runner = _worker_runner_from_store(
             store,
-            _long_term_filter_adapter(resolver, store),
-            lifecycle_transition=lifecycle_transition,
-        )
-        page_memory_worker = PageMemoryWorker(
-            store,
-            PageMemoryService(
-                store,
-                _page_memory_synthesis_adapter(resolver, store),
-            ),
-            scope_resolver=scope_resolver,
-        )
-        graph_write_worker = (
-            GraphWriteWorker(
-                store,
-                graph_backend=graph_backend,
-                lifecycle_transition=lifecycle_transition,
-                worker_id=f"{worker_id}:graph",
-                backend_timeout=timedelta(seconds=graph_write_timeout_seconds_from_env(env)),
-                batch_size=graph_write_batch_size_from_env(env),
-                max_project_concurrency=graph_write_max_project_concurrency_from_env(env),
-                max_global_concurrency=graph_write_max_global_concurrency_from_env(env),
-            )
-            if graph_backend is not None
-            else None
-        )
-        derived_outbox_worker = DerivedOutboxWorker(
-            store,
+            graph_backend=graph_backend,
             evidence_index=evidence_index,
-            long_term_filter=long_term_filter,
-            page_memory_worker=page_memory_worker,
-            worker_id=f"{worker_id}:outbox",
+            env=env,
+            worker_id=worker_id,
         )
     except Exception:
         await _close_optional(evidence_index)
@@ -253,13 +240,61 @@ async def create_worker_runner_from_env(
         await connection.close()
         raise
     return MemWingWorkerRuntimeHandle(
-        runner=MemWingWorkerRunner(
-            derived_outbox_worker=derived_outbox_worker,
-            graph_write_worker=graph_write_worker,
-        ),
+        runner=runner,
         connection=connection,
         graph_backend=graph_backend,
         evidence_index=evidence_index,
+    )
+
+
+def _worker_runner_from_store(
+    store: EventStoreUnitOfWorkPort,
+    *,
+    graph_backend: GraphBackendPort | None,
+    evidence_index: EvidenceIndexPort | None,
+    env: Mapping[str, str] | None,
+    worker_id: str,
+) -> MemWingWorkerRunner:
+    resolver = MemWingModelConfigResolver.from_env(env)
+    scope_resolver = ScopeResolver(store)
+    lifecycle_transition = LifecycleTransitionService(store)
+    long_term_filter = LongTermFilterService(
+        store,
+        _long_term_filter_adapter(resolver, store),
+        lifecycle_transition=lifecycle_transition,
+    )
+    page_memory_worker = PageMemoryWorker(
+        store,
+        PageMemoryService(
+            store,
+            _page_memory_synthesis_adapter(resolver, store),
+        ),
+        scope_resolver=scope_resolver,
+    )
+    graph_write_worker = (
+        GraphWriteWorker(
+            store,
+            graph_backend=graph_backend,
+            lifecycle_transition=lifecycle_transition,
+            worker_id=f"{worker_id}:graph",
+            backend_timeout=timedelta(seconds=graph_write_timeout_seconds_from_env(env)),
+            batch_size=graph_write_batch_size_from_env(env),
+            max_project_concurrency=graph_write_max_project_concurrency_from_env(env),
+            max_global_concurrency=graph_write_max_global_concurrency_from_env(env),
+        )
+        if graph_backend is not None
+        else None
+    )
+    derived_outbox_worker = DerivedOutboxWorker(
+        store,
+        evidence_index=evidence_index,
+        long_term_filter=long_term_filter,
+        page_memory_worker=page_memory_worker,
+        worker_id=f"{worker_id}:outbox",
+    )
+    return MemWingWorkerRunner(
+        derived_outbox_worker=derived_outbox_worker,
+        graph_write_worker=graph_write_worker,
     )
 
 
@@ -460,6 +495,21 @@ async def _close_optional(value: object) -> None:
     result = close()
     if hasattr(result, "__await__"):
         await result
+
+
+def _storage_backend_from_env(env: Mapping[str, str] | None) -> str:
+    source = os.environ if env is None else env
+    return source.get("MEMWING_STORAGE_BACKEND", "").strip().casefold()
+
+
+def _lite_db_path_from_env(env: Mapping[str, str] | None) -> str:
+    source = os.environ if env is None else env
+    return source.get("MEMWING_LITE_DB_PATH", "").strip() or "~/.memwing/memwing.db"
+
+
+class _NoopConnection:
+    async def close(self) -> None:
+        return None
 
 
 __all__ = (
