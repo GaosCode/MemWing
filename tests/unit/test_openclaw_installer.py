@@ -46,7 +46,13 @@ def test_openclaw_install_dry_run_prints_exact_writes(tmp_path: Path) -> None:
 def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None:
     plugin_dir = _plugin_artifact(tmp_path)
     config = default_config()
-    plan = build_install_plan(config, env={}, plugin_dir=plugin_dir, base_url="http://memwing")
+    memwing_home = tmp_path / "home"
+    plan = build_install_plan(
+        config,
+        env={"MEMWING_HOME": str(memwing_home), "MEMWING_VERSION": "1.2.3"},
+        plugin_dir=plugin_dir,
+        base_url="http://memwing",
+    )
     calls: list[OpenClawCommand] = []
 
     def runner(command: OpenClawCommand) -> OpenClawCommandResult:
@@ -67,8 +73,12 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
 
     results = install_openclaw_plugin(plan, runner=runner)
 
+    managed_plugin = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.3"
     assert results[-1].stdout == '"memwing"'
-    assert calls[0].argv == ("openclaw", "plugins", "install", "--link", str(plugin_dir.resolve()))
+    assert plan.plugin_source_dir == plugin_dir.resolve()
+    assert plan.plugin_dir == managed_plugin.resolve()
+    assert (managed_plugin / "openclaw.plugin.json").exists()
+    assert calls[0].argv == ("openclaw", "plugins", "install", "--link", str(managed_plugin.resolve()))
     assert calls[1].argv[:4] == ("openclaw", "config", "set", "--batch-json")
     assert _batch_from_command(calls[1])[0] == {
         "path": "plugins.entries.memwing.enabled",
@@ -110,6 +120,22 @@ def test_default_plugin_dir_can_be_overridden_by_env(tmp_path: Path) -> None:
     plugin_dir = _plugin_artifact(tmp_path)
 
     assert default_plugin_dir(env={"MEMWING_OPENCLAW_PLUGIN_DIR": str(plugin_dir)}) == plugin_dir
+
+
+def test_openclaw_dry_run_reports_managed_plugin_target(tmp_path: Path) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+    memwing_home = tmp_path / "home"
+
+    plan = build_install_plan(
+        default_config(),
+        env={"MEMWING_HOME": str(memwing_home), "MEMWING_VERSION": "1.2.3"},
+        plugin_dir=plugin_dir,
+    )
+
+    rendered = render_install_dry_run(plan)
+
+    assert f"plugin_source_dir: {plugin_dir.resolve()}" in rendered
+    assert f"plugin_dir: {(memwing_home / 'plugins/openclaw/memwing/1.2.3').resolve()}" in rendered
 
 
 def _plugin_artifact(tmp_path: Path) -> Path:

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
+import shutil
 import shlex
 import subprocess
 from typing import Any
 
-from memwing.config_store import ConfigStoreError, get_config_value
+from memwing.config_store import ConfigStoreError, default_memwing_home, get_config_value
 from memwing.openclaw_smoke import (
     OpenClawSmokeError,
     PLUGIN_ID,
@@ -43,6 +45,7 @@ class OpenClawCommandResult:
 @dataclass(frozen=True, slots=True)
 class OpenClawInstallPlan:
     plugin_dir: Path
+    plugin_source_dir: Path
     memwing_base_url: str
     workspace_id: str
     project_memory_space_id: str
@@ -111,15 +114,17 @@ def build_install_plan(
 ) -> OpenClawInstallPlan:
     source = os.environ if env is None else env
     command, command_args, cwd = _openclaw_command(config, env=source, override=openclaw_cli)
-    resolved_plugin_dir = (
-        (plugin_dir or default_plugin_dir(env=source)).resolve()
-        if validate_plugin
-        else Path(".").resolve()
+    resolved_plugin_source_dir = (
+        (plugin_dir or default_plugin_dir(env=source)).resolve() if validate_plugin else Path(".").resolve()
     )
     if validate_plugin:
-        _validate_plugin_dir(resolved_plugin_dir)
+        _validate_plugin_dir(resolved_plugin_source_dir)
+    resolved_plugin_dir = (
+        _managed_plugin_dir(env=source).resolve() if validate_plugin else resolved_plugin_source_dir
+    )
     return OpenClawInstallPlan(
         plugin_dir=resolved_plugin_dir,
+        plugin_source_dir=resolved_plugin_source_dir,
         memwing_base_url=(
             _nonempty(base_url)
             or _optional_config(config, "openclaw.memwingBaseUrl")
@@ -143,6 +148,7 @@ def build_install_plan(
 
 def render_install_dry_run(plan: OpenClawInstallPlan, *, include_smoke: bool = True) -> str:
     lines = [
+        f"plugin_source_dir: {plan.plugin_source_dir}",
         f"plugin_dir: {plan.plugin_dir}",
         f"memwingBaseUrl: {plan.memwing_base_url}",
         f"workspaceId: {plan.workspace_id}",
@@ -162,6 +168,7 @@ def install_openclaw_plugin(
     smoke: bool = True,
 ) -> tuple[OpenClawCommandResult, ...]:
     command_runner = runner or run_command
+    _copy_plugin_artifact(plan.plugin_source_dir, plan.plugin_dir)
     results: list[OpenClawCommandResult] = []
     for command in (plan.plugin_install_command(), plan.config_set_command()):
         results.append(_run_checked(command_runner, command))
@@ -254,6 +261,32 @@ def _validate_plugin_dir(plugin_dir: Path) -> None:
         raise OpenClawInstallerError(
             "OpenClaw plugin dist is missing."
         )
+
+
+def _copy_plugin_artifact(source_dir: Path, target_dir: Path) -> None:
+    if source_dir.resolve() == target_dir.resolve():
+        return
+    _validate_plugin_dir(source_dir)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+    _validate_plugin_dir(target_dir)
+
+
+def _managed_plugin_dir(*, env: Mapping[str, str]) -> Path:
+    configured = _nonempty(env.get("MEMWING_OPENCLAW_MANAGED_PLUGIN_DIR"))
+    if configured is not None:
+        return Path(configured).expanduser()
+    return default_memwing_home(env) / "plugins" / "openclaw" / "memwing" / _memwing_version(env)
+
+
+def _memwing_version(env: Mapping[str, str]) -> str:
+    configured = _nonempty(env.get("MEMWING_VERSION"))
+    if configured is not None:
+        return configured
+    try:
+        return version("memwing")
+    except PackageNotFoundError:
+        return "0.1.0-dev"
 
 
 def _verify_smoke(inspect_stdout: str, slot_stdout: str) -> None:

@@ -33,3 +33,18 @@ def test_runtime_env_redacts_secret_values_by_name() -> None:
 
     assert redacted["MEMWING_GRAPHITI_NEO4J_PASSWORD"] == "<redacted>"
     assert redacted["MEMWING_QDRANT_API_KEY"] == "<redacted>"
+
+
+def test_lite_runtime_env_ignores_database_url_from_config_and_environment() -> None:
+    config = default_config()
+    set_config_value(config, "database.url", "postgresql://configured/memwing")
+
+    runtime_env = build_runtime_env(
+        config,
+        base_env={"DATABASE_URL": "postgresql://env/memwing", "MEMWING_HOME": "/tmp/memwing"},
+    )
+
+    assert runtime_env.profile == "lite"
+    assert runtime_env.env["MEMWING_STORAGE_BACKEND"] == "sqlite"
+    assert runtime_env.env["MEMWING_LITE_DB_PATH"] == "/tmp/memwing/memwing.db"
+    assert "DATABASE_URL" not in runtime_env.env

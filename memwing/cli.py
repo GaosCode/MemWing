@@ -129,6 +129,9 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     path = default_user_config_path()
     config = load_user_config(path)
     merged = build_profile_config(profile, config)
+    if args.dry_run:
+        _print_quickstart_dry_run(profile, path, merged)
+        return 0
     write_user_config(merged, path)
 
     memwing_home = default_memwing_home()
@@ -156,6 +159,20 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     print("evidence: disabled")
     print("openclaw: run `memwing openclaw install` to link and configure the plugin")
     return 0
+
+
+def _print_quickstart_dry_run(profile: str, path: Path, config: dict[str, Any]) -> None:
+    print(f"profile: {profile}")
+    print("mode: dry-run")
+    print(f"would_write_config: {path}")
+    runtime_env = build_runtime_env(config)
+    if profile == "lite":
+        print(f"would_create_state: {runtime_env.env['MEMWING_LITE_DB_PATH']}")
+        print("graph: disabled")
+        print("evidence: disabled")
+    else:
+        print("would_verify: postgres qdrant neo4j")
+    print("openclaw: run `memwing openclaw install` to link and configure the plugin")
 
 
 def _run_setup(args: argparse.Namespace) -> int:
@@ -269,6 +286,7 @@ def _parser() -> argparse.ArgumentParser:
 
     quickstart = subcommands.add_parser("quickstart")
     quickstart.add_argument("--profile", choices=("lite", "full-local", "production"), default="lite")
+    quickstart.add_argument("--dry-run", action="store_true")
 
     setup = subcommands.add_parser("setup")
     setup.add_argument("--profile", choices=("production",), required=True)

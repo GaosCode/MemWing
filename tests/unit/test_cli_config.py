@@ -188,6 +188,26 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     assert (memwing_home / "graph").is_dir()
 
 
+def test_memwing_quickstart_lite_dry_run_does_not_write_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["quickstart", "--profile", "lite", "--dry-run"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "profile: lite" in output
+    assert "mode: dry-run" in output
+    assert "would_write_config:" in output
+    assert not (memwing_home / "memwing.json").exists()
+    assert not (memwing_home / "memwing.db").exists()
+
+
 def test_memwing_quickstart_full_local_writes_service_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
