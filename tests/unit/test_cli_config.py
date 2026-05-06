@@ -255,6 +255,7 @@ def test_memwing_quickstart_fails_when_runtime_exits_before_health(
 
     class FakeProcess:
         pid = 12345
+        waited = False
 
         def poll(self) -> int | None:
             return 1
@@ -262,13 +263,20 @@ def test_memwing_quickstart_fails_when_runtime_exits_before_health(
         def terminate(self) -> None:
             return None
 
-    monkeypatch.setattr("memwing.cli.subprocess.Popen", lambda *_args, **_kwargs: FakeProcess())
+        def wait(self, timeout: float | None = None) -> int:
+            self.waited = True
+            return 1
+
+    process = FakeProcess()
+    monkeypatch.setattr("memwing.cli.subprocess.Popen", lambda *_args, **_kwargs: process)
 
     with pytest.raises(SystemExit) as exit_info:
         main(["quickstart", "--profile", "lite", "--startup-timeout-seconds", "0.1"])
 
     assert exit_info.value.code == 2
     assert "exited before becoming healthy" in capsys.readouterr().err
+    assert process.waited
+    assert not (memwing_home / "runtime.pid").exists()
 
 
 def test_memwing_quickstart_lite_dry_run_does_not_write_state(

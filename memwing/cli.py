@@ -50,6 +50,7 @@ from memwing.service_supervisor import render_service_report, verify_profile_ser
 DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS = 15.0
 DEFAULT_RUNTIME_STARTUP_GRACE_SECONDS = 1.0
 RUNTIME_HEALTH_POLL_SECONDS = 0.05
+FAILED_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,13 +252,17 @@ def _start_runtime_background(
     finally:
         log_handle.close()
     pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
-    _wait_for_runtime_health(
-        process,
-        _runtime_health_url(env),
-        timeout_seconds=startup_timeout_seconds,
-        startup_grace_seconds=startup_grace_seconds,
-        log_path=log_path,
-    )
+    try:
+        _wait_for_runtime_health(
+            process,
+            _runtime_health_url(env),
+            timeout_seconds=startup_timeout_seconds,
+            startup_grace_seconds=startup_grace_seconds,
+            log_path=log_path,
+        )
+    except BaseException:
+        _cleanup_failed_runtime_start(process, pid_path)
+        raise
     return RuntimeLaunch(pid=process.pid, log_path=log_path, pid_path=pid_path)
 
 
@@ -318,6 +323,25 @@ def _terminate_runtime_process(process: object) -> None:
     terminate = getattr(process, "terminate", None)
     if callable(terminate) and process.poll() is None:
         terminate()
+    wait = getattr(process, "wait", None)
+    if callable(wait):
+        try:
+            wait(timeout=FAILED_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            kill = getattr(process, "kill", None)
+            if callable(kill):
+                kill()
+                wait(timeout=FAILED_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS)
+        except TypeError:
+            wait()
+
+
+def _cleanup_failed_runtime_start(process: object, pid_path: Path) -> None:
+    _terminate_runtime_process(process)
+    try:
+        pid_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _runtime_health_url(env: dict[str, str]) -> str:
