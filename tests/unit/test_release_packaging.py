@@ -48,6 +48,13 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
     assert "python_major_minor=" in install_script
     assert 'python_bin="${MEMWING_PYTHON:-python$python_major_minor}"' in install_script
     assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script
+    assert 'expected_sha256="${MEMWING_ARTIFACT_SHA256:-}"' in install_script
+    assert 'checksum_url="$url.sha256"' in install_script
+    assert 'verify_sha256 "$tmp_dir/$artifact" "$expected_sha256"' in install_script
+    assert install_script.index('verify_sha256 "$tmp_dir/$artifact" "$expected_sha256"') < (
+        install_script.index('tar -xzf "$tmp_dir/$artifact"')
+    )
+    assert 'write_sha256 "$tar_path" "$tar_path.sha256"' in build_script
     assert build_script.index("npm run build:release") < build_script.index("uv build --wheel")
 
 

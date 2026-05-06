@@ -9,6 +9,21 @@ PYTHON_BIN="${PYTHON_BIN:-python3.13}"
 PYTHON_MAJOR_MINOR="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 PYTHON_EXECUTABLE_NAME="python$PYTHON_MAJOR_MINOR"
 
+write_sha256() {
+  local file="$1"
+  local output="$2"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}' > "$output"
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}' > "$output"
+    return
+  fi
+  echo "No SHA256 tool found. Install shasum or sha256sum." >&2
+  exit 1
+}
+
 rm -rf "$ARTIFACT_DIR"
 mkdir -p \
   "$ARTIFACT_DIR/bin" \
@@ -66,5 +81,7 @@ The artifact includes Python $PYTHON_MAJOR_MINOR runtime dependencies under
 lib/python and the prebuilt OpenClaw plugin under memwing-openclaw-plugin.
 EOF
 
-tar -C "$OUT_DIR" -czf "$OUT_DIR/memwing-$VERSION.tar.gz" "memwing-$VERSION"
-echo "$OUT_DIR/memwing-$VERSION.tar.gz"
+tar_path="$OUT_DIR/memwing-$VERSION.tar.gz"
+tar -C "$OUT_DIR" -czf "$tar_path" "memwing-$VERSION"
+write_sha256 "$tar_path" "$tar_path.sha256"
+echo "$tar_path"
