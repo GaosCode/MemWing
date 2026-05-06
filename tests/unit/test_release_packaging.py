@@ -48,12 +48,16 @@ def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -
     assert "python_major_minor=" in install_script
     assert 'python_bin="${MEMWING_PYTHON:-python$python_major_minor}"' in install_script
     assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script
+    assert build_script.index("npm run build:release") < build_script.index("uv build --wheel")
 
 
-def test_release_packaging_has_quickstart_dry_run_smoke() -> None:
+def test_release_packaging_has_real_quickstart_smoke() -> None:
     smoke_script = (ROOT / "packaging/release/smoke_quickstart.sh").read_text(encoding="utf-8")
 
-    assert "memwing quickstart --profile lite --dry-run" in smoke_script
+    assert "memwing quickstart --profile lite" in smoke_script
+    assert "--dry-run" not in smoke_script
+    assert "OPENCLAW_CLI=" in smoke_script
+    assert "/healthz" in smoke_script
     assert "MEMWING_HOME=" in smoke_script
     assert 'PATH="$PREFIX/bin:$PATH"' in smoke_script
 

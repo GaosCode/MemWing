@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -186,7 +187,7 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     )
     monkeypatch.setattr(
         "memwing.cli._start_runtime_background",
-        lambda runtime_env, home: started.append((runtime_env, home))
+        lambda runtime_env, home, **_kwargs: started.append((runtime_env, home))
         or RuntimeLaunch(12345, home / "logs" / "runtime.log", home / "runtime.pid"),
     )
 
@@ -204,6 +205,70 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     assert started
     assert "openclaw: installed" in output
     assert "runtime: started pid=12345" in output
+
+
+def test_memwing_quickstart_waits_for_runtime_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    monkeypatch.setenv("MEMWING_OPENCLAW_PLUGIN_DIR", str(_plugin_artifact(tmp_path)))
+    monkeypatch.setattr("memwing.cli.install_openclaw_plugin", lambda _plan, *, smoke: None)
+    calls: list[tuple[str, ...]] = []
+
+    class FakeProcess:
+        pid = 12345
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("healthy quickstart must not terminate runtime")
+
+    def fake_popen(argv: list[str], **_kwargs: object) -> FakeProcess:
+        calls.append(tuple(argv))
+        return FakeProcess()
+
+    monkeypatch.setattr("memwing.cli.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("memwing.cli.urlopen", lambda _url, timeout: SimpleNamespace(close=lambda: None))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["quickstart", "--profile", "lite", "--startup-timeout-seconds", "0.1"])
+
+    assert exit_info.value.code == 0
+    assert calls
+    assert "--allow-degraded-pipeline" not in calls[0]
+    assert "runtime: healthy" in capsys.readouterr().out
+
+
+def test_memwing_quickstart_fails_when_runtime_exits_before_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    monkeypatch.setenv("MEMWING_OPENCLAW_PLUGIN_DIR", str(_plugin_artifact(tmp_path)))
+    monkeypatch.setattr("memwing.cli.install_openclaw_plugin", lambda _plan, *, smoke: None)
+
+    class FakeProcess:
+        pid = 12345
+
+        def poll(self) -> int | None:
+            return 1
+
+        def terminate(self) -> None:
+            return None
+
+    monkeypatch.setattr("memwing.cli.subprocess.Popen", lambda *_args, **_kwargs: FakeProcess())
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["quickstart", "--profile", "lite", "--startup-timeout-seconds", "0.1"])
+
+    assert exit_info.value.code == 2
+    assert "exited before becoming healthy" in capsys.readouterr().err
 
 
 def test_memwing_quickstart_lite_dry_run_does_not_write_state(
@@ -237,7 +302,11 @@ def test_memwing_quickstart_full_local_writes_service_profile(
     monkeypatch.setattr("memwing.cli.install_openclaw_plugin", lambda _plan, *, smoke: None)
     monkeypatch.setattr(
         "memwing.cli._start_runtime_background",
-        lambda _env, home: RuntimeLaunch(12345, home / "logs" / "runtime.log", home / "runtime.pid"),
+        lambda _env, home, **_kwargs: RuntimeLaunch(
+            12345,
+            home / "logs" / "runtime.log",
+            home / "runtime.pid",
+        ),
     )
     monkeypatch.setattr(
         "memwing.cli.verify_profile_services",

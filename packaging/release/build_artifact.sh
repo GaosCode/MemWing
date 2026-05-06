@@ -17,6 +17,11 @@ mkdir -p \
   "$ARTIFACT_DIR/default-configs" \
   "$ARTIFACT_DIR/licenses"
 
+(
+  cd "$ROOT/memwing/integrations/openclaw"
+  npm run build:release
+)
+
 if command -v uv >/dev/null 2>&1; then
   uv build --wheel --out-dir "$OUT_DIR/python"
 else
@@ -28,11 +33,6 @@ if [[ -z "$wheel" ]]; then
   exit 1
 fi
 "$PYTHON_BIN" -m pip install --upgrade --target "$ARTIFACT_DIR/lib/python" "$wheel"
-
-(
-  cd "$ROOT/memwing/integrations/openclaw"
-  npm run build:release
-)
 
 cat > "$ARTIFACT_DIR/bin/memwing" <<'EOF'
 #!/usr/bin/env sh

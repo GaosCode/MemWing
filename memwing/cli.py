@@ -6,9 +6,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from memwing.config_store import (
     ConfigStoreError,
@@ -42,6 +45,11 @@ from memwing.openclaw_installer import (
 from memwing.profiles import build_profile_config
 from memwing.runtime_env import build_runtime_env
 from memwing.service_supervisor import render_service_report, verify_profile_services
+
+
+DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS = 15.0
+DEFAULT_RUNTIME_STARTUP_GRACE_SECONDS = 1.0
+RUNTIME_HEALTH_POLL_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,17 +207,28 @@ def _finish_quickstart(args: argparse.Namespace, config: dict[str, Any], memwing
     if args.no_start:
         print("runtime: skipped")
     else:
-        launch = _start_runtime_background(build_runtime_env(config), memwing_home)
+        launch = _start_runtime_background(
+            build_runtime_env(config),
+            memwing_home,
+            startup_timeout_seconds=args.startup_timeout_seconds,
+        )
         print(f"runtime: started pid={launch.pid}")
+        print("runtime: healthy")
         print(f"runtime_log: {launch.log_path}")
 
 
-def _start_runtime_background(runtime_env: object, memwing_home: Path) -> RuntimeLaunch:
+def _start_runtime_background(
+    runtime_env: object,
+    memwing_home: Path,
+    *,
+    startup_timeout_seconds: float = DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
+) -> RuntimeLaunch:
     env = getattr(runtime_env, "env")
     logs_dir = memwing_home / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "runtime.log"
     pid_path = memwing_home / "runtime.pid"
+    startup_grace_seconds = _runtime_startup_grace_seconds(startup_timeout_seconds)
     log_handle = log_path.open("ab")
     try:
         process = subprocess.Popen(
@@ -221,7 +240,8 @@ def _start_runtime_background(runtime_env: object, memwing_home: Path) -> Runtim
                 env["MEMWING_API_HOST"],
                 "--port",
                 env["MEMWING_API_PORT"],
-                "--allow-degraded-pipeline",
+                "--startup-grace-seconds",
+                f"{startup_grace_seconds:g}",
             ],
             env=env,
             stdout=log_handle,
@@ -231,7 +251,84 @@ def _start_runtime_background(runtime_env: object, memwing_home: Path) -> Runtim
     finally:
         log_handle.close()
     pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
+    _wait_for_runtime_health(
+        process,
+        _runtime_health_url(env),
+        timeout_seconds=startup_timeout_seconds,
+        startup_grace_seconds=startup_grace_seconds,
+        log_path=log_path,
+    )
     return RuntimeLaunch(pid=process.pid, log_path=log_path, pid_path=pid_path)
+
+
+def _wait_for_runtime_health(
+    process: object,
+    health_url: str,
+    *,
+    timeout_seconds: float,
+    startup_grace_seconds: float,
+    log_path: Path,
+) -> None:
+    if timeout_seconds <= 0:
+        raise ConfigStoreError("startup timeout must be greater than 0 seconds")
+    deadline = time.monotonic() + timeout_seconds
+    healthy = False
+    healthy_after = 0.0
+    last_error: BaseException | None = None
+
+    while True:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise ConfigStoreError(
+                f"MemWing runtime exited before becoming healthy "
+                f"(exit code {exit_code}); see {log_path}"
+            )
+
+        now = time.monotonic()
+        if healthy and now >= healthy_after:
+            return
+        if now >= deadline:
+            break
+
+        if not healthy:
+            try:
+                response = urlopen(
+                    health_url,
+                    timeout=min(1.0, max(RUNTIME_HEALTH_POLL_SECONDS, deadline - now)),
+                )
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+                healthy = True
+                healthy_after = min(deadline, now + startup_grace_seconds)
+            except (OSError, TimeoutError, URLError) as exc:
+                last_error = exc
+
+        time.sleep(min(RUNTIME_HEALTH_POLL_SECONDS, max(0.0, deadline - now)))
+
+    _terminate_runtime_process(process)
+    detail = f"; last health error: {last_error}" if last_error is not None else ""
+    raise ConfigStoreError(
+        f"MemWing runtime did not become healthy within {timeout_seconds:g}s; "
+        f"see {log_path}{detail}"
+    )
+
+
+def _terminate_runtime_process(process: object) -> None:
+    terminate = getattr(process, "terminate", None)
+    if callable(terminate) and process.poll() is None:
+        terminate()
+
+
+def _runtime_health_url(env: dict[str, str]) -> str:
+    host = env["MEMWING_API_HOST"]
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    return f"http://{host}:{env['MEMWING_API_PORT']}/healthz"
+
+
+def _runtime_startup_grace_seconds(timeout_seconds: float) -> float:
+    return min(DEFAULT_RUNTIME_STARTUP_GRACE_SECONDS, max(0.0, timeout_seconds))
 
 
 def _run_setup(args: argparse.Namespace) -> int:
@@ -349,6 +446,11 @@ def _parser() -> argparse.ArgumentParser:
     quickstart.add_argument("--skip-openclaw", action="store_true")
     quickstart.add_argument("--skip-smoke", action="store_true")
     quickstart.add_argument("--no-start", action="store_true")
+    quickstart.add_argument(
+        "--startup-timeout-seconds",
+        type=float,
+        default=DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
+    )
 
     setup = subcommands.add_parser("setup")
     setup.add_argument("--profile", choices=("production",), required=True)
