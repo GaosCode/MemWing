@@ -13,6 +13,7 @@ def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() ->
         "https://github.com/GaosCode/MemWing/releases/download/v0.1.1/"
         "memwing-0.1.1.tar.gz"
     ) in formula
+    assert 'homepage "https://github.com/GaosCode/MemWing"' in formula
     assert "github.com/memwing/memwing" not in formula
     assert "REPLACE_WITH_RELEASE_SHA256" not in formula
     assert "REPLACE_WITH_V0_1_1_SHA256" not in formula
