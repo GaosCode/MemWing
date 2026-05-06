@@ -27,6 +27,12 @@ from memwing.config_store import (
 )
 from memwing.control_client import ControlClientError
 from memwing.control_cli import ControlCliError, add_control_parser, run_control_command
+from memwing.control_plane_launcher import (
+    ControlPlaneLauncherError,
+    DEFAULT_CONTROL_PLANE_HOST,
+    DEFAULT_CONTROL_PLANE_PORT,
+    run_control_plane_command,
+)
 from memwing.doctor import (
     build_runtime_status,
     dumps_report_json,
@@ -63,7 +69,13 @@ class RuntimeLaunch:
 def main(argv: Sequence[str] | None = None) -> None:
     try:
         raise SystemExit(_run(_parser().parse_args(argv)))
-    except (ConfigStoreError, ControlCliError, ControlClientError, OpenClawInstallerError) as exc:
+    except (
+        ConfigStoreError,
+        ControlCliError,
+        ControlClientError,
+        ControlPlaneLauncherError,
+        OpenClawInstallerError,
+    ) as exc:
         print(f"memwing: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
@@ -85,6 +97,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_openclaw(args)
     if args.command == "control":
         return _run_control(args)
+    if args.command == "control-plane":
+        return _run_control_plane(args)
     raise ConfigStoreError("command is required")
 
 
@@ -421,6 +435,11 @@ def _run_control(args: argparse.Namespace) -> int:
     return run_control_command(args, config)
 
 
+def _run_control_plane(args: argparse.Namespace) -> int:
+    config = load_effective_config()
+    return run_control_plane_command(args, config)
+
+
 def _apply_flag_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     _apply_profile_override(config, args)
     if args.port is not None:
@@ -501,6 +520,14 @@ def _parser() -> argparse.ArgumentParser:
     openclaw_install.add_argument("--openclaw-cli")
     openclaw_status_cmd = openclaw_commands.add_parser("status")
     openclaw_status_cmd.add_argument("--openclaw-cli")
+
+    control_plane = subcommands.add_parser("control-plane")
+    control_plane.add_argument("--open", action="store_true")
+    control_plane.add_argument("--host", default=DEFAULT_CONTROL_PLANE_HOST)
+    control_plane.add_argument("--port", type=int, default=DEFAULT_CONTROL_PLANE_PORT)
+    control_plane.add_argument("--api-base-url")
+    control_plane.add_argument("--mock", action="store_true")
+
     add_control_parser(subcommands)
     return parser
 

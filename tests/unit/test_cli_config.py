@@ -141,6 +141,35 @@ def test_memwing_status_command_can_skip_api_health_probe(
     assert status["storage_backend"] == "sqlite"
 
 
+def test_memwing_control_plane_command_loads_effective_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+    captured: dict[str, object] = {}
+
+    def fake_control_plane(args: object, config: dict[str, object]) -> int:
+        captured["args"] = args
+        captured["config"] = config
+        return 0
+
+    monkeypatch.setattr("memwing.cli.run_control_plane_command", fake_control_plane)
+
+    with pytest.raises(SystemExit):
+        main(["config", "set", "api.port", "8123"])
+    with pytest.raises(SystemExit) as exit_info:
+        main(["control-plane", "--host", "127.0.0.1", "--port", "5174", "--open"])
+
+    assert exit_info.value.code == 0
+    args = captured["args"]
+    assert getattr(args, "host") == "127.0.0.1"
+    assert getattr(args, "port") == 5174
+    assert getattr(args, "open") is True
+    config = captured["config"]
+    assert isinstance(config, dict)
+    assert config["api"]["port"] == 8123
+
+
 def test_memwing_openclaw_install_dry_run_uses_packaged_plugin_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
