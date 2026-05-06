@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_homebrew_formula_installs_release_artifact_without_placeholder_sha() -> None:
+    formula = (ROOT / "packaging/homebrew/memwing.rb").read_text(encoding="utf-8")
+
+    assert "REPLACE_WITH_RELEASE_SHA256" not in formula
+    assert "virtualenv_install_with_resources" not in formula
+    assert "sha256 :no_check" in formula
+    assert 'prefix.install Dir["*"]' in formula
+    assert "python@3.13" in formula
+
+
+def test_release_artifact_bundles_python_dependencies_and_installs_to_prefix() -> None:
+    build_script = (ROOT / "packaging/release/build_artifact.sh").read_text(encoding="utf-8")
+    install_script = (ROOT / "packaging/install.sh").read_text(encoding="utf-8")
+
+    assert '--target "$ARTIFACT_DIR/lib/python"' in build_script
+    assert 'PYTHONPATH="$ROOT/lib/python:' in build_script
+    assert 'exec "$PYTHON_BIN" -m memwing.cli "$@"' in build_script
+    assert 'cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"' in install_script

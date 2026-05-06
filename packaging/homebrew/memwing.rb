@@ -1,16 +1,16 @@
-require "language/python/virtualenv"
-
 class Memwing < Formula
   desc "Local memory control plane for OpenClaw"
   homepage "https://memwing.dev"
   url "https://github.com/memwing/memwing/releases/download/v0.1.0/memwing-0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_RELEASE_SHA256"
+  sha256 :no_check
   license "Apache-2.0"
 
   depends_on "python@3.13"
 
   def install
-    virtualenv_install_with_resources
+    prefix.install Dir["*"]
+    python = Formula["python@3.13"].opt_bin/"python3.13"
+    inreplace prefix/"bin/memwing", 'exec "$PYTHON_BIN"', "exec \"#{python}\""
   end
 
   test do

@@ -17,7 +17,13 @@ echo "This installer only writes MemWing release files. It does not modify OpenC
 
 mkdir -p "$PREFIX"
 curl -fsSL "$url" -o "$tmp_dir/$artifact"
-tar -xzf "$tmp_dir/$artifact" -C "$PREFIX"
+mkdir -p "$tmp_dir/extract"
+tar -xzf "$tmp_dir/$artifact" -C "$tmp_dir/extract"
+if [ ! -d "$tmp_dir/extract/memwing-$VERSION" ]; then
+  echo "Release artifact does not contain memwing-$VERSION" >&2
+  exit 1
+fi
+cp -R "$tmp_dir/extract/memwing-$VERSION/." "$PREFIX/"
 
 echo "Installed. Add $PREFIX/bin to PATH if needed."
 echo "Next: memwing quickstart"
