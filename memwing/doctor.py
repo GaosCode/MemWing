@@ -209,6 +209,12 @@ def _graph_check(profile: str, env: Mapping[str, str]) -> DoctorCheck:
             "fail",
             "graph.neo4j.uri and graph.neo4j.user are required when graph.backend=graphiti",
         )
+    if profile == "production" and not env.get("MEMWING_GRAPHITI_NEO4J_PASSWORD"):
+        return DoctorCheck(
+            "graph",
+            "fail",
+            "graph.neo4j.password is required for production Graphiti/Neo4j",
+        )
     return DoctorCheck("graph", "ok", "Graphiti/Neo4j config is present")
 
 
@@ -224,6 +230,12 @@ def _evidence_check(profile: str, env: Mapping[str, str]) -> DoctorCheck:
             "evidence",
             "fail",
             "evidence.qdrant.url is required when evidence.backend=qdrant",
+        )
+    if profile == "production" and not env.get("MEMWING_QDRANT_API_KEY"):
+        return DoctorCheck(
+            "evidence",
+            "fail",
+            "evidence.qdrant.apiKey is required for production Qdrant",
         )
     return DoctorCheck("evidence", "ok", "Qdrant config is present")
 

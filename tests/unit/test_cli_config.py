@@ -185,3 +185,76 @@ def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     assert (memwing_home / "memwing.db").exists()
     assert (memwing_home / "evidence").is_dir()
     assert (memwing_home / "graph").is_dir()
+
+
+def test_memwing_quickstart_full_local_writes_service_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["quickstart", "--profile", "full-local"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "profile: full-local" in output
+    assert "ok: postgres" in output
+    assert "ok: qdrant" in output
+    assert "ok: neo4j" in output
+    config = load_json_config(memwing_home / "memwing.json")
+    assert config["profile"] == "full-local"
+    assert config["runtime"]["storageBackend"] == "postgres"
+    assert config["runtime"]["modelRuntime"] == "openclaw"
+    assert config["graph"]["backend"] == "graphiti"
+    assert config["evidence"]["backend"] == "qdrant"
+
+
+def test_memwing_setup_production_renders_config_without_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["setup", "--profile", "production"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "profile: production" in output
+    assert "provisioning: skipped" in output
+    config = load_json_config(memwing_home / "memwing.json")
+    assert config["profile"] == "production"
+    assert config["runtime"]["storageBackend"] == "postgres"
+    assert config["runtime"]["modelRuntime"] == "openclaw"
+    assert "url" not in config["database"]
+
+
+def test_memwing_doctor_production_validates_external_endpoints_and_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("MEMWING_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("OPENCLAW_CLI", "python")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://memwing.example/memwing")
+    monkeypatch.setenv("MEMWING_GRAPHITI_NEO4J_URI", "bolt://neo4j.example:7687")
+    monkeypatch.setenv("MEMWING_GRAPHITI_NEO4J_USER", "neo4j")
+    monkeypatch.setenv("MEMWING_QDRANT_URL", "https://qdrant.example")
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["setup", "--profile", "production"])
+    assert exit_info.value.code == 0
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as doctor_exit:
+        main(["doctor", "--profile", "production"])
+
+    assert doctor_exit.value.code == 1
+    output = capsys.readouterr().out
+    assert "graph.neo4j.password is required for production" in output
+    assert "evidence.qdrant.apiKey is required for production" in output

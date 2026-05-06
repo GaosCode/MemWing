@@ -10,7 +10,6 @@ from typing import Any
 
 from memwing.config_store import (
     ConfigStoreError,
-    default_config,
     default_memwing_home,
     default_user_config_path,
     get_config_value,
@@ -38,7 +37,9 @@ from memwing.openclaw_installer import (
     render_install_dry_run,
     render_status_text as render_openclaw_status_text,
 )
+from memwing.profiles import build_profile_config
 from memwing.runtime_env import build_runtime_env
+from memwing.service_supervisor import render_service_report, verify_profile_services
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -56,6 +57,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_start(args)
     if args.command == "quickstart":
         return _run_quickstart(args)
+    if args.command == "setup":
+        return _run_setup(args)
     if args.command == "doctor":
         return _run_doctor(args)
     if args.command == "status":
@@ -121,22 +124,24 @@ def _run_start(args: argparse.Namespace) -> int:
 
 def _run_quickstart(args: argparse.Namespace) -> int:
     profile = args.profile
-    if profile != "lite":
-        raise ConfigStoreError("quickstart currently supports the lite profile in M1.5")
+    if profile == "production":
+        raise ConfigStoreError("use `memwing setup --profile production` for production config")
     path = default_user_config_path()
     config = load_user_config(path)
-    merged = default_config()
-    _merge(merged, config)
-    merged["profile"] = profile
-    set_config_value(merged, "runtime.storageBackend", "sqlite")
-    set_config_value(merged, "runtime.modelRuntime", "openclaw")
-    set_config_value(merged, "graph.backend", "disabled")
-    set_config_value(merged, "evidence.backend", "disabled")
+    merged = build_profile_config(profile, config)
     write_user_config(merged, path)
 
     memwing_home = default_memwing_home()
     for child in ("evidence", "graph", "plugins", "logs"):
         (memwing_home / child).mkdir(parents=True, exist_ok=True)
+    if profile == "full-local":
+        report = verify_profile_services(load_effective_config())
+        print(f"profile: {profile}")
+        print(f"config: {path}")
+        print(render_service_report(report))
+        print("openclaw: run `memwing openclaw install` to link and configure the plugin")
+        return 0 if report.ok else 1
+
     sqlite_path = Path(
         build_runtime_env(load_effective_config()).env["MEMWING_LITE_DB_PATH"]
     ).expanduser()
@@ -150,6 +155,19 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     print("graph: disabled")
     print("evidence: disabled")
     print("openclaw: run `memwing openclaw install` to link and configure the plugin")
+    return 0
+
+
+def _run_setup(args: argparse.Namespace) -> int:
+    if args.profile != "production":
+        raise ConfigStoreError("setup currently supports the production profile")
+    path = default_user_config_path()
+    config = build_profile_config(args.profile, load_user_config(path))
+    write_user_config(config, path)
+    print(f"profile: {args.profile}")
+    print(f"config: {path}")
+    print("infrastructure: externally managed")
+    print("provisioning: skipped")
     return 0
 
 
@@ -251,6 +269,9 @@ def _parser() -> argparse.ArgumentParser:
 
     quickstart = subcommands.add_parser("quickstart")
     quickstart.add_argument("--profile", choices=("lite", "full-local", "production"), default="lite")
+
+    setup = subcommands.add_parser("setup")
+    setup.add_argument("--profile", choices=("production",), required=True)
 
     doctor = subcommands.add_parser("doctor")
     doctor.add_argument("--profile", choices=("lite", "full-local", "production"))
