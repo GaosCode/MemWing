@@ -51,8 +51,10 @@ def test_push_worker_generates_only_stable_source_candidate_types() -> None:
 
         assert result.forgetting_review_count == 1
         assert result.decision_card_count == 1
-        generated_types = {candidate.type for candidate in store.push_candidates}
+        generated = {candidate.type: candidate for candidate in store.push_candidates}
+        generated_types = set(generated)
         assert generated_types == {"forgetting_review", "decision_card"}
+        assert generated["decision_card"].content == "Content memory_decision"
         assert "conflict" not in generated_types
         assert "deadline" not in generated_types
         assert "daily_digest" not in generated_types

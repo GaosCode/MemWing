@@ -182,6 +182,30 @@ def create_app(
         )
         return JSONResponse(status_code=response.status_code, content=response.body)
 
+    @app.post("/v1/openclaw/push-candidates/next")
+    async def openclaw_push_next_route(request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path="/v1/openclaw/push-candidates/next",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
+    @app.post("/v1/openclaw/push-candidates/{candidate_id}/ack")
+    async def openclaw_push_ack_route(candidate_id: str, request: Request) -> JSONResponse:
+        payload = await _json_payload(request)
+        response = await handle_control_http_request(
+            method="POST",
+            path=f"/v1/openclaw/push-candidates/{candidate_id}/ack",
+            query=dict(request.query_params),
+            payload=payload,
+            services=_control_http_services(state),
+        )
+        return JSONResponse(status_code=response.status_code, content=response.body)
+
     @app.post("/{path:path}")
     async def post_route(path: str, request: Request) -> JSONResponse:
         payload = await _json_payload(request)

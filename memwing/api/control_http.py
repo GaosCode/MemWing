@@ -351,6 +351,33 @@ async def _dispatch_mutation(
             )
             return _mutation_body(result, trace_id=trace_id)
 
+    if method == "POST" and len(parts) == 4 and parts == ("v1", "openclaw", "push-candidates", "next"):
+        result = await services.control.prepare_openclaw_push_card(
+            scope=scope,
+            actor_id=envelope.actor_id,
+            reason=envelope.reason,
+            idempotency_key=envelope.idempotency_key,
+            trace_id=trace_id,
+            trigger_content=_optional_body_text(payload, "trigger_content"),
+        )
+        return _mutation_body(result, trace_id=trace_id)
+
+    if (
+        method == "POST"
+        and len(parts) == 5
+        and parts[:3] == ("v1", "openclaw", "push-candidates")
+        and parts[4] == "ack"
+    ):
+        result = await services.control.ack_openclaw_push_card(
+            candidate_id=parts[3],
+            scope=scope,
+            actor_id=envelope.actor_id,
+            reason=envelope.reason,
+            idempotency_key=envelope.idempotency_key,
+            trace_id=trace_id,
+        )
+        return _mutation_body(result, trace_id=trace_id)
+
     if (
         method == "POST"
         and len(parts) == 5

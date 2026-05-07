@@ -199,6 +199,77 @@ def test_memwing_openclaw_install_dry_run_uses_packaged_plugin_dir(
     assert "http://memwing.test" in output
 
 
+def test_memwing_scope_create_can_use_scope_and_configure_openclaw(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    plugin_dir = _plugin_artifact(tmp_path)
+    seeded: list[tuple[str, str, str]] = []
+    installed: list[tuple[object, bool]] = []
+    monkeypatch.setattr(
+        "memwing.cli._ensure_scope_storage",
+        lambda config, scope_id, workspace_id: seeded.append(
+            (str(config["profile"]), scope_id, workspace_id)
+        ),
+    )
+    monkeypatch.setattr(
+        "memwing.cli.install_openclaw_plugin",
+        lambda plan, *, smoke: installed.append((plan, smoke)),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "scope",
+                "create",
+                "demo_scope",
+                "--use",
+                "--openclaw",
+                "--skip-smoke",
+                "--workspace-id",
+                "workspace_demo",
+                "--plugin-dir",
+                str(plugin_dir),
+            ]
+        )
+
+    assert exit_info.value.code == 0
+    config = load_json_config(memwing_home / "memwing.json")
+    assert config["scope"]["defaultProject"] == "demo_scope"
+    assert config["openclaw"]["workspaceId"] == "workspace_demo"
+    assert seeded == [("lite", "demo_scope", "workspace_demo")]
+    assert installed
+    plan, smoke = installed[0]
+    assert getattr(plan, "project_memory_space_id") == "demo_scope"
+    assert getattr(plan, "workspace_id") == "workspace_demo"
+    assert smoke is False
+    output = capsys.readouterr().out
+    assert "scope: demo_scope" in output
+    assert "openclaw: configured" in output
+
+
+def test_memwing_scope_create_without_use_does_not_change_default_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    monkeypatch.setattr("memwing.cli._ensure_scope_storage", lambda *_args: None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["scope", "create", "demo_scope"])
+
+    assert exit_info.value.code == 0
+    assert load_json_config(memwing_home / "memwing.json") == {}
+    output = capsys.readouterr().out
+    assert "config: unchanged" in output
+    assert "openclaw: skipped" in output
+
+
 def test_memwing_quickstart_lite_initializes_config_layout_and_sqlite_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -424,6 +495,8 @@ def test_memwing_doctor_production_validates_external_endpoints_and_secrets(
     monkeypatch.setenv("MEMWING_GRAPHITI_NEO4J_URI", "bolt://neo4j.example:7687")
     monkeypatch.setenv("MEMWING_GRAPHITI_NEO4J_USER", "neo4j")
     monkeypatch.setenv("MEMWING_QDRANT_URL", "https://qdrant.example")
+    monkeypatch.delenv("MEMWING_GRAPHITI_NEO4J_PASSWORD", raising=False)
+    monkeypatch.delenv("MEMWING_QDRANT_API_KEY", raising=False)
 
     with pytest.raises(SystemExit) as exit_info:
         main(["setup", "--profile", "production"])
@@ -457,11 +530,18 @@ def _successful_openclaw_runner(command: object) -> object:
     argv = getattr(command, "argv")
     if argv[1:3] == ("plugins", "inspect"):
         stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
-    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+    elif argv[1:3] == ("config", "get") and argv[3] in (
+        "plugins.slots.contextEngine",
+        "plugins.slots.memory",
+    ):
         stdout = json.dumps("memwing")
     elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
         stdout = json.dumps(
-            {"enabled": True, "hooks": {"allowConversationAccess": True}}
+            {
+                "enabled": True,
+                "hooks": {"allowConversationAccess": True},
+                "config": {"nativeMemoryTools": True},
+            }
         )
     else:
         stdout = ""

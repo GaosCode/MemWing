@@ -6,9 +6,11 @@ from datetime import timedelta
 import os
 
 from memwing.api.runtime_config import (
+    auto_push_enabled_from_env,
     database_url_from_env,
     evidence_backend_from_env,
     evidence_vector_size_from_env,
+    feishu_push_config_from_env,
     graph_backend_from_env,
     graph_write_batch_size_from_env,
     graph_write_max_global_concurrency_from_env,
@@ -27,8 +29,10 @@ from memwing.application.benchmark_admin_service import BenchmarkAdminService
 from memwing.application.gateway_service import MemoryGateway
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.long_term_filter_service import LongTermFilterService
+from memwing.application.control_service import ControlService
 from memwing.application.page_memory_service import PageMemoryService
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
+from memwing.application.push_trigger_service import PushTriggerService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.infrastructure.agents.openclaw_adapter import OpenClawAdapter
 from memwing.infrastructure.db.postgres import PostgresDataStore
@@ -50,10 +54,13 @@ from memwing.infrastructure.llm.openclaw_runtime import (
     OpenClawRuntimeLLMClient,
 )
 from memwing.infrastructure.llm.page_memory_synthesis import MemWingPageMemorySynthesisAdapter
+from memwing.infrastructure.platforms.feishu_openapi import FeishuOpenApiPushSender
+from memwing.infrastructure.platforms.feishu_push import FeishuPushDispatcher
 from memwing.ports.evidence_index import EvidenceIndexPort
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import GraphBackendPort
 from memwing.ports.model_runtime import EmbeddingModelClient, LLMModelClient, MemWingModelRole
+from memwing.ports.platform_connector import PlatformConnectorPort
 from memwing.workers.benchmark_drain import BenchmarkDrainWorker
 from memwing.workers.derived_outbox_worker import DerivedOutboxWorker
 from memwing.workers.graph_write_worker import GraphWriteWorker
@@ -94,10 +101,15 @@ def create_openclaw_adapter_from_store(
     *,
     graph_backend: GraphBackendPort | None = None,
     evidence_index: EvidenceIndexPort | None = None,
+    auto_push_enabled: bool = False,
 ) -> OpenClawAdapter:
     scope_resolver = ScopeResolver(store)
     return OpenClawAdapter(
-        MemoryGateway(store, scope_resolver),
+        MemoryGateway(
+            store,
+            scope_resolver,
+            outbox_job_types=_gateway_outbox_job_types(auto_push_enabled=auto_push_enabled),
+        ),
         MemoryAccessService(
             scope_resolver,
             store,
@@ -129,6 +141,7 @@ async def create_openclaw_adapter_from_postgres(
             store,
             graph_backend=graph_backend,
             evidence_index=evidence_index,
+            auto_push_enabled=auto_push_enabled_from_env(model_env),
         )
         benchmark_admin = (
             _benchmark_admin_service(
@@ -173,6 +186,7 @@ async def create_openclaw_adapter_from_env(
         max_size=max_size,
         graph_backend=graph_backend,
         evidence_index=evidence_index,
+        model_env=env,
     )
 
 
@@ -291,6 +305,10 @@ def _worker_runner_from_store(
         long_term_filter=long_term_filter,
         page_memory_worker=page_memory_worker,
         worker_id=f"{worker_id}:outbox",
+        control_service=ControlService(store, platform_connectors=_platform_connectors_from_env(env)),
+        push_trigger_service=(
+            PushTriggerService(store) if auto_push_enabled_from_env(env) else None
+        ),
     )
     return MemWingWorkerRunner(
         derived_outbox_worker=derived_outbox_worker,
@@ -367,6 +385,35 @@ def _evidence_index_from_env(
         ),
         embedding_client=embedding_client,
     )
+
+
+def _platform_connectors_from_env(env: Mapping[str, str] | None) -> dict[str, PlatformConnectorPort]:
+    feishu_config = feishu_push_config_from_env(env)
+    if feishu_config is None:
+        return {}
+    return {
+        "feishu": FeishuPushDispatcher(
+            FeishuOpenApiPushSender(
+                app_id=feishu_config.app_id,
+                app_secret=feishu_config.app_secret,
+                receive_id_type=feishu_config.receive_id_type,
+                api_base_url=feishu_config.api_base_url,
+                timeout_seconds=feishu_config.timeout_seconds,
+            )
+        )
+    }
+
+
+def _gateway_outbox_job_types(*, auto_push_enabled: bool) -> tuple[str, ...]:
+    job_types = (
+        "evidence.index_source_event",
+        "working_memory.append",
+        "page_memory.maybe_rebuild",
+        "long_term_filter.classify",
+    )
+    if auto_push_enabled:
+        return (*job_types, "push_candidate.trigger")
+    return job_types
 
 
 def _benchmark_admin_service(

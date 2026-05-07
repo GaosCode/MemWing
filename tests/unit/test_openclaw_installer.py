@@ -35,10 +35,12 @@ def test_openclaw_install_dry_run_prints_exact_writes(tmp_path: Path) -> None:
     assert "pnpm openclaw config set --batch-json" in rendered
     assert "plugins.entries.memwing.hooks.allowConversationAccess" in rendered
     assert "plugins.slots.contextEngine" in rendered
+    assert "plugins.slots.memory" in rendered
     batch = _batch_from_plan(plan)
     assert batch[2]["value"] == {
         "memwingBaseUrl": "http://127.0.0.1:8123",
         "workspaceId": "workspace_custom",
+        "nativeMemoryTools": True,
         "defaultScope": {"project_memory_space_id": "project_custom"},
     }
 
@@ -62,15 +64,20 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
                 {
                     "capabilities": [
                         {"kind": "context-engine", "ids": ["memwing"]},
+                        {"kind": "memory", "ids": ["memwing"]},
                     ]
                 }
             )
         elif command.argv[1:3] == ("config", "get"):
-            if command.argv[3] == "plugins.slots.contextEngine":
+            if command.argv[3] in ("plugins.slots.contextEngine", "plugins.slots.memory"):
                 stdout = json.dumps("memwing")
             else:
                 stdout = json.dumps(
-                    {"enabled": True, "hooks": {"allowConversationAccess": True}}
+                    {
+                        "enabled": True,
+                        "hooks": {"allowConversationAccess": True},
+                        "config": {"nativeMemoryTools": True},
+                    }
                 )
         else:
             stdout = ""
@@ -79,6 +86,7 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
     results = install_openclaw_plugin(plan, runner=runner)
 
     managed_plugin = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.3"
+    assert results[-3].stdout == '"memwing"'
     assert results[-2].stdout == '"memwing"'
     assert json.loads(results[-1].stdout)["enabled"] is True
     assert plan.plugin_source_dir == plugin_dir.resolve()
@@ -92,7 +100,8 @@ def test_openclaw_install_uses_link_batch_json_and_smoke(tmp_path: Path) -> None
     }
     assert calls[2].argv == ("openclaw", "plugins", "inspect", "memwing", "--runtime", "--json")
     assert calls[3].argv == ("openclaw", "config", "get", "plugins.slots.contextEngine", "--json")
-    assert calls[4].argv == ("openclaw", "config", "get", "plugins.entries.memwing", "--json")
+    assert calls[4].argv == ("openclaw", "config", "get", "plugins.slots.memory", "--json")
+    assert calls[5].argv == ("openclaw", "config", "get", "plugins.entries.memwing", "--json")
 
 
 def test_openclaw_install_fails_when_smoke_does_not_register_context_engine(
@@ -105,12 +114,12 @@ def test_openclaw_install_fails_when_smoke_does_not_register_context_engine(
         if command.argv[1:3] == ("plugins", "inspect"):
             return OpenClawCommandResult(command.argv, 0, '{"capabilities":[]}', "")
         if command.argv[1:3] == ("config", "get"):
-            if command.argv[3] == "plugins.slots.contextEngine":
+            if command.argv[3] in ("plugins.slots.contextEngine", "plugins.slots.memory"):
                 return OpenClawCommandResult(command.argv, 0, '"memwing"', "")
             return OpenClawCommandResult(
                 command.argv,
                 0,
-                '{"enabled":true,"hooks":{"allowConversationAccess":true}}',
+                '{"enabled":true,"hooks":{"allowConversationAccess":true},"config":{"nativeMemoryTools":true}}',
                 "",
             )
         return OpenClawCommandResult(command.argv, 0, "", "")
@@ -134,12 +143,12 @@ def test_openclaw_install_fails_when_conversation_hook_is_disabled(
                 "",
             )
         if command.argv[1:3] == ("config", "get"):
-            if command.argv[3] == "plugins.slots.contextEngine":
+            if command.argv[3] in ("plugins.slots.contextEngine", "plugins.slots.memory"):
                 return OpenClawCommandResult(command.argv, 0, '"memwing"', "")
             return OpenClawCommandResult(
                 command.argv,
                 0,
-                '{"enabled":true,"hooks":{"allowConversationAccess":false}}',
+                '{"enabled":true,"hooks":{"allowConversationAccess":false},"config":{"nativeMemoryTools":true}}',
                 "",
             )
         return OpenClawCommandResult(command.argv, 0, "", "")
@@ -192,6 +201,24 @@ def test_openclaw_dry_run_reports_managed_plugin_target(tmp_path: Path) -> None:
 
     assert f"plugin_source_dir: {plugin_dir.resolve()}" in rendered
     assert f"plugin_dir: {(memwing_home / 'plugins/openclaw/memwing/1.2.3').resolve()}" in rendered
+
+
+def test_openclaw_install_plan_treats_blank_cli_env_as_unset(tmp_path: Path) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+
+    plan = build_install_plan(
+        default_config(),
+        env={
+            "OPENCLAW_CLI": "",
+            "OPENCLAW_CLI_ARGS": "",
+            "OPENCLAW_CLI_CWD": "",
+        },
+        plugin_dir=plugin_dir,
+    )
+
+    command = plan.plugin_install_command()
+    assert command.argv[0] == "openclaw"
+    assert command.cwd is None
 
 
 def _plugin_artifact(tmp_path: Path) -> Path:

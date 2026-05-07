@@ -10,6 +10,7 @@ from memwing.core.models import (
     AuditEvent,
     GraphWriteJob,
     LongTermFilterItem,
+    MemoryDisplayType,
     MemoryItem,
     MemoryRoute,
     MemoryStatus,
@@ -18,6 +19,7 @@ from memwing.core.models import (
     graph_write_serialization_key,
 )
 from memwing.core.scope import EffectiveScope
+from memwing.application.push_service import decision_card_candidate
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.lifecycle_transition import (
     LifecycleTransitionPort,
@@ -47,6 +49,7 @@ class LongTermFilterProcessResult:
     candidate_count: int
     activated_count: int
     graph_write_job_count: int
+    push_candidate_count: int = 0
 
 
 class LongTermFilterService:
@@ -127,10 +130,11 @@ class LongTermFilterService:
                     graph_write_job_count += 1
 
         activated_count = 0
+        activated_items: list[MemoryItem] = []
         for item in saved_items:
             if not _should_auto_activate(item):
                 continue
-            await self._lifecycle_transition.transition(
+            transition = await self._lifecycle_transition.transition(
                 LifecycleTransitionRequest(
                     memory_id=item.id,
                     action=LifecycleAction.APPROVE,
@@ -141,7 +145,13 @@ class LongTermFilterService:
                     now=command.now,
                 )
             )
+            activated_items.append(transition.memory_item)
             activated_count += 1
+
+        push_candidate_count = await self._generate_push_candidates_for_decisions(
+            activated_items=tuple(activated_items),
+            now=command.now,
+        )
 
         async with self._unit_of_work.transaction() as tx:
             await tx.audit_events.record(
@@ -150,7 +160,8 @@ class LongTermFilterService:
                     stage="long_term_filter.succeeded",
                     decision=(
                         f"created_candidates:{len(filter_items)};"
-                        f"auto_activated:{activated_count}"
+                        f"auto_activated:{activated_count};"
+                        f"push_candidates:{push_candidate_count}"
                     ),
                     source_event_ids=tuple(event.id for event in source_events),
                 )
@@ -161,6 +172,7 @@ class LongTermFilterService:
             candidate_count=len(filter_items),
             activated_count=activated_count,
             graph_write_job_count=graph_write_job_count,
+            push_candidate_count=push_candidate_count,
         )
 
     async def _record_audit(
@@ -180,6 +192,27 @@ class LongTermFilterService:
                     source_event_ids=source_event_ids,
                 )
             )
+
+    async def _generate_push_candidates_for_decisions(
+        self,
+        *,
+        activated_items: tuple[MemoryItem, ...],
+        now: datetime,
+    ) -> int:
+        decision_items = tuple(
+            item
+            for item in activated_items
+            if item.display_type is MemoryDisplayType.DECISION
+            and item.status is MemoryStatus.ACTIVE
+        )
+        if not decision_items:
+            return 0
+        async with self._unit_of_work.transaction() as tx:
+            generated = 0
+            for item in decision_items:
+                await tx.push_candidates.upsert(decision_card_candidate(item, now))
+                generated += 1
+            return generated
 
 
 def _page_scope_ref(scope: EffectiveScope) -> tuple[PageMemoryScopeType, str]:

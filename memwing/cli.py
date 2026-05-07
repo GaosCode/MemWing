@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from contextlib import contextmanager
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -83,6 +86,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 def _run(args: argparse.Namespace) -> int:
     if args.command == "config":
         return _run_config(args)
+    if args.command == "scope":
+        return _run_scope(args)
     if args.command == "start":
         return _run_start(args)
     if args.command == "quickstart":
@@ -124,6 +129,110 @@ def _run_config(args: argparse.Namespace) -> int:
         print(f"updated {path}")
         return 0
     raise ConfigStoreError("config command is required")
+
+
+def _run_scope(args: argparse.Namespace) -> int:
+    if args.scope_command == "create":
+        return _run_scope_create(args)
+    raise ConfigStoreError("scope command is required")
+
+
+def _run_scope_create(args: argparse.Namespace) -> int:
+    scope_id = _scope_id(args.scope_id)
+    workspace_id = _scope_workspace_id(args.workspace_id, load_effective_config())
+    config_path = default_user_config_path()
+    config = load_user_config(config_path)
+    if args.use:
+        set_config_value(config, "scope.defaultProject", scope_id)
+        if args.workspace_id is not None:
+            set_config_value(config, "openclaw.workspaceId", workspace_id)
+        write_user_config(config, config_path)
+
+    effective_config = load_effective_config()
+    _ensure_scope_storage(effective_config, scope_id, workspace_id)
+    print(f"scope: {scope_id}")
+    print(f"storage: seeded runtime binding for workspace {workspace_id}")
+    if args.use:
+        print(f"config: updated {config_path}")
+    else:
+        print("config: unchanged")
+
+    if args.openclaw:
+        plan = build_install_plan(
+            effective_config,
+            plugin_dir=args.plugin_dir,
+            workspace_id=workspace_id,
+            project_memory_space_id=scope_id,
+            openclaw_cli=args.openclaw_cli,
+        )
+        install_openclaw_plugin(plan, smoke=not args.skip_smoke)
+        print(f"openclaw: configured {plan.plugin_dir}")
+        if not args.skip_smoke:
+            print("openclaw_smoke: ok")
+    else:
+        print("openclaw: skipped")
+
+    print("restart: run `memwing quickstart --skip-openclaw` and `openclaw gateway restart` to apply")
+    return 0
+
+
+def _scope_id(raw_scope_id: str | None) -> str:
+    if raw_scope_id is not None and raw_scope_id.strip():
+        return raw_scope_id.strip()
+    return f"demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _scope_workspace_id(raw_workspace_id: str | None, config: dict[str, Any]) -> str:
+    if raw_workspace_id is not None and raw_workspace_id.strip():
+        return raw_workspace_id.strip()
+    value = get_config_value(config, "openclaw.workspaceId")
+    text = str(value).strip()
+    return text or "workspace_001"
+
+
+def _ensure_scope_storage(config: dict[str, Any], scope_id: str, workspace_id: str) -> None:
+    runtime_env = build_runtime_env(config)
+    env = dict(runtime_env.env)
+    env["MEMWING_DEFAULT_PROJECT_MEMORY_SPACE_ID"] = scope_id
+    env["MEMWING_OPENCLAW_WORKSPACE_ID"] = workspace_id
+    with _patched_environ(env):
+        if env.get("MEMWING_STORAGE_BACKEND") == "sqlite":
+            sqlite_path = Path(env["MEMWING_LITE_DB_PATH"]).expanduser()
+            sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+            from memwing.bootstrap_scope import ensure_lite_scope
+            from memwing.infrastructure.db.sqlite_store import SQLiteDataStore
+
+            store = SQLiteDataStore.from_path(sqlite_path)
+            asyncio.run(ensure_lite_scope(store))
+            return
+
+        database_url = env.get("DATABASE_URL")
+        if not database_url:
+            raise ConfigStoreError("database.url is required to create a scope for this profile")
+        asyncio.run(_ensure_postgres_scope(database_url))
+
+
+async def _ensure_postgres_scope(database_url: str) -> None:
+    from memwing.bootstrap_scope import ensure_postgres_scope
+    from memwing.infrastructure.db.postgres_connection import PooledPostgresConnection
+
+    connection = await PooledPostgresConnection.connect(database_url, min_size=1, max_size=1)
+    try:
+        await ensure_postgres_scope(connection)
+    finally:
+        await connection.close()
+
+
+@contextmanager
+def _patched_environ(env: dict[str, str]) -> object:
+    previous = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ.update(env)
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
 
 
 def _run_start(args: argparse.Namespace) -> int:
@@ -424,8 +533,8 @@ def _run_openclaw(args: argparse.Namespace) -> int:
         return 0
     if args.openclaw_command == "status":
         plan = build_install_plan(config, openclaw_cli=args.openclaw_cli, validate_plugin=False)
-        inspect, slot, entry = openclaw_status(plan)
-        print(render_openclaw_status_text(inspect, slot, entry))
+        inspect, context_slot, memory_slot, entry = openclaw_status(plan)
+        print(render_openclaw_status_text(inspect, context_slot, memory_slot, entry))
         return 0
     raise ConfigStoreError("openclaw command is required")
 
@@ -475,6 +584,17 @@ def _parser() -> argparse.ArgumentParser:
     set_cmd.add_argument("value")
     unset = config_commands.add_parser("unset")
     unset.add_argument("key")
+
+    scope = subcommands.add_parser("scope")
+    scope_commands = scope.add_subparsers(dest="scope_command", required=True)
+    scope_create = scope_commands.add_parser("create")
+    scope_create.add_argument("scope_id", nargs="?")
+    scope_create.add_argument("--use", action="store_true")
+    scope_create.add_argument("--openclaw", action="store_true")
+    scope_create.add_argument("--skip-smoke", action="store_true")
+    scope_create.add_argument("--workspace-id")
+    scope_create.add_argument("--plugin-dir", type=Path)
+    scope_create.add_argument("--openclaw-cli")
 
     start = subcommands.add_parser("start")
     start.add_argument("--profile", choices=("lite", "full-local", "production"))

@@ -281,14 +281,14 @@ def _openclaw_plugin_check(
         return DoctorCheck("openclaw_plugin", "fail", openclaw_cli_check.message)
     try:
         plan = build_install_plan(config, env=env, validate_plugin=False)
-        inspect, slot, entry = openclaw_status(plan, runner=runner or run_command)
-        render_openclaw_status_text(inspect, slot, entry)
+        inspect, context_slot, memory_slot, entry = openclaw_status(plan, runner=runner or run_command)
+        render_openclaw_status_text(inspect, context_slot, memory_slot, entry)
     except OpenClawInstallerError as exc:
         return DoctorCheck("openclaw_plugin", "fail", str(exc))
     return DoctorCheck(
         "openclaw_plugin",
         "ok",
-        "plugin enabled, context engine selected, conversation hook enabled",
+        "plugin enabled, context engine selected, memory selected, conversation hook enabled",
     )
 
 
@@ -306,9 +306,13 @@ def _openclaw_command(
     env: Mapping[str, str] | None,
 ) -> tuple[str, tuple[str, ...], str | None]:
     source = os.environ if env is None else env
-    command = _optional_config(config, "openclaw.cli") or source.get("OPENCLAW_CLI") or "openclaw"
-    raw_args = _optional_config(config, "openclaw.cliArgs") or source.get("OPENCLAW_CLI_ARGS") or ""
-    cwd = _optional_config(config, "openclaw.cwd") or source.get("OPENCLAW_CLI_CWD")
+    command = _optional_config(config, "openclaw.cli") or _nonempty(
+        source.get("OPENCLAW_CLI")
+    ) or "openclaw"
+    raw_args = _optional_config(config, "openclaw.cliArgs") or _nonempty(
+        source.get("OPENCLAW_CLI_ARGS")
+    ) or ""
+    cwd = _optional_config(config, "openclaw.cwd") or _nonempty(source.get("OPENCLAW_CLI_CWD"))
     return command, tuple(shlex.split(raw_args)), cwd
 
 
@@ -317,6 +321,10 @@ def _optional_config(config: Mapping[str, Any], dotted_key: str) -> str | None:
         value = get_config_value(config, dotted_key)
     except ValueError:
         return None
+    return _nonempty(value)
+
+
+def _nonempty(value: object) -> str | None:
     if value is None:
         return None
     text = str(value).strip()

@@ -9,6 +9,8 @@ from memwing.workers.derived_outbox_worker import (
     EVIDENCE_INDEX_JOB_TYPE,
     LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
     PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+    PUSH_CANDIDATE_TRIGGER_JOB_TYPE,
+    PUSH_CANDIDATE_SEND_JOB_TYPE,
     WORKING_MEMORY_APPEND_JOB_TYPE,
     DerivedOutboxWorker,
     DerivedOutboxWorkerResult,
@@ -24,6 +26,7 @@ class PipelineWorkerLane(StrEnum):
     WORKING_MEMORY = "working-memory"
     PAGE_MEMORY = "page-memory"
     LONG_TERM_FILTER = "long-term-filter"
+    PUSH = "push"
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +94,12 @@ class MemWingWorkerRunner:
                 ),
                 self._run_outbox_lane_forever(
                     lane=PipelineWorkerLane.LONG_TERM_FILTER,
+                    interval_seconds=interval_seconds,
+                    idle_interval_seconds=idle_interval,
+                    outbox_limit=outbox_limit,
+                ),
+                self._run_outbox_lane_forever(
+                    lane=PipelineWorkerLane.PUSH,
                     interval_seconds=interval_seconds,
                     idle_interval_seconds=idle_interval,
                     outbox_limit=outbox_limit,
@@ -193,4 +202,6 @@ def _outbox_job_types_for_lane(lane: PipelineWorkerLane) -> tuple[str, ...] | No
         return (PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,)
     if lane == PipelineWorkerLane.LONG_TERM_FILTER:
         return (LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,)
+    if lane == PipelineWorkerLane.PUSH:
+        return (PUSH_CANDIDATE_TRIGGER_JOB_TYPE, PUSH_CANDIDATE_SEND_JOB_TYPE)
     raise ValueError(f"unsupported pipeline lane: {lane}")

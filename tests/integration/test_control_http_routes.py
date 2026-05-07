@@ -331,6 +331,33 @@ def test_control_http_sends_approved_push_candidate_to_platform() -> None:
     )
 
 
+def test_control_http_prepares_and_acks_openclaw_push_card() -> None:
+    store = _store()
+    _seed_approved_push(store)
+    app = create_app(runtime_context_factory=_context(store))
+
+    with TestClient(app) as client:
+        next_response = client.post(
+            "/v1/openclaw/push-candidates/next",
+            params={"project_memory_space_id": "project_001"},
+            json={
+                **_envelope("openclaw-push-next-001"),
+                "trigger_content": "提醒一下 demo 项目记忆，有什么负责人信息？",
+            },
+        )
+        ack_response = client.post(
+            "/v1/openclaw/push-candidates/push_001/ack",
+            params={"project_memory_space_id": "project_001"},
+            json=_envelope("openclaw-push-next-001:ack"),
+        )
+
+    assert next_response.status_code == 200
+    assert next_response.json()["item"]["candidate_id"] == "push_001"
+    assert next_response.json()["item"]["presentation"]["title"] == "Push title"
+    assert ack_response.status_code == 200
+    assert ack_response.json()["item"]["status"] == "sent"
+
+
 def _context(
     store: InMemoryDataStore,
     *,

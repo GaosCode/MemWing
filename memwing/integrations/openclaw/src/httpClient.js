@@ -38,6 +38,20 @@ function createMemWingHttpClient(options = {}) {
     },
     status(params) {
       return postJson(baseUrl, "/v1/openclaw/native/memory-status", params);
+    },
+    nextOpenClawPushCard(params) {
+      return postJson(
+        baseUrl,
+        `/v1/openclaw/push-candidates/next${scopeQuery(params && params.scope)}`,
+        params
+      );
+    },
+    ackOpenClawPushCard(candidateId, params) {
+      return postJson(
+        baseUrl,
+        `/v1/openclaw/push-candidates/${encodeURIComponent(candidateId)}/ack${scopeQuery(params && params.scope)}`,
+        params
+      );
     }
   };
 }
@@ -71,6 +85,21 @@ async function postJson(baseUrl, path, payload) {
     throw error;
   }
   return body;
+}
+
+function scopeQuery(scope) {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    return "";
+  }
+  const query = new URLSearchParams();
+  for (const key of ["project_memory_space_id", "group_id", "thread_id", "shared_group_id"]) {
+    const value = scope[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      query.set(key, value);
+    }
+  }
+  const encoded = query.toString();
+  return encoded ? `?${encoded}` : "";
 }
 
 module.exports = {

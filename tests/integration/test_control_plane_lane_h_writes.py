@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,7 @@ import pytest
 from memwing.application.control_service import ControlService
 from memwing.application.decay_service import DEFAULT_FORGETTING_REVIEW_THRESHOLD
 from memwing.application.page_memory_service import PageMemoryService
+from memwing.application.push_trigger_service import PushTriggerService
 from memwing.core.errors import ValidationFailure
 from memwing.core.models import (
     ForgettingReviewCandidate,
@@ -27,6 +29,11 @@ from memwing.core.models import (
 from memwing.core.platform import PlatformSendResult
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.workers.derived_outbox_worker import (
+    PUSH_CANDIDATE_SEND_JOB_TYPE,
+    PUSH_CANDIDATE_TRIGGER_JOB_TYPE,
+    DerivedOutboxWorker,
+)
 
 
 NOW = datetime(2026, 4, 30, tzinfo=UTC)
@@ -244,6 +251,7 @@ def test_control_plane_maintenance_pages_jobs_and_push_candidates_independently(
 
     async def scenario() -> None:
         async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
             await tx.push_candidates.upsert(_push_candidate(id="push_new", updated_at=NOW))
             await tx.push_candidates.upsert(
                 _push_candidate(
@@ -359,6 +367,306 @@ def test_control_plane_rebuilds_pages_and_sends_approved_push_candidates() -> No
     asyncio.run(scenario())
 
 
+def test_control_plane_sends_openclaw_feishu_runtime_push_candidates() -> None:
+    store = InMemoryDataStore()
+    connector = _RecordingPlatformConnector()
+    service = ControlService(
+        store,
+        now=lambda: NOW,
+        platform_connectors={"feishu": connector},
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                _source_event(
+                    "source_001",
+                    metadata={
+                        "source_ref": {
+                            "kind": "agent_runtime",
+                            "runtime": "openclaw",
+                            "session_id": "agent:main:feishu:channel:oc_group_001",
+                            "message_id": "message_001",
+                        },
+                        "adapter_metadata": {
+                            "payload": {
+                                "platformRef": {
+                                    "platform": "feishu",
+                                    "channel_id": "oc_group_001",
+                                }
+                            }
+                        },
+                    },
+                )
+            )
+            await tx.push_candidates.upsert(replace(_push_candidate(), status="approved"))
+
+        sent = await service.send_push_candidate(
+            candidate_id="push_001",
+            platform="feishu",
+            scope=SCOPE,
+            actor_id="user_001",
+            reason="send approved candidate",
+            idempotency_key="send-openclaw-push-001",
+            trace_id="trace_send_openclaw",
+        )
+
+        assert sent.status == "sent"
+        assert connector.sent == (
+            ("push_001", "oc_group_001", "Demo scope needs review.", "trace_send_openclaw"),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_prepares_openclaw_push_card_and_acks_delivery() -> None:
+    store = InMemoryDataStore()
+    service = ControlService(store, now=lambda: NOW)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.push_candidates.upsert(_push_candidate())
+
+        card = await service.prepare_openclaw_push_card(
+            scope=SCOPE,
+            actor_id="openclaw",
+            reason="prepare OpenClaw card",
+            idempotency_key="openclaw-push-next-001",
+            trace_id="trace_openclaw_push_next",
+            trigger_content="提醒一下 demo 项目记忆，有什么负责人信息？",
+        )
+
+        assert card.candidate_id == "push_001"
+        assert card.title == "Review Demo scope"
+        assert card.presentation == {
+            "title": "Review Demo scope",
+            "tone": "info",
+            "blocks": (
+                {"type": "divider"},
+                {
+                    "type": "context",
+                    "text": "MemWing | forgetting_review | trace trace_openclaw_push_next",
+                },
+            ),
+        }
+        assert store.push_candidates[0].status == "approved"
+
+        ack = await service.ack_openclaw_push_card(
+            candidate_id="push_001",
+            scope=SCOPE,
+            actor_id="openclaw",
+            reason="OpenClaw queued MemWing push card",
+            idempotency_key="openclaw-push-next-001:ack",
+            trace_id="trace_openclaw_push_ack",
+        )
+
+        assert ack.status == "sent"
+        assert any(event.stage == "control.push_candidate.openclaw_prepared" for event in store.audit_events)
+        assert any(event.stage == "control.push_candidate.openclaw_sent" for event in store.audit_events)
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_openclaw_push_card_prefers_memory_fact_over_summary() -> None:
+    store = InMemoryDataStore()
+    service = ControlService(store, now=lambda: NOW)
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.memory_items.upsert(
+                replace(
+                    _memory_item("memory_001", title="Demo 项目负责人"),
+                    content="Demo 项目负责人: gao（高）",
+                    summary="源事件最新确认了项目核心负责人信息，属于持久的项目所有者事实。",
+                )
+            )
+            await tx.push_candidates.upsert(
+                replace(
+                    _push_candidate(title="Demo 项目负责人"),
+                    type="decision_card",
+                    content="源事件最新确认了项目核心负责人信息，属于持久的项目所有者事实。",
+                    trigger_reason="decision_card",
+                    trigger_source="memory_item",
+                    priority=80,
+                    cooldown_key="decision_card:memory_001",
+                )
+            )
+
+        card = await service.prepare_openclaw_push_card(
+            scope=SCOPE,
+            actor_id="openclaw",
+            reason="prepare OpenClaw card",
+            idempotency_key="openclaw-push-next-decision-001",
+            trace_id="trace_openclaw_push_decision",
+            trigger_content="提醒一下 demo 项目记忆，有什么负责人信息？",
+        )
+
+        assert card.candidate_id == "push_001"
+        assert card.title == "Demo 项目负责人"
+        assert card.text == "Demo 项目负责人: gao（高）"
+        assert card.presentation == {
+            "title": "Demo 项目负责人",
+            "tone": "info",
+            "blocks": (
+                {
+                    "type": "text",
+                    "text": "推送理由：源事件最新确认了项目核心负责人信息，属于持久的项目所有者事实。",
+                },
+                {"type": "divider"},
+                {
+                    "type": "context",
+                    "text": "MemWing | decision_card | trace trace_openclaw_push_decision",
+                },
+            ),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_derived_outbox_worker_auto_sends_openclaw_feishu_push_candidates() -> None:
+    store = InMemoryDataStore()
+    connector = _RecordingPlatformConnector()
+    service = ControlService(
+        store,
+        now=lambda: NOW,
+        platform_connectors={"feishu": connector},
+    )
+    worker = DerivedOutboxWorker(
+        store,
+        evidence_index=None,
+        long_term_filter=_NoopLongTermFilterService(),
+        page_memory_worker=None,
+        worker_id="derived_outbox",
+        control_service=service,
+    )
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(
+                _source_event(
+                    "source_001",
+                    metadata={
+                        "source_ref": {
+                            "kind": "agent_runtime",
+                            "runtime": "openclaw",
+                            "session_id": "agent:main:feishu:channel:oc_group_001",
+                        }
+                    },
+                )
+            )
+            await tx.push_candidates.upsert(_push_candidate())
+            await tx.outbox_jobs.enqueue(
+                replace(
+                    _outbox_job(id="outbox_push_001"),
+                    job_type=PUSH_CANDIDATE_SEND_JOB_TYPE,
+                    payload_json={"push_candidate_id": "push_001", "platform": "feishu"},
+                    aggregate_key="push_candidate.send:push_001",
+                )
+            )
+
+        result = await worker.run_global_once(
+            limit=1,
+            job_types=(PUSH_CANDIDATE_SEND_JOB_TYPE,),
+        )
+
+        assert result.succeeded == 1
+        assert connector.sent == (
+            ("push_001", "oc_group_001", "Demo scope needs review.", "push_candidate:auto_send:outbox_push_001"),
+        )
+        assert store.push_candidates[0].status == "sent"
+
+    asyncio.run(scenario())
+
+
+def test_derived_outbox_worker_triggers_existing_candidate_from_current_feishu_context(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = InMemoryDataStore()
+    connector = _RecordingPlatformConnector()
+    service = ControlService(
+        store,
+        now=lambda: NOW,
+        platform_connectors={"feishu": connector},
+    )
+    worker = DerivedOutboxWorker(
+        store,
+        evidence_index=None,
+        long_term_filter=_NoopLongTermFilterService(),
+        page_memory_worker=None,
+        worker_id="derived_outbox",
+        control_service=service,
+        push_trigger_service=PushTriggerService(store),
+    )
+    sessions_dir = tmp_path / "agents" / "main" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "sessions.json").write_text(
+        json.dumps(
+            {
+                "agent:main:feishu:channel:oc_current_group": {
+                    "sessionId": "runtime_session_001",
+                    "deliveryContext": {
+                        "channel": "feishu",
+                        "to": "chat:oc_current_group",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_HOME", str(tmp_path))
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event("source_001"))
+            await tx.source_events.insert_if_absent(
+                _source_event(
+                    "source_trigger",
+                    metadata={
+                        "source_ref": {
+                            "kind": "agent_runtime",
+                            "runtime": "openclaw",
+                            "agent_id": "main",
+                            "session_id": "runtime_session_001",
+                        }
+                    },
+                )
+            )
+            await tx.push_candidates.upsert(replace(_push_candidate(), status="approved"))
+            await tx.outbox_jobs.enqueue(
+                replace(
+                    _outbox_job(id="outbox_trigger_001"),
+                    source_event_id="source_trigger",
+                    job_type=PUSH_CANDIDATE_TRIGGER_JOB_TYPE,
+                    payload_json={"source_event_id": "source_trigger"},
+                    aggregate_key="source_trigger",
+                )
+            )
+
+        first = await worker.run_global_once(
+            limit=1,
+            job_types=(PUSH_CANDIDATE_TRIGGER_JOB_TYPE,),
+        )
+        second = await worker.run_global_once(
+            limit=1,
+            job_types=(PUSH_CANDIDATE_SEND_JOB_TYPE,),
+        )
+
+        assert first.succeeded == 1
+        assert second.succeeded == 1
+        assert connector.sent[0][:3] == (
+            "push_001",
+            "oc_current_group",
+            "Demo scope needs review.",
+        )
+        assert connector.sent[0][3].startswith("push_candidate:auto_send:")
+        assert store.push_candidates[0].status == "sent"
+
+    asyncio.run(scenario())
+
+
 def test_control_plane_rejected_push_send_is_audited() -> None:
     store = InMemoryDataStore()
     connector = _RecordingPlatformConnector()
@@ -441,7 +749,8 @@ def _memory_item(
     )
 
 
-def _source_event(source_event_id: str) -> SourceEvent:
+def _source_event(source_event_id: str, *, metadata: dict[str, object] | None = None) -> SourceEvent:
+    content = "提醒一下 demo 项目记忆。 " if source_event_id == "source_trigger" else "Decision source text."
     return SourceEvent(
         id=source_event_id,
         project_memory_space_id="project_001",
@@ -451,12 +760,12 @@ def _source_event(source_event_id: str) -> SourceEvent:
         author_id="user_001",
         author_name="Ada",
         source_type="text",
-        content="Decision source text.",
-        content_preview="Decision source text.",
+        content=content,
+        content_preview=content,
         source_url=None,
         event_time=NOW - timedelta(days=10),
         raw_payload_hash=f"hash_{source_event_id}",
-        metadata={
+        metadata=metadata or {
             "source_ref": {
                 "kind": "platform",
                 "platform": "feishu",
@@ -566,13 +875,14 @@ def _push_candidate(
 def _outbox_job(
     *,
     id: str = "outbox_job_001",
+    source_event_id: str = "source_001",
     priority: int = 10,
     updated_at: datetime = NOW,
 ) -> OutboxJob:
     return OutboxJob(
         id=id,
         project_memory_space_id="project_001",
-        source_event_id="source_001",
+        source_event_id=source_event_id,
         job_type="memory.decay",
         payload_json={},
         status="pending",
@@ -645,6 +955,11 @@ class _StaticPageMemorySynthesis:
             source_event_ids=("source_001",),
             linked_memory_item_ids=("memory_001",),
         )
+
+
+class _NoopLongTermFilterService:
+    async def process_scope(self, command):
+        raise AssertionError("long term filter should not be called")
 
 
 class _RecordingPlatformConnector:

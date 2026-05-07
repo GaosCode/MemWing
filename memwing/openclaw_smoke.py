@@ -45,11 +45,11 @@ def verify_runtime_inspect(stdout: str) -> None:
     raise OpenClawSmokeError("OpenClaw runtime did not register the memwing context engine")
 
 
-def verify_context_engine(stdout: str) -> None:
+def verify_context_engine(stdout: str, *, label: str = "plugins.slots.contextEngine") -> None:
     value = json_or_text(stdout)
     if value != PLUGIN_ID:
         raise OpenClawSmokeError(
-            f"OpenClaw plugins.slots.contextEngine must be memwing, found {value!r}"
+            f"OpenClaw {label} must be memwing, found {value!r}"
         )
 
 
@@ -64,23 +64,31 @@ def verify_plugin_entry(stdout: str) -> None:
         raise OpenClawSmokeError(
             "OpenClaw plugins.entries.memwing.hooks.allowConversationAccess must be true"
         )
+    config = value.get("config")
+    if not isinstance(config, Mapping) or config.get("nativeMemoryTools") is not True:
+        raise OpenClawSmokeError(
+            "OpenClaw plugins.entries.memwing.config.nativeMemoryTools must be true"
+        )
 
 
 def render_status_text(
     *,
     inspect_stdout: str,
-    slot_stdout: str,
+    context_slot_stdout: str,
+    memory_slot_stdout: str,
     entry_stdout: str,
     inspect_argv: Sequence[str],
 ) -> str:
     verify_runtime_inspect(inspect_stdout)
-    verify_context_engine(slot_stdout)
+    verify_context_engine(context_slot_stdout)
+    verify_context_engine(memory_slot_stdout, label="plugins.slots.memory")
     verify_plugin_entry(entry_stdout)
     return "\n".join(
         (
             "plugin: memwing",
             "runtime: ok",
-            f"contextEngine: {json_or_text(slot_stdout)}",
+            f"contextEngine: {json_or_text(context_slot_stdout)}",
+            f"memory: {json_or_text(memory_slot_stdout)}",
             "enabled: true",
             "conversationHook: true",
             f"inspect_command: {' '.join(shlex.quote(part) for part in inspect_argv)}",

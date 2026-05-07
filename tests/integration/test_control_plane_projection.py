@@ -48,6 +48,9 @@ def test_control_plane_projection_lists_detail_and_maintenance_models() -> None:
         async with store.transaction() as tx:
             await tx.source_events.insert_if_absent(_source_event("source_001"))
             await tx.source_events.insert_if_absent(
+                replace(_source_event("source_other"), group_id="group_other")
+            )
+            await tx.source_events.insert_if_absent(
                 replace(
                     _source_event("source_redacted"),
                     purge_level="memwing_redaction",
@@ -84,7 +87,24 @@ def test_control_plane_projection_lists_detail_and_maintenance_models() -> None:
             )
             await tx.push_candidates.upsert(_push_candidate())
             await tx.outbox_jobs.enqueue(_outbox_job())
+            await tx.outbox_jobs.enqueue(
+                replace(
+                    _outbox_job(),
+                    id="outbox_job_other",
+                    source_event_id="source_other",
+                    idempotency_key="outbox:memory.decay:project_001:other",
+                )
+            )
             await tx.graph_write_jobs.enqueue(_graph_job())
+            await tx.graph_write_jobs.enqueue(
+                replace(
+                    _graph_job(),
+                    id="graph_job_other",
+                    memory_id="memory_other",
+                    source_event_ids=("source_other",),
+                    idempotency_key="graph:memory_other",
+                )
+            )
 
         memory_list = await service.list_memories(scope=SCOPE, limit=10, trace_id="trace_list")
         detail = await service.get_memory_detail(

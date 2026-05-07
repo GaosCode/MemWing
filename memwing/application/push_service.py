@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Callable
 import uuid
 
-from memwing.core.models import MemoryDisplayType, MemoryItem, MemoryStatus, PushCandidate
+from memwing.core.models import MemoryDisplayType, MemoryItem, MemoryStatus, OutboxJob, PushCandidate
 from memwing.core.scope import EffectiveScope, effective_scope_matches
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
@@ -70,7 +70,7 @@ class PushService:
                     continue
                 if item.status is not MemoryStatus.ACTIVE:
                     continue
-                candidate = _decision_card_candidate(item, now)
+                candidate = decision_card_candidate(item, now)
                 candidate = await tx.push_candidates.upsert(candidate)
                 generated.append(candidate.id)
         return PushGenerationResult(
@@ -112,7 +112,7 @@ def _forgetting_review_candidate(item: MemoryItem, reason: str, now: datetime) -
     )
 
 
-def _decision_card_candidate(item: MemoryItem, now: datetime) -> PushCandidate:
+def decision_card_candidate(item: MemoryItem, now: datetime) -> PushCandidate:
     return PushCandidate(
         id=_uuid("push", "decision_card", item.id),
         project_memory_space_id=item.project_memory_space_id,
@@ -121,7 +121,7 @@ def _decision_card_candidate(item: MemoryItem, now: datetime) -> PushCandidate:
         shared_group_id=item.shared_group_id,
         type="decision_card",
         title=item.title,
-        content=item.summary or item.content,
+        content=item.content or item.summary or item.title,
         memory_item_ids=(item.id,),
         source_event_ids=item.source_event_ids,
         trigger_reason="decision_card",
@@ -130,6 +130,46 @@ def _decision_card_candidate(item: MemoryItem, now: datetime) -> PushCandidate:
         expires_at=None,
         status="pending",
         cooldown_key=f"decision_card:{item.id}",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def push_candidate_send_job(
+    candidate: PushCandidate,
+    *,
+    now: datetime,
+    platform: str = "feishu",
+    delivery_source_event_id: str | None = None,
+) -> OutboxJob:
+    source_event_id = delivery_source_event_id or (
+        candidate.source_event_ids[0] if candidate.source_event_ids else None
+    )
+    if source_event_id is None:
+        raise ValueError("push candidate send job requires a source event id")
+    delivery_key = delivery_source_event_id or "candidate_source"
+    idempotency_key = f"push_candidate.send:{candidate.id}:{platform}:{delivery_key}"
+    payload_json: dict[str, object] = {"push_candidate_id": candidate.id, "platform": platform}
+    if delivery_source_event_id is not None:
+        payload_json["delivery_source_event_id"] = delivery_source_event_id
+    return OutboxJob(
+        id=_uuid("outbox", idempotency_key),
+        project_memory_space_id=candidate.project_memory_space_id,
+        source_event_id=source_event_id,
+        job_type="push_candidate.send",
+        payload_json=payload_json,
+        status="pending",
+        idempotency_key=idempotency_key,
+        aggregate_key=f"push_candidate.send:{candidate.id}",
+        attempts=0,
+        max_attempts=3,
+        priority=90,
+        next_run_at=now,
+        locked_at=None,
+        locked_by=None,
+        lock_expires_at=None,
+        last_error=None,
+        dead_letter_reason=None,
         created_at=now,
         updated_at=now,
     )

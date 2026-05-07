@@ -131,6 +131,11 @@ def benchmark_admin_enabled_from_env(env: Mapping[str, str] | None = None) -> bo
     return value is not None and value.casefold() == "true"
 
 
+def auto_push_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
+    value = _optional_env(env, "MEMWING_AUTO_PUSH_ENABLED")
+    return value is not None and value.casefold() == "true"
+
+
 def feishu_push_config_from_env(env: Mapping[str, str] | None = None) -> FeishuPushConfig | None:
     enabled = _optional_env(env, "MEMWING_FEISHU_PUSH_ENABLED")
     if enabled is None or enabled.casefold() != "true":

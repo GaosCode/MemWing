@@ -38,6 +38,7 @@ def test_long_term_filter_service_auto_activates_recallable_items_and_enqueues_g
                     title="Graph memory",
                     route=MemoryRoute.GRAPH,
                     source_event_ids=("source_001",),
+                    display_type=MemoryDisplayType.DECISION,
                 ),
                 _filter_item(
                     title="Vector memory",
@@ -65,6 +66,7 @@ def test_long_term_filter_service_auto_activates_recallable_items_and_enqueues_g
         assert result.candidate_count == 2
         assert result.activated_count == 2
         assert result.graph_write_job_count == 1
+        assert result.push_candidate_count == 1
         assert filter_port.last_request is not None
         assert {event.id for event in filter_port.last_request.source_events} == {
             "source_001",
@@ -79,6 +81,8 @@ def test_long_term_filter_service_auto_activates_recallable_items_and_enqueues_g
         assert all(item.activated_at == NOW for item in items)
         assert len(store.graph_write_jobs) == 1
         assert store.graph_write_jobs[0].memory_id in {item.id for item in items}
+        assert len(store.push_candidates) == 1
+        assert store.push_candidates[0].type == "decision_card"
         assert store.audit_events[-1].stage == "long_term_filter.succeeded"
 
     asyncio.run(scenario())
@@ -269,12 +273,13 @@ def _filter_item(
     title: str,
     route: MemoryRoute,
     source_event_ids: tuple[str, ...],
+    display_type: MemoryDisplayType = MemoryDisplayType.NOTE,
 ) -> LongTermFilterItem:
     return LongTermFilterItem(
         title=title,
         content=f"{title} content",
         route=route,
-        display_type=MemoryDisplayType.NOTE,
+        display_type=display_type,
         original_score=0.82,
         half_life_days=30,
         source_event_ids=source_event_ids,

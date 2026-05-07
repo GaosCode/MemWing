@@ -28,7 +28,10 @@ def test_doctor_lite_does_not_require_full_local_services(tmp_path: Path) -> Non
     assert "Lite does not require Neo4j" in rendered
     assert "Lite does not require Qdrant" in rendered
     assert "database.url is required" not in rendered
-    assert "ok: openclaw_plugin: plugin enabled, context engine selected, conversation hook enabled" in rendered
+    assert (
+        "ok: openclaw_plugin: plugin enabled, context engine selected, memory selected, "
+        "conversation hook enabled"
+    ) in rendered
 
 
 def test_doctor_full_local_reports_missing_database_model_and_backends() -> None:
@@ -123,10 +126,19 @@ def _successful_openclaw_runner(command: object) -> OpenClawCommandResult:
     argv = getattr(command, "argv")
     if argv[1:3] == ("plugins", "inspect"):
         stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
-    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+    elif argv[1:3] == ("config", "get") and argv[3] in (
+        "plugins.slots.contextEngine",
+        "plugins.slots.memory",
+    ):
         stdout = json.dumps("memwing")
     elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
-        stdout = json.dumps({"enabled": True, "hooks": {"allowConversationAccess": True}})
+        stdout = json.dumps(
+            {
+                "enabled": True,
+                "hooks": {"allowConversationAccess": True},
+                "config": {"nativeMemoryTools": True},
+            }
+        )
     else:
         stdout = ""
     return OpenClawCommandResult(tuple(argv), 0, stdout, "")
@@ -136,10 +148,19 @@ def _disabled_openclaw_runner(command: object) -> OpenClawCommandResult:
     argv = getattr(command, "argv")
     if argv[1:3] == ("plugins", "inspect"):
         stdout = json.dumps({"capabilities": [{"kind": "context-engine", "ids": ["memwing"]}]})
-    elif argv[1:3] == ("config", "get") and argv[3] == "plugins.slots.contextEngine":
+    elif argv[1:3] == ("config", "get") and argv[3] in (
+        "plugins.slots.contextEngine",
+        "plugins.slots.memory",
+    ):
         stdout = json.dumps("memwing")
     elif argv[1:3] == ("config", "get") and argv[3] == "plugins.entries.memwing":
-        stdout = json.dumps({"enabled": False, "hooks": {"allowConversationAccess": True}})
+        stdout = json.dumps(
+            {
+                "enabled": False,
+                "hooks": {"allowConversationAccess": True},
+                "config": {"nativeMemoryTools": True},
+            }
+        )
     else:
         stdout = ""
     return OpenClawCommandResult(tuple(argv), 0, stdout, "")

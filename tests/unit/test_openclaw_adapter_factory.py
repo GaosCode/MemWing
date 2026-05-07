@@ -29,6 +29,17 @@ def test_factory_passes_graph_and_evidence_ports_to_memory_access() -> None:
     assert memory_access._current_truth._evidence_index is evidence_index
 
 
+def test_factory_adds_push_trigger_jobs_only_when_auto_push_is_enabled() -> None:
+    disabled = create_openclaw_adapter_from_store(InMemoryDataStore())
+    enabled = create_openclaw_adapter_from_store(
+        InMemoryDataStore(),
+        auto_push_enabled=True,
+    )
+
+    assert "push_candidate.trigger" not in disabled._memory_gateway._outbox_job_types
+    assert "push_candidate.trigger" in enabled._memory_gateway._outbox_job_types
+
+
 def test_runtime_handle_closes_external_clients_before_postgres() -> None:
     async def run() -> None:
         calls: list[str] = []

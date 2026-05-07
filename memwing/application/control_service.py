@@ -6,6 +6,7 @@ from typing import Callable, Mapping
 from memwing.application.control_memory_service import (
     ControlMemoryServiceMixin,
     _memory_item_in_scope,
+    _source_event_in_scope,
     _source_events_for_item,
 )
 from memwing.application.control_manual_memory_service import ControlManualMemoryServiceMixin
@@ -40,7 +41,7 @@ from memwing.application.control_service_support import (
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.scope import EffectiveScope, MemoryScope
-from memwing.ports.event_store import EventStoreUnitOfWorkPort
+from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
 from memwing.ports.platform_connector import PlatformConnectorPort
 
 
@@ -205,9 +206,15 @@ class ControlService(
                 limit=jobs_fetch_limit,
                 sort=sort,
             )
+            scoped_graph_jobs = [
+                job for job in graph_jobs if await _graph_job_in_scope(tx, job, scope)
+            ]
+            scoped_outbox_jobs = [
+                job for job in outbox_jobs if await _outbox_job_in_scope(tx, job, scope)
+            ]
 
         pending_push_count = sum(1 for candidate in push_candidates if candidate.status == "pending")
-        jobs = tuple(graph_jobs) + tuple(outbox_jobs)
+        jobs = tuple(scoped_graph_jobs) + tuple(scoped_outbox_jobs)
         paged_jobs = paginate_control_items(
             jobs,
             limit=limit,
@@ -360,6 +367,33 @@ def _job_sort_value(job: object, sort: str) -> object:
     if sort == "priority":
         return getattr(job, "priority")
     return getattr(job, "updated_at")
+
+
+async def _outbox_job_in_scope(tx: EventStoreTransactionPort, job: object, scope: EffectiveScope) -> bool:
+    source_event_id = getattr(job, "source_event_id", None)
+    if not isinstance(source_event_id, str) or not source_event_id:
+        return False
+    source_event = await tx.source_events.get_source_event(source_event_id)
+    return source_event is not None and _source_event_in_scope(source_event, scope)
+
+
+async def _graph_job_in_scope(tx: EventStoreTransactionPort, job: object, scope: EffectiveScope) -> bool:
+    memory_id = getattr(job, "memory_id", None)
+    if isinstance(memory_id, str) and memory_id:
+        item = await tx.memory_items.get(memory_id)
+        if item is not None:
+            return _memory_item_in_scope(item, scope)
+
+    source_event_ids = getattr(job, "source_event_ids", ())
+    if not isinstance(source_event_ids, tuple):
+        return False
+    for source_event_id in source_event_ids:
+        if not isinstance(source_event_id, str):
+            continue
+        source_event = await tx.source_events.get_source_event(source_event_id)
+        if source_event is not None and _source_event_in_scope(source_event, scope):
+            return True
+    return False
 
 
 def _job_kind_rank(job: object) -> int:

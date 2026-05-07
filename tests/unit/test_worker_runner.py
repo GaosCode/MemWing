@@ -67,6 +67,27 @@ def test_worker_runner_graph_lane_skips_outbox() -> None:
     asyncio.run(run())
 
 
+def test_worker_runner_push_lane_filters_outbox_and_skips_graph() -> None:
+    async def run() -> None:
+        outbox_worker = _FakeDerivedOutboxWorker(claimed=1)
+        graph_worker = _FakeGraphWriteWorker(claimed=1)
+        runner = MemWingWorkerRunner(
+            derived_outbox_worker=outbox_worker,
+            graph_write_worker=graph_worker,
+        )
+
+        result = await runner.run_once(lane=PipelineWorkerLane.PUSH)
+
+        assert result.claimed == 1
+        assert outbox_worker.calls[-1]["job_types"] == (
+            "push_candidate.trigger",
+            "push_candidate.send",
+        )
+        assert graph_worker.calls == []
+
+    asyncio.run(run())
+
+
 def test_worker_runner_all_lane_run_forever_does_not_block_outbox_on_graph() -> None:
     async def run() -> None:
         outbox_worker = _CountingDerivedOutboxWorker()

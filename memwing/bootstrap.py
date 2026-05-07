@@ -12,7 +12,7 @@ from memwing.application.control_service import ControlService
 from memwing.application.pipeline_readiness_service import PipelineReadinessService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.application.source_redaction_service import SourceRedactionService
-from memwing.core.scope import ProjectMemorySpace, RuntimeScopeBinding
+from memwing.bootstrap_scope import ensure_lite_scope, ensure_postgres_scope
 from memwing.infrastructure.agents.openclaw_adapter_factory import (
     create_openclaw_adapter_from_env,
     create_openclaw_adapter_with_benchmark_admin_from_env,
@@ -42,6 +42,7 @@ async def postgres_runtime_context() -> AsyncIterator[MemWingApiRuntimeContext]:
     else:
         handle = await create_openclaw_adapter_from_env()
     try:
+        await ensure_postgres_scope(handle.connection)
         store = PostgresDataStore(handle.connection)
         yield MemWingApiRuntimeContext(
             runtime=handle.runtime,
@@ -58,7 +59,7 @@ async def postgres_runtime_context() -> AsyncIterator[MemWingApiRuntimeContext]:
 @asynccontextmanager
 async def lite_runtime_context() -> AsyncIterator[MemWingApiRuntimeContext]:
     store = SQLiteDataStore.from_path(_lite_db_path())
-    await _ensure_lite_scope(store)
+    await ensure_lite_scope(store)
     yield MemWingApiRuntimeContext(
         runtime=create_openclaw_adapter_from_store(store),
         pipeline_readiness=PipelineReadinessService(
@@ -78,27 +79,6 @@ def runtime_context_from_env() -> AsyncContextManager[MemWingApiRuntimeContext]:
     return postgres_runtime_context()
 
 
-async def _ensure_lite_scope(store: SQLiteDataStore) -> None:
-    project_id = _default_project_from_env()
-    workspace_id = _openclaw_workspace_from_env()
-    async with store.transaction() as transaction:
-        if transaction.state.projects.get(project_id) is None:
-            transaction.state.projects[project_id] = ProjectMemorySpace(
-                id=project_id,
-                name=project_id,
-                default_safe_mode_enabled=False,
-            )
-        binding = RuntimeScopeBinding(
-            runtime="openclaw",
-            agent_id="main",
-            workspace_id=workspace_id,
-            session_key_pattern="*",
-            project_memory_space_id=project_id,
-        )
-        if binding not in transaction.state.runtime_bindings:
-            transaction.state.runtime_bindings.append(binding)
-
-
 def _profile_from_env() -> str:
     return os.environ.get("MEMWING_PROFILE", "").strip().casefold()
 
@@ -109,14 +89,6 @@ def _storage_backend_from_env() -> str:
 
 def _lite_db_path() -> str:
     return os.environ.get("MEMWING_LITE_DB_PATH", "").strip() or "~/.memwing/memwing.db"
-
-
-def _default_project_from_env() -> str:
-    return os.environ.get("MEMWING_DEFAULT_PROJECT_MEMORY_SPACE_ID", "").strip() or "project_001"
-
-
-def _openclaw_workspace_from_env() -> str:
-    return os.environ.get("MEMWING_OPENCLAW_WORKSPACE_ID", "").strip() or "workspace_001"
 
 
 def _platform_connectors_from_env() -> dict[str, object]:

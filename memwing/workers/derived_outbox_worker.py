@@ -8,7 +8,9 @@ from memwing.application.long_term_filter_service import (
     LongTermFilterProcessCommand,
     LongTermFilterService,
 )
+from memwing.application.control_service import ControlService
 from memwing.application.page_memory_policy import estimate_source_event_tokens
+from memwing.application.push_trigger_service import PushTriggerService
 from memwing.application.remember_event_records import (
     long_term_filter_trigger_key_for_scope,
     page_memory_trigger_key_for_scope,
@@ -25,6 +27,8 @@ EVIDENCE_INDEX_JOB_TYPE = "evidence.index_source_event"
 WORKING_MEMORY_APPEND_JOB_TYPE = "working_memory.append"
 PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE = "page_memory.maybe_rebuild"
 LONG_TERM_FILTER_CLASSIFY_JOB_TYPE = "long_term_filter.classify"
+PUSH_CANDIDATE_TRIGGER_JOB_TYPE = "push_candidate.trigger"
+PUSH_CANDIDATE_SEND_JOB_TYPE = "push_candidate.send"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +49,8 @@ class DerivedOutboxWorker:
         long_term_filter: LongTermFilterService,
         page_memory_worker: PageMemoryWorker | None,
         worker_id: str,
+        control_service: ControlService | None = None,
+        push_trigger_service: PushTriggerService | None = None,
         lock_duration: timedelta = timedelta(minutes=5),
         retry_delay: timedelta = timedelta(minutes=1),
         scope_job_limit: int = 40,
@@ -53,6 +59,8 @@ class DerivedOutboxWorker:
         self._evidence_index = evidence_index
         self._long_term_filter = long_term_filter
         self._page_memory_worker = page_memory_worker
+        self._control_service = control_service
+        self._push_trigger_service = push_trigger_service
         self._worker_id = worker_id
         self._lock_duration = lock_duration
         self._retry_delay = retry_delay
@@ -83,6 +91,8 @@ class DerivedOutboxWorker:
                 WORKING_MEMORY_APPEND_JOB_TYPE: self._append_working_memory,
                 PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE: scope_level_handlers.maybe_rebuild_page_memory,
                 LONG_TERM_FILTER_CLASSIFY_JOB_TYPE: scope_level_handlers.classify_long_term,
+                PUSH_CANDIDATE_TRIGGER_JOB_TYPE: self._trigger_push_candidate,
+                PUSH_CANDIDATE_SEND_JOB_TYPE: self._send_push_candidate,
             },
             lock_duration=self._lock_duration,
             retry_delay=self._retry_delay,
@@ -211,6 +221,8 @@ class DerivedOutboxWorker:
                 WORKING_MEMORY_APPEND_JOB_TYPE: self._append_working_memory,
                 PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE: scope_level_handlers.maybe_rebuild_page_memory,
                 LONG_TERM_FILTER_CLASSIFY_JOB_TYPE: scope_level_handlers.classify_long_term,
+                PUSH_CANDIDATE_TRIGGER_JOB_TYPE: self._trigger_push_candidate,
+                PUSH_CANDIDATE_SEND_JOB_TYPE: self._send_push_candidate,
             },
             lock_duration=self._lock_duration,
             retry_delay=self._retry_delay,
@@ -285,6 +297,59 @@ class DerivedOutboxWorker:
                 now=datetime.now(UTC),
                 trace_id=f"long_term_filter:{job.id}",
             )
+        )
+
+    async def _send_push_candidate(self, job: OutboxJob) -> None:
+        if self._control_service is None:
+            raise RuntimeError("push control service is not configured")
+        candidate_id = job.payload_json.get("push_candidate_id")
+        platform = job.payload_json.get("platform") or "feishu"
+        if not isinstance(candidate_id, str) or not isinstance(platform, str):
+            raise RuntimeError("push candidate send job payload is invalid")
+        delivery_source_event_id = job.payload_json.get("delivery_source_event_id")
+        if delivery_source_event_id is not None and not isinstance(delivery_source_event_id, str):
+            raise RuntimeError("push candidate send job delivery source event id is invalid")
+        async with self._unit_of_work.transaction() as tx:
+            candidate = await tx.push_candidates.get(candidate_id)
+        if candidate is None:
+            raise RuntimeError("push candidate for send job was not found")
+        if candidate.status in ("sent", "skipped"):
+            return
+        scope = EffectiveScope(
+            project_memory_space_id=candidate.project_memory_space_id,
+            group_ids=(candidate.group_id,) if candidate.group_id is not None else None,
+            thread_id=candidate.thread_id,
+            shared_group_id=candidate.shared_group_id,
+            safe_mode_enabled=True,
+            cross_group_allowed=False,
+        )
+        if candidate.status == "pending":
+            await self._control_service.approve_push_candidate(
+                candidate_id=candidate.id,
+                scope=scope,
+                actor_id="system",
+                reason="auto push dispatch",
+                idempotency_key=f"push_candidate:auto_approve:{candidate.id}",
+                trace_id=f"push_candidate:auto_send:{job.id}",
+            )
+        await self._control_service.send_push_candidate(
+            candidate_id=candidate.id,
+            platform=platform,
+            scope=scope,
+            actor_id="system",
+            reason="auto push dispatch",
+            idempotency_key=f"push_candidate:auto_send:{candidate.id}",
+            trace_id=f"push_candidate:auto_send:{job.id}",
+            delivery_source_event_id=delivery_source_event_id,
+        )
+
+    async def _trigger_push_candidate(self, job: OutboxJob) -> None:
+        if self._push_trigger_service is None:
+            raise RuntimeError("push trigger service is not configured")
+        source_event = await self._load_source_event(job.source_event_id)
+        await self._push_trigger_service.trigger_for_source_event(
+            source_event,
+            now=datetime.now(UTC),
         )
 
     async def _claimed_aggregate_source_event_ids(self, job: OutboxJob) -> tuple[str, ...]:

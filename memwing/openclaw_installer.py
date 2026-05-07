@@ -66,6 +66,9 @@ class OpenClawInstallPlan:
     def context_engine_command(self) -> OpenClawCommand:
         return self._command("config", "get", "plugins.slots.contextEngine", "--json")
 
+    def memory_slot_command(self) -> OpenClawCommand:
+        return self._command("config", "get", "plugins.slots.memory", "--json")
+
     def plugin_entry_command(self) -> OpenClawCommand:
         return self._command("config", "get", "plugins.entries.memwing", "--json")
 
@@ -81,12 +84,14 @@ class OpenClawInstallPlan:
                 "value": {
                     "memwingBaseUrl": self.memwing_base_url,
                     "workspaceId": self.workspace_id,
+                    "nativeMemoryTools": True,
                     "defaultScope": {
                         "project_memory_space_id": self.project_memory_space_id,
                     },
                 },
             },
             {"path": "plugins.slots.contextEngine", "value": PLUGIN_ID},
+            {"path": "plugins.slots.memory", "value": PLUGIN_ID},
         )
 
     def batch_json(self) -> str:
@@ -98,6 +103,7 @@ class OpenClawInstallPlan:
             commands += (
                 self.runtime_inspect_command(),
                 self.context_engine_command(),
+                self.memory_slot_command(),
                 self.plugin_entry_command(),
             )
         return commands
@@ -182,10 +188,11 @@ def install_openclaw_plugin(
         results.append(_run_checked(command_runner, command))
     if smoke:
         inspect = _run_checked(command_runner, plan.runtime_inspect_command())
-        slot = _run_checked(command_runner, plan.context_engine_command())
+        context_slot = _run_checked(command_runner, plan.context_engine_command())
+        memory_slot = _run_checked(command_runner, plan.memory_slot_command())
         entry = _run_checked(command_runner, plan.plugin_entry_command())
-        _verify_smoke(inspect.stdout, slot.stdout, entry.stdout)
-        results.extend((inspect, slot, entry))
+        _verify_smoke(inspect.stdout, context_slot.stdout, memory_slot.stdout, entry.stdout)
+        results.extend((inspect, context_slot, memory_slot, entry))
     return tuple(results)
 
 
@@ -193,23 +200,31 @@ def openclaw_status(
     plan: OpenClawInstallPlan,
     *,
     runner: CommandRunner | None = None,
-) -> tuple[OpenClawCommandResult, OpenClawCommandResult, OpenClawCommandResult]:
+) -> tuple[
+    OpenClawCommandResult,
+    OpenClawCommandResult,
+    OpenClawCommandResult,
+    OpenClawCommandResult,
+]:
     command_runner = runner or run_command
     inspect = _run_checked(command_runner, plan.runtime_inspect_command())
-    slot = _run_checked(command_runner, plan.context_engine_command())
+    context_slot = _run_checked(command_runner, plan.context_engine_command())
+    memory_slot = _run_checked(command_runner, plan.memory_slot_command())
     entry = _run_checked(command_runner, plan.plugin_entry_command())
-    _verify_smoke(inspect.stdout, slot.stdout, entry.stdout)
-    return inspect, slot, entry
+    _verify_smoke(inspect.stdout, context_slot.stdout, memory_slot.stdout, entry.stdout)
+    return inspect, context_slot, memory_slot, entry
 
 
 def render_status_text(
     inspect: OpenClawCommandResult,
-    slot: OpenClawCommandResult,
+    context_slot: OpenClawCommandResult,
+    memory_slot: OpenClawCommandResult,
     entry: OpenClawCommandResult,
 ) -> str:
     return render_smoke_status_text(
         inspect_stdout=inspect.stdout,
-        slot_stdout=slot.stdout,
+        context_slot_stdout=context_slot.stdout,
+        memory_slot_stdout=memory_slot.stdout,
         entry_stdout=entry.stdout,
         inspect_argv=inspect.argv,
     )
@@ -305,10 +320,16 @@ def _memwing_version(env: Mapping[str, str]) -> str:
         return "0.1.0-dev"
 
 
-def _verify_smoke(inspect_stdout: str, slot_stdout: str, entry_stdout: str) -> None:
+def _verify_smoke(
+    inspect_stdout: str,
+    context_slot_stdout: str,
+    memory_slot_stdout: str,
+    entry_stdout: str,
+) -> None:
     try:
         verify_runtime_inspect(inspect_stdout)
-        verify_context_engine(slot_stdout)
+        verify_context_engine(context_slot_stdout)
+        verify_context_engine(memory_slot_stdout, label="plugins.slots.memory")
         verify_plugin_entry(entry_stdout)
     except OpenClawSmokeError as exc:
         raise OpenClawInstallerError(str(exc)) from exc
@@ -323,11 +344,13 @@ def _openclaw_command(
     command = (
         _nonempty(override)
         or _optional_config(config, "openclaw.cli")
-        or env.get("OPENCLAW_CLI")
+        or _nonempty(env.get("OPENCLAW_CLI"))
         or "openclaw"
     )
-    raw_args = _optional_config(config, "openclaw.cliArgs") or env.get("OPENCLAW_CLI_ARGS") or ""
-    cwd = _optional_config(config, "openclaw.cwd") or env.get("OPENCLAW_CLI_CWD")
+    raw_args = _optional_config(config, "openclaw.cliArgs") or _nonempty(
+        env.get("OPENCLAW_CLI_ARGS")
+    ) or ""
+    cwd = _optional_config(config, "openclaw.cwd") or _nonempty(env.get("OPENCLAW_CLI_CWD"))
     return command, tuple(shlex.split(raw_args)), cwd
 
 

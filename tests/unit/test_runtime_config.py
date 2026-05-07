@@ -3,6 +3,7 @@ import pytest
 from memwing.api.env import load_app_env
 from memwing.api.runtime_config import (
     OpenClawRuntimeUnavailableError,
+    auto_push_enabled_from_env,
     benchmark_admin_enabled_from_env,
     database_url_from_env,
     evidence_backend_from_env,
@@ -121,6 +122,12 @@ def test_graphiti_semantic_bulk_requires_literal_true() -> None:
 def test_feishu_push_config_requires_explicit_enablement() -> None:
     assert feishu_push_config_from_env({}) is None
     assert feishu_push_config_from_env({"MEMWING_FEISHU_PUSH_ENABLED": "1"}) is None
+
+
+def test_auto_push_requires_explicit_enablement() -> None:
+    assert auto_push_enabled_from_env({}) is False
+    assert auto_push_enabled_from_env({"MEMWING_AUTO_PUSH_ENABLED": "1"}) is False
+    assert auto_push_enabled_from_env({"MEMWING_AUTO_PUSH_ENABLED": "true"}) is True
 
 
 def test_feishu_push_config_reads_required_values() -> None:
