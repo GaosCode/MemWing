@@ -10,10 +10,13 @@ from memwing.openclaw_installer import (
     OpenClawCommand,
     OpenClawCommandResult,
     OpenClawInstallerError,
+    apply_repair_plan,
     build_install_plan,
+    build_repair_plan,
     default_plugin_dir,
     install_openclaw_plugin,
     render_install_dry_run,
+    render_repair_plan,
 )
 
 
@@ -219,6 +222,119 @@ def test_openclaw_install_plan_treats_blank_cli_env_as_unset(tmp_path: Path) -> 
     command = plan.plugin_install_command()
     assert command.argv[0] == "openclaw"
     assert command.cwd is None
+
+
+def test_openclaw_repair_plan_removes_stale_memwing_managed_paths(tmp_path: Path) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+    memwing_home = tmp_path / "home"
+    current_managed = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.3"
+    stale_managed = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.2"
+    other_plugin = tmp_path / "other-plugin"
+    current_managed.mkdir(parents=True)
+    _write_plugin_artifact(stale_managed)
+    other_plugin.mkdir()
+    openclaw_config = tmp_path / "openclaw.json"
+    openclaw_config.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "load": {
+                        "paths": [
+                            str(stale_managed),
+                            str(other_plugin),
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_repair_plan(
+        default_config(),
+        env={"MEMWING_HOME": str(memwing_home), "MEMWING_VERSION": "1.2.3"},
+        plugin_dir=plugin_dir,
+        config_path=openclaw_config,
+    )
+
+    assert plan.removed_paths == (str(stale_managed),)
+    assert plan.added_paths == (str(current_managed.resolve()),)
+    assert plan.repaired_paths == (str(other_plugin), str(current_managed.resolve()))
+    rendered = render_repair_plan(plan)
+    assert "memwing openclaw repair --yes" in rendered
+    assert "openclaw config set plugins.load.paths" in rendered
+
+
+def test_openclaw_repair_plan_applies_backup_and_registry_refresh(tmp_path: Path) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+    memwing_home = tmp_path / "home"
+    current_managed = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.3"
+    stale_managed = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.2"
+    current_managed.mkdir(parents=True)
+    _write_plugin_artifact(stale_managed)
+    openclaw_config = tmp_path / "openclaw.json"
+    openclaw_config.write_text(
+        json.dumps({"plugins": {"load": {"paths": [str(stale_managed)]}}}),
+        encoding="utf-8",
+    )
+    installs_path = tmp_path / "plugins" / "installs.json"
+    installs_path.parent.mkdir()
+    installs_path.write_text(
+        json.dumps(
+            {
+                "installRecords": {
+                    "memwing": {
+                        "sourcePath": str(stale_managed),
+                        "installPath": str(stale_managed),
+                    },
+                    "other": {"sourcePath": str(tmp_path / "other")},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = build_repair_plan(
+        default_config(),
+        env={"MEMWING_HOME": str(memwing_home), "MEMWING_VERSION": "1.2.3"},
+        plugin_dir=plugin_dir,
+        config_path=openclaw_config,
+    )
+    assert plan.remove_install_record is True
+    calls: list[OpenClawCommand] = []
+
+    def runner(command: OpenClawCommand) -> OpenClawCommandResult:
+        calls.append(command)
+        return OpenClawCommandResult(command.argv, 0, "", "")
+
+    backup_paths, _result = apply_repair_plan(plan, runner=runner)
+
+    assert len(backup_paths) == 2
+    assert all(path.exists() for path in backup_paths)
+    assert json.loads(openclaw_config.read_text())["plugins"]["load"]["paths"] == [
+        str(current_managed.resolve())
+    ]
+    install_records = json.loads(installs_path.read_text())["installRecords"]
+    assert "memwing" not in install_records
+    assert "other" in install_records
+    assert calls[0].argv == ("openclaw", "plugins", "registry", "--refresh")
+
+
+def test_openclaw_command_failure_suggests_memwing_repair_for_config_schema_errors(
+    tmp_path: Path,
+) -> None:
+    plugin_dir = _plugin_artifact(tmp_path)
+    plan = build_install_plan(default_config(), env={}, plugin_dir=plugin_dir)
+
+    def runner(command: OpenClawCommand) -> OpenClawCommandResult:
+        return OpenClawCommandResult(
+            command.argv,
+            1,
+            "",
+            "Config invalid\nProblem:\n  - plugins: plugin manifest requires configSchema\n",
+        )
+
+    with pytest.raises(OpenClawInstallerError, match="memwing openclaw repair"):
+        install_openclaw_plugin(plan, runner=runner)
 
 
 def _plugin_artifact(tmp_path: Path) -> Path:

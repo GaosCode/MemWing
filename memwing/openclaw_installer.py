@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 import json
 import os
@@ -115,6 +116,23 @@ class OpenClawInstallPlan:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OpenClawRepairPlan:
+    config_path: Path
+    installs_path: Path
+    managed_plugin_dir: Path
+    current_paths: tuple[str, ...]
+    repaired_paths: tuple[str, ...]
+    removed_paths: tuple[str, ...]
+    added_paths: tuple[str, ...]
+    remove_install_record: bool
+    refresh_command: OpenClawCommand
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.removed_paths or self.added_paths or self.remove_install_record)
+
+
 def build_install_plan(
     config: Mapping[str, Any],
     *,
@@ -158,6 +176,91 @@ def build_install_plan(
         openclaw_args=command_args,
         openclaw_cwd=cwd,
     )
+
+
+def build_repair_plan(
+    config: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+    plugin_dir: Path | None = None,
+    openclaw_cli: str | None = None,
+    config_path: Path | None = None,
+) -> OpenClawRepairPlan:
+    source = os.environ if env is None else env
+    install_plan = build_install_plan(
+        config,
+        env=source,
+        plugin_dir=plugin_dir,
+        openclaw_cli=openclaw_cli,
+    )
+    openclaw_config_path = (
+        config_path
+        if config_path is not None
+        else Path(source.get("OPENCLAW_CONFIG", Path.home() / ".openclaw" / "openclaw.json"))
+    ).expanduser()
+    installs_path = openclaw_config_path.parent / "plugins" / "installs.json"
+    current_paths = _load_openclaw_plugin_paths(openclaw_config_path)
+    managed_dir = install_plan.plugin_dir
+    repaired = [path for path in current_paths if not _is_stale_memwing_plugin_path(path, managed_dir)]
+    managed_text = str(managed_dir)
+    added: tuple[str, ...] = ()
+    if managed_dir.exists() and managed_text not in repaired:
+        repaired.append(managed_text)
+        added = (managed_text,)
+    removed = tuple(path for path in current_paths if path not in repaired)
+    return OpenClawRepairPlan(
+        config_path=openclaw_config_path,
+        installs_path=installs_path,
+        managed_plugin_dir=managed_dir,
+        current_paths=tuple(current_paths),
+        repaired_paths=tuple(repaired),
+        removed_paths=removed,
+        added_paths=added,
+        remove_install_record=_has_stale_memwing_install_record(installs_path, managed_dir),
+        refresh_command=install_plan._command("plugins", "registry", "--refresh"),
+    )
+
+
+def render_repair_plan(plan: OpenClawRepairPlan) -> str:
+    lines = [
+        f"config: {plan.config_path}",
+        f"managed_plugin_dir: {plan.managed_plugin_dir}",
+    ]
+    if not plan.has_changes:
+        lines.append("status: no stale MemWing OpenClaw plugin paths found")
+    else:
+        lines.append("remove:")
+        lines.extend(f"  {path}" for path in plan.removed_paths)
+        if plan.added_paths:
+            lines.append("add:")
+            lines.extend(f"  {path}" for path in plan.added_paths)
+        if plan.remove_install_record:
+            lines.append(f"remove_install_record: {plan.installs_path}#installRecords.memwing")
+        lines.append("repaired_plugins.load.paths:")
+        lines.append(json.dumps(list(plan.repaired_paths), ensure_ascii=False))
+    lines.append("manual OpenClaw equivalent:")
+    lines.append(
+        "  openclaw config set plugins.load.paths "
+        + shlex.quote(json.dumps(list(plan.repaired_paths), ensure_ascii=False))
+    )
+    lines.append(f"  {plan.refresh_command.display()}")
+    lines.append("apply: run `memwing openclaw repair --yes`")
+    return "\n".join(lines)
+
+
+def apply_repair_plan(
+    plan: OpenClawRepairPlan,
+    *,
+    runner: CommandRunner | None = None,
+) -> tuple[tuple[Path, ...], OpenClawCommandResult]:
+    backup_paths: list[Path] = []
+    if plan.has_changes:
+        if plan.removed_paths or plan.added_paths:
+            backup_paths.append(_write_repaired_openclaw_config(plan))
+        if plan.remove_install_record:
+            backup_paths.append(_remove_stale_memwing_install_record(plan))
+    result = _run_checked(runner or run_command, plan.refresh_command)
+    return tuple(backup_paths), result
 
 
 def render_install_dry_run(plan: OpenClawInstallPlan, *, include_smoke: bool = True) -> str:
@@ -276,8 +379,16 @@ def run_command(command: OpenClawCommand) -> OpenClawCommandResult:
 def _run_checked(runner: CommandRunner, command: OpenClawCommand) -> OpenClawCommandResult:
     result = runner(command)
     if result.returncode != 0:
+        output = f"{result.stdout}{result.stderr}"
+        repair_hint = ""
+        if "plugin manifest requires configSchema" in output:
+            repair_hint = (
+                "\n\nThis usually means OpenClaw is still loading stale MemWing plugin paths. "
+                "Run `memwing openclaw repair` to inspect, or "
+                "`memwing openclaw repair --yes` to remove stale MemWing paths."
+            )
         raise OpenClawInstallerError(
-            f"OpenClaw command failed: {command.display()}\n{result.stdout}{result.stderr}"
+            f"OpenClaw command failed: {command.display()}\n{output}{repair_hint}"
         )
     return result
 
@@ -308,6 +419,118 @@ def _managed_plugin_dir(*, env: Mapping[str, str]) -> Path:
     if configured is not None:
         return Path(configured).expanduser()
     return default_memwing_home(env) / "plugins" / "openclaw" / "memwing" / _memwing_version(env)
+
+
+def _load_openclaw_plugin_paths(config_path: Path) -> list[str]:
+    if not config_path.exists():
+        raise OpenClawInstallerError(f"OpenClaw config is missing: {config_path}")
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OpenClawInstallerError(f"OpenClaw config is not valid JSON: {config_path}") from exc
+    paths = (
+        data.get("plugins", {})
+        .get("load", {})
+        .get("paths", [])
+    )
+    if paths is None:
+        return []
+    if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+        raise OpenClawInstallerError("OpenClaw plugins.load.paths must be a list of strings")
+    return paths
+
+
+def _write_repaired_openclaw_config(plan: OpenClawRepairPlan) -> Path:
+    try:
+        data = json.loads(plan.config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OpenClawInstallerError(f"OpenClaw config is not valid JSON: {plan.config_path}") from exc
+    plugins = data.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        raise OpenClawInstallerError("OpenClaw plugins config must be an object")
+    load = plugins.setdefault("load", {})
+    if not isinstance(load, dict):
+        raise OpenClawInstallerError("OpenClaw plugins.load config must be an object")
+    load["paths"] = list(plan.repaired_paths)
+    backup_path = plan.config_path.with_name(
+        f"{plan.config_path.name}.bak-memwing-repair-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    shutil.copy2(plan.config_path, backup_path)
+    plan.config_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return backup_path
+
+
+def _has_stale_memwing_install_record(installs_path: Path, managed_dir: Path) -> bool:
+    record = _memwing_install_record(installs_path)
+    if record is None:
+        return False
+    source_path = record.get("sourcePath") or record.get("installPath")
+    return isinstance(source_path, str) and _is_stale_memwing_plugin_path(source_path, managed_dir)
+
+
+def _remove_stale_memwing_install_record(plan: OpenClawRepairPlan) -> Path:
+    try:
+        data = json.loads(plan.installs_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise OpenClawInstallerError(f"OpenClaw install registry is missing: {plan.installs_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise OpenClawInstallerError(
+            f"OpenClaw install registry is not valid JSON: {plan.installs_path}"
+        ) from exc
+    install_records = data.get("installRecords")
+    if not isinstance(install_records, dict):
+        return plan.installs_path
+    backup_path = plan.installs_path.with_name(
+        f"{plan.installs_path.name}.bak-memwing-repair-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    shutil.copy2(plan.installs_path, backup_path)
+    install_records.pop(PLUGIN_ID, None)
+    plan.installs_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return backup_path
+
+
+def _memwing_install_record(installs_path: Path) -> dict[str, Any] | None:
+    if not installs_path.exists():
+        return None
+    try:
+        data = json.loads(installs_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OpenClawInstallerError(
+            f"OpenClaw install registry is not valid JSON: {installs_path}"
+        ) from exc
+    install_records = data.get("installRecords")
+    if not isinstance(install_records, dict):
+        return None
+    record = install_records.get(PLUGIN_ID)
+    return record if isinstance(record, dict) else None
+
+
+def _is_stale_memwing_plugin_path(path: str, managed_dir: Path) -> bool:
+    candidate = Path(path).expanduser()
+    try:
+        if candidate.resolve() == managed_dir.resolve():
+            return False
+    except OSError:
+        pass
+    parts = candidate.parts
+    if len(parts) < 4 or parts[-3:-1] != ("openclaw", "memwing"):
+        return False
+    if candidate.parent.name != "memwing" or candidate.parent.parent.name != "openclaw":
+        return False
+    manifest = candidate / "openclaw.plugin.json"
+    if not manifest.exists():
+        return True
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return True
+    return data.get("id") == PLUGIN_ID
 
 
 def _memwing_version(env: Mapping[str, str]) -> str:

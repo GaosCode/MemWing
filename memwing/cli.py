@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -45,10 +46,13 @@ from memwing.doctor import (
 )
 from memwing.openclaw_installer import (
     OpenClawInstallerError,
+    apply_repair_plan,
     build_install_plan,
+    build_repair_plan,
     install_openclaw_plugin,
     openclaw_status,
     render_install_dry_run,
+    render_repair_plan,
     render_status_text as render_openclaw_status_text,
 )
 from memwing.profiles import build_profile_config
@@ -92,6 +96,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_start(args)
     if args.command == "quickstart":
         return _run_quickstart(args)
+    if args.command == "restart":
+        return _run_restart(args)
     if args.command == "setup":
         return _run_setup(args)
     if args.command == "doctor":
@@ -303,6 +309,35 @@ def _run_quickstart(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_restart(args: argparse.Namespace) -> int:
+    config = load_effective_config()
+    _apply_profile_override(config, args)
+    runtime_env = build_runtime_env(config)
+    memwing_home = default_memwing_home()
+    if runtime_env.profile == "full-local" and not args.skip_service_check:
+        report = verify_profile_services(config)
+        print(f"profile: {runtime_env.profile}")
+        print(f"config: {default_user_config_path()}")
+        print(render_service_report(report))
+        if not report.ok:
+            return 1
+    else:
+        print(f"profile: {runtime_env.profile}")
+        print(f"config: {default_user_config_path()}")
+
+    stop_message = _stop_runtime_from_pid_file(memwing_home)
+    print(stop_message)
+    launch = _start_runtime_background(
+        runtime_env,
+        memwing_home,
+        startup_timeout_seconds=args.startup_timeout_seconds,
+    )
+    print(f"runtime: started pid={launch.pid}")
+    print("runtime: healthy")
+    print(f"runtime_log: {launch.log_path}")
+    return 0
+
+
 def _print_quickstart_dry_run(profile: str, path: Path, config: dict[str, Any]) -> None:
     print(f"profile: {profile}")
     print("mode: dry-run")
@@ -467,6 +502,49 @@ def _cleanup_failed_runtime_start(process: object, pid_path: Path) -> None:
         pass
 
 
+def _stop_runtime_from_pid_file(memwing_home: Path) -> str:
+    pid_path = memwing_home / "runtime.pid"
+    if not pid_path.exists():
+        return "runtime: no existing pid file"
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        pid_path.unlink(missing_ok=True)
+        return "runtime: removed invalid pid file"
+
+    command = _process_command(pid)
+    if command is None:
+        pid_path.unlink(missing_ok=True)
+        return f"runtime: removed stale pid file pid={pid}"
+    if "memwing.runtime_runner" not in command:
+        pid_path.unlink(missing_ok=True)
+        return f"runtime: removed stale pid file pid={pid} command={command}"
+
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + FAILED_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if _process_command(pid) is None:
+            pid_path.unlink(missing_ok=True)
+            return f"runtime: stopped pid={pid}"
+        time.sleep(0.05)
+    os.kill(pid, signal.SIGKILL)
+    pid_path.unlink(missing_ok=True)
+    return f"runtime: killed pid={pid}"
+
+
+def _process_command(pid: int) -> str | None:
+    completed = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    command = completed.stdout.strip()
+    return command or None
+
+
 def _runtime_health_url(env: dict[str, str]) -> str:
     host = env["MEMWING_API_HOST"]
     if host in {"0.0.0.0", "::"}:
@@ -535,6 +613,21 @@ def _run_openclaw(args: argparse.Namespace) -> int:
         plan = build_install_plan(config, openclaw_cli=args.openclaw_cli, validate_plugin=False)
         inspect, context_slot, memory_slot, entry = openclaw_status(plan)
         print(render_openclaw_status_text(inspect, context_slot, memory_slot, entry))
+        return 0
+    if args.openclaw_command == "repair":
+        plan = build_repair_plan(
+            config,
+            plugin_dir=args.plugin_dir,
+            openclaw_cli=args.openclaw_cli,
+        )
+        print(render_repair_plan(plan))
+        if not args.yes:
+            return 0
+        backup_paths, _result = apply_repair_plan(plan)
+        for backup_path in backup_paths:
+            print(f"backup: {backup_path}")
+        print("repair: applied")
+        print("registry: refreshed")
         return 0
     raise ConfigStoreError("openclaw command is required")
 
@@ -615,6 +708,15 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
     )
 
+    restart = subcommands.add_parser("restart")
+    restart.add_argument("--profile", choices=("lite", "full-local", "production"))
+    restart.add_argument("--skip-service-check", action="store_true")
+    restart.add_argument(
+        "--startup-timeout-seconds",
+        type=float,
+        default=DEFAULT_RUNTIME_STARTUP_TIMEOUT_SECONDS,
+    )
+
     setup = subcommands.add_parser("setup")
     setup.add_argument("--profile", choices=("production",), required=True)
 
@@ -640,6 +742,10 @@ def _parser() -> argparse.ArgumentParser:
     openclaw_install.add_argument("--openclaw-cli")
     openclaw_status_cmd = openclaw_commands.add_parser("status")
     openclaw_status_cmd.add_argument("--openclaw-cli")
+    openclaw_repair = openclaw_commands.add_parser("repair")
+    openclaw_repair.add_argument("--yes", action="store_true")
+    openclaw_repair.add_argument("--plugin-dir", type=Path)
+    openclaw_repair.add_argument("--openclaw-cli")
 
     control_plane = subcommands.add_parser("control-plane")
     control_plane.add_argument("--open", action="store_true")

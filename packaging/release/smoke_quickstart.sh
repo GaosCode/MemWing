@@ -65,8 +65,13 @@ if [ "$command" = "config" ] && [ "$subcommand" = "get" ] && [ "$key" = "plugins
   exit 0
 fi
 
+if [ "$command" = "config" ] && [ "$subcommand" = "get" ] && [ "$key" = "plugins.slots.memory" ]; then
+  printf '"memwing"\n'
+  exit 0
+fi
+
 if [ "$command" = "config" ] && [ "$subcommand" = "get" ] && [ "$key" = "plugins.entries.memwing" ]; then
-  printf '{"enabled":true,"hooks":{"allowConversationAccess":true}}\n'
+  printf '{"enabled":true,"hooks":{"allowConversationAccess":true},"config":{"nativeMemoryTools":true}}\n'
   exit 0
 fi
 

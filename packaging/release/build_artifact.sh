@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MEMWING_VERSION:-0.1.4}"
+VERSION="${MEMWING_VERSION:-0.1.5}"
 OUT_DIR="$ROOT/dist/release"
 ARTIFACT_DIR="$OUT_DIR/memwing-$VERSION"
 PYTHON_BIN="${PYTHON_BIN:-python3.13}"

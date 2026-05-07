@@ -462,6 +462,71 @@ def test_memwing_quickstart_can_skip_openclaw_and_runtime_for_setup_only(
     assert "runtime: skipped" in output
 
 
+def test_memwing_restart_stops_existing_runtime_and_starts_without_openclaw(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    stopped: list[Path] = []
+    started: list[tuple[object, Path]] = []
+    monkeypatch.setattr(
+        "memwing.cli._stop_runtime_from_pid_file",
+        lambda home: stopped.append(home) or "runtime: stopped pid=123",
+    )
+    monkeypatch.setattr(
+        "memwing.cli._start_runtime_background",
+        lambda runtime_env, home, **_kwargs: started.append((runtime_env, home))
+        or RuntimeLaunch(456, home / "logs" / "runtime.log", home / "runtime.pid"),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["restart", "--profile", "lite"])
+
+    assert exit_info.value.code == 0
+    assert stopped == [memwing_home]
+    assert started
+    output = capsys.readouterr().out
+    assert "runtime: stopped pid=123" in output
+    assert "runtime: started pid=456" in output
+    assert "openclaw" not in output
+
+
+def test_memwing_openclaw_repair_dry_run_does_not_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memwing_home = tmp_path / "home"
+    monkeypatch.setenv("MEMWING_HOME", str(memwing_home))
+    plugin_dir = _plugin_artifact(tmp_path)
+    openclaw_config = tmp_path / "openclaw.json"
+    stale = memwing_home / "plugins" / "openclaw" / "memwing" / "1.2.2"
+    current = memwing_home / "plugins" / "openclaw" / "memwing" / "0.1.0-dev"
+    current.mkdir(parents=True)
+    _plugin_artifact(tmp_path / "stale")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.mkdir(exist_ok=True)
+    (stale / "openclaw.plugin.json").write_text('{"id":"memwing"}', encoding="utf-8")
+    openclaw_config.write_text(
+        json.dumps({"plugins": {"load": {"paths": [str(stale)]}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_CONFIG", str(openclaw_config))
+    applied: list[object] = []
+    monkeypatch.setattr("memwing.cli.apply_repair_plan", lambda plan: applied.append(plan))
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["openclaw", "repair", "--plugin-dir", str(plugin_dir)])
+
+    assert exit_info.value.code == 0
+    assert not applied
+    output = capsys.readouterr().out
+    assert "remove:" in output
+    assert "memwing openclaw repair --yes" in output
+
+
 def test_memwing_setup_production_renders_config_without_provisioning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
