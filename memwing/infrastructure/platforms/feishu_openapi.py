@@ -6,11 +6,20 @@ from typing import Any
 import httpx
 
 from memwing.api.platform import PlatformRef
+from memwing.core.errors import ProviderTransientFailure
 from memwing.core.types import JsonObject
 
 
-class FeishuOpenApiError(RuntimeError):
-    pass
+class FeishuOpenApiError(ProviderTransientFailure):
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(
+            reason_code="feishu_openapi_error",
+            safe_message=message,
+        )
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class FeishuOpenApiPushSender:
@@ -42,9 +51,10 @@ class FeishuOpenApiPushSender:
     ) -> str:
         if payload.get("receive_id") != platform_ref.channel_id:
             raise FeishuOpenApiError("Feishu payload receive_id does not match platform ref channel")
+        receive_id_type = platform_ref.receive_id_type or self._receive_id_type
         response = self._client.post(
             f"{self._api_base_url}/im/v1/messages",
-            params={"receive_id_type": self._receive_id_type},
+            params={"receive_id_type": receive_id_type},
             headers={
                 "Authorization": f"Bearer {self._get_tenant_access_token()}",
                 "Content-Type": "application/json",
@@ -86,17 +96,65 @@ class FeishuOpenApiPushSender:
 def _feishu_json(response: httpx.Response, operation: str) -> dict[str, Any]:
     if response.status_code != 200:
         raise FeishuOpenApiError(
-            f"Feishu {operation} failed with HTTP {response.status_code}: {response.text}"
+            _feishu_error_message(
+                operation,
+                f"HTTP {response.status_code}",
+                response=response,
+                response_text=response.text,
+            )
         )
     try:
         result = response.json()
     except ValueError as exc:
-        raise FeishuOpenApiError(f"Feishu {operation} returned invalid JSON") from exc
+        raise FeishuOpenApiError(
+            _feishu_error_message(
+                operation,
+                "invalid JSON",
+                response=response,
+                response_text=response.text,
+            )
+        ) from exc
     if not isinstance(result, dict):
-        raise FeishuOpenApiError(f"Feishu {operation} returned non-object JSON")
+        raise FeishuOpenApiError(_feishu_error_message(operation, "non-object JSON", response=response))
     code = result.get("code")
     if code != 0:
         raise FeishuOpenApiError(
-            f"Feishu {operation} failed with code {code}: {result.get('msg')}"
+            _feishu_error_message(
+                operation,
+                f"code {code}",
+                response=response,
+                provider_message=result.get("msg"),
+                provider_error=result.get("error"),
+            )
         )
     return result
+
+
+def _feishu_error_message(
+    operation: str,
+    summary: str,
+    *,
+    response: httpx.Response | None = None,
+    provider_message: object | None = None,
+    provider_error: object | None = None,
+    response_text: str | None = None,
+) -> str:
+    parts = [f"Feishu {operation} failed: {summary}"]
+    if isinstance(provider_message, str) and provider_message:
+        parts.append(f"msg={provider_message}")
+    if provider_error is not None:
+        parts.append(f"error={_clip(str(provider_error))}")
+    if response_text:
+        parts.append(f"body={_clip(response_text)}")
+    if response is not None:
+        log_id = response.headers.get("X-Tt-Logid") or response.headers.get("x-tt-logid")
+        if log_id:
+            parts.append(f"log_id={log_id}")
+    return "; ".join(parts)
+
+
+def _clip(value: str, limit: int = 500) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 3]}..."

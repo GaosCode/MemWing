@@ -47,6 +47,7 @@ class PlatformRef:
     channel_id: str
     thread_id: str | None
     message_id: str | None
+    receive_id_type: str | None = None
 
     def __post_init__(self) -> None:
         if self.platform not in ("feishu", "slack", "future_platform"):
@@ -58,6 +59,11 @@ class PlatformRef:
             object.__setattr__(self, "thread_id", require_text(self.thread_id, "thread_id"))
         if self.message_id is not None:
             object.__setattr__(self, "message_id", require_text(self.message_id, "message_id"))
+        if self.receive_id_type is not None:
+            receive_id_type = require_text(self.receive_id_type, "receive_id_type")
+            if receive_id_type not in {"open_id", "user_id", "union_id", "email", "chat_id"}:
+                raise SchemaValidationError("receive_id_type is not supported")
+            object.__setattr__(self, "receive_id_type", receive_id_type)
 
 
 @dataclass(frozen=True, slots=True)

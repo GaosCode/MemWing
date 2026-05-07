@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from memwing.core.models import OutboxJob
 from memwing.infrastructure.db.in_memory import InMemoryDataStore
+from memwing.infrastructure.platforms.feishu_openapi import FeishuOpenApiError
 from memwing.workers.outbox_worker import OutboxWorker
 
 
@@ -94,6 +95,27 @@ def test_outbox_worker_dead_letters_after_max_attempts() -> None:
     assert store.audit_events[-1].reason_text == "RuntimeError"
 
 
+def test_outbox_worker_records_memwing_failure_safe_message() -> None:
+    store = InMemoryDataStore()
+    store.add_outbox_job(_job("job_001", max_attempts=1))
+    worker = OutboxWorker(
+        store,
+        worker_id="worker_001",
+        handlers={"evidence.index_source_event": _feishu_send_fail},
+        retry_delay=timedelta(0),
+    )
+
+    result = asyncio.run(worker.run_once(now=datetime(2026, 4, 28, tzinfo=UTC)))
+
+    assert result.dead_lettered == 1
+    assert store.outbox_jobs[0].last_error == (
+        "feishu_openapi_error: Feishu send interactive message failed: code 999; "
+        "msg=no permission; log_id=log_001"
+    )
+    assert store.audit_events[-1].reason_code == "feishu_openapi_error"
+    assert store.audit_events[-1].reason_text == store.outbox_jobs[0].last_error
+
+
 async def _record(handled: list[str], job_id: str) -> None:
     handled.append(job_id)
 
@@ -112,3 +134,9 @@ def _fail_once_then_succeed():
 
 async def _always_fail(_: OutboxJob) -> None:
     raise RuntimeError("handler failed")
+
+
+async def _feishu_send_fail(_: OutboxJob) -> None:
+    raise FeishuOpenApiError(
+        "Feishu send interactive message failed: code 999; msg=no permission; log_id=log_001"
+    )

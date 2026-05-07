@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import uuid
 
 from memwing.application.failure_semantics import classify_failure
+from memwing.core.errors import MemWingFailure
 from memwing.core.models import AuditEvent, OutboxJob
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
@@ -230,4 +231,13 @@ def _audit_event(
 
 
 def _safe_error_summary(exc: Exception) -> str:
+    if isinstance(exc, MemWingFailure):
+        return _clip_error_summary(f"{exc.reason_code}: {exc.safe_message}")
     return exc.__class__.__name__
+
+
+def _clip_error_summary(value: str, limit: int = 500) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 3]}..."

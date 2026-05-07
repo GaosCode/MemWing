@@ -61,6 +61,7 @@ class SourceRef:
                 "channel_id": self.platform_ref.channel_id,
                 "thread_id": self.platform_ref.thread_id,
                 "message_id": self.platform_ref.message_id,
+                "receive_id_type": self.platform_ref.receive_id_type,
             }
         if self.runtime_ref is None:
             raise SchemaValidationError("source_ref.runtime_ref is required")

@@ -8,6 +8,7 @@ from memwing.core.errors import (
     ProviderPermanentFailure,
     ScopeResolutionFailure,
 )
+from memwing.infrastructure.platforms.feishu_openapi import FeishuOpenApiError
 from memwing.infrastructure.llm.errors import LLMOutputSchemaError, LLMProviderError
 
 
@@ -57,6 +58,19 @@ def test_llm_adapter_errors_are_classified_before_crossing_application_boundarie
     assert bad_json.reason_code == "llm_output_schema_invalid"
     assert bad_json.dead_letter is True
     assert "raw model json" not in bad_json.safe_message
+
+
+def test_feishu_openapi_error_preserves_provider_diagnostics() -> None:
+    failure = classify_failure(
+        FeishuOpenApiError("Feishu send interactive message failed: code 999; msg=no permission; log_id=log_001"),
+        audit_stage="outbox.handler",
+    )
+
+    assert failure.category is FailureCategory.PROVIDER_TRANSIENT
+    assert failure.reason_code == "feishu_openapi_error"
+    assert failure.safe_message == (
+        "Feishu send interactive message failed: code 999; msg=no permission; log_id=log_001"
+    )
 
 
 def test_failure_semantics_maps_scope_domain_configuration_and_unexpected() -> None:
