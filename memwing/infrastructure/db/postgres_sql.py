@@ -54,8 +54,8 @@ WHERE project_memory_space_id = %(project_memory_space_id)s
   AND (
     raw_payload_hash = %(raw_payload_hash)s
     OR (
-        %(runtime_event_idempotency_key)s IS NOT NULL
-        AND runtime_event_idempotency_key = %(runtime_event_idempotency_key)s
+        %(runtime_event_idempotency_key)s::text IS NOT NULL
+        AND runtime_event_idempotency_key = %(runtime_event_idempotency_key)s::text
     )
   )
 ORDER BY created_at

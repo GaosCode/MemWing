@@ -95,6 +95,10 @@ def test_postgres_source_insert_if_absent_loads_existing_conflict_row() -> None:
     asyncio.run(scenario())
 
     assert "SELECT *\nFROM source_events" in connection.calls[1][1]
+    assert "%(runtime_event_idempotency_key)s::text IS NOT NULL" in connection.calls[1][1]
+    assert "runtime_event_idempotency_key = %(runtime_event_idempotency_key)s::text" in (
+        connection.calls[1][1]
+    )
     assert connection.calls[1][2]["runtime_event_idempotency_key"] == "runtime-key-001"
 
 
