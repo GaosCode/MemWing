@@ -15,12 +15,27 @@ def test_openclaw_plugin_schema_accepts_model_runtime_config() -> None:
     assert schema["additionalProperties"] is False
     assert set(schema["properties"]) == {
         "memwingBaseUrl",
+        "workspaceId",
+        "defaultScope",
         "modelRuntime",
         "models",
         "modelTimeoutSeconds",
+        "nativeMemoryTools",
     }
+    assert schema["properties"]["workspaceId"]["type"] == ["string", "null"]
+    assert schema["properties"]["nativeMemoryTools"]["type"] == "boolean"
     assert schema["properties"]["modelRuntime"]["enum"] == ["openclaw"]
     assert schema["properties"]["modelTimeoutSeconds"]["exclusiveMinimum"] == 0
+
+    default_scope = schema["properties"]["defaultScope"]
+    assert default_scope["additionalProperties"] is False
+    assert default_scope["required"] == ["project_memory_space_id"]
+    assert set(default_scope["properties"]) == {
+        "project_memory_space_id",
+        "group_id",
+        "thread_id",
+        "shared_group_id",
+    }
 
     models = schema["properties"]["models"]
     assert models["type"] == "object"
