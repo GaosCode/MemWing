@@ -41,12 +41,14 @@ def test_runtime_config_builds_postgres_openclaw_runtime_from_env(monkeypatch) -
         max_size: int = 10,
         graph_backend=None,
         evidence_index=None,
+        auto_push_enabled: bool = False,
     ):
         captured["database_url"] = database_url
         captured["min_size"] = min_size
         captured["max_size"] = max_size
         captured["graph_backend"] = graph_backend
         captured["evidence_index"] = evidence_index
+        captured["auto_push_enabled"] = auto_push_enabled
         return "runtime-handle"
 
     monkeypatch.setattr(
@@ -68,4 +70,5 @@ def test_runtime_config_builds_postgres_openclaw_runtime_from_env(monkeypatch) -
         "max_size": 10,
         "graph_backend": None,
         "evidence_index": None,
+        "auto_push_enabled": False,
     }
