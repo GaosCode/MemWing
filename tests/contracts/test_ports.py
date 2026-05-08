@@ -29,6 +29,21 @@ from memwing.core.scope import EffectiveScope
 from memwing.ports.agent_runtime import AgentRuntimePort
 from memwing.ports.clock import ClockPort
 from memwing.ports.evidence_index import EvidenceIndexPort
+from memwing.ports import event_store
+from memwing.ports.audit_events import AuditEventRepositoryPort as SplitAuditEventRepositoryPort
+from memwing.ports.control_plane import (
+    ForgettingReviewCandidateRepositoryPort as SplitForgettingReviewCandidateRepositoryPort,
+    PushCandidateRepositoryPort as SplitPushCandidateRepositoryPort,
+)
+from memwing.ports.derived_memory import (
+    EvidenceChunkRepositoryPort as SplitEvidenceChunkRepositoryPort,
+    MemoryItemRepositoryPort as SplitMemoryItemRepositoryPort,
+    MemoryPageRepositoryPort as SplitMemoryPageRepositoryPort,
+    MemoryPageVersionRepositoryPort as SplitMemoryPageVersionRepositoryPort,
+    MemoryRecallEventRepositoryPort as SplitMemoryRecallEventRepositoryPort,
+    MemoryVersionRepositoryPort as SplitMemoryVersionRepositoryPort,
+    WorkingMemoryRepositoryPort as SplitWorkingMemoryRepositoryPort,
+)
 from memwing.ports.event_store import (
     AuditEventRepositoryPort,
     EventStorePort,
@@ -47,6 +62,13 @@ from memwing.ports.event_store import (
     MemoryVersionRepositoryPort,
     WorkingMemoryRepositoryPort,
 )
+from memwing.ports.graph_jobs import (
+    GraphWriteJobRepositoryPort as SplitGraphWriteJobRepositoryPort,
+    MemoryGraphLinkRepositoryPort as SplitMemoryGraphLinkRepositoryPort,
+)
+from memwing.ports.outbox_jobs import OutboxJobRepositoryPort as SplitOutboxJobRepositoryPort
+from memwing.ports.scope_bindings import ScopeBindingStorePort
+from memwing.ports.source_events import SourceEventRepositoryPort as SplitSourceEventRepositoryPort
 from memwing.ports.graph_backend import (
     GraphBackendPort,
     GraphFactPreseedRequest,
@@ -291,6 +313,27 @@ def test_event_store_transaction_exposes_d_e_f_repository_boundaries() -> None:
     assert hasattr(GraphWriteJobRepositoryPort, "list_for_source_events")
     assert hasattr(PushCandidateRepositoryPort, "list_for_project")
     assert hasattr(PushCandidateRepositoryPort, "list_pending")
+
+
+def test_event_store_reexports_split_repository_ports_for_compatibility() -> None:
+    assert event_store.SourceEventRepositoryPort is SplitSourceEventRepositoryPort
+    assert event_store.AuditEventRepositoryPort is SplitAuditEventRepositoryPort
+    assert event_store.OutboxJobRepositoryPort is SplitOutboxJobRepositoryPort
+    assert event_store.EvidenceChunkRepositoryPort is SplitEvidenceChunkRepositoryPort
+    assert event_store.WorkingMemoryRepositoryPort is SplitWorkingMemoryRepositoryPort
+    assert event_store.MemoryRecallEventRepositoryPort is SplitMemoryRecallEventRepositoryPort
+    assert event_store.MemoryItemRepositoryPort is SplitMemoryItemRepositoryPort
+    assert event_store.MemoryVersionRepositoryPort is SplitMemoryVersionRepositoryPort
+    assert event_store.MemoryPageRepositoryPort is SplitMemoryPageRepositoryPort
+    assert event_store.MemoryPageVersionRepositoryPort is SplitMemoryPageVersionRepositoryPort
+    assert event_store.GraphWriteJobRepositoryPort is SplitGraphWriteJobRepositoryPort
+    assert event_store.MemoryGraphLinkRepositoryPort is SplitMemoryGraphLinkRepositoryPort
+    assert (
+        event_store.ForgettingReviewCandidateRepositoryPort
+        is SplitForgettingReviewCandidateRepositoryPort
+    )
+    assert event_store.PushCandidateRepositoryPort is SplitPushCandidateRepositoryPort
+    assert event_store.ScopeBindingStorePort is ScopeBindingStorePort
 
 
 def test_platform_connector_port_freezes_feishu_boundary_methods() -> None:
