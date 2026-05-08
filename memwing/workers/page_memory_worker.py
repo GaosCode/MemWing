@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from memwing.application.outbox_job_catalog import PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE
 from memwing.application.page_memory_policy import (
     PageMemoryPolicy,
     PageMemoryPolicyDecision,
@@ -22,9 +23,6 @@ from memwing.application.page_memory_trigger import page_memory_target_from_sour
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.models import OutboxJob, PageMemory
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
-
-
-PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE = "page_memory.maybe_rebuild"
 
 
 @dataclass(frozen=True, slots=True)

@@ -36,11 +36,11 @@ from memwing.application.control_service_support import (
     _audit_event,
     _not_found,
     _rejected_audit_event,
-    _scope_values_match,
 )
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.application.scope_resolver import ScopeResolver
 from memwing.core.scope import EffectiveScope, MemoryScope
+from memwing.core.scope_visibility import push_candidate_visible_in_scope
 from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
 from memwing.ports.platform_connector import PlatformConnectorPort
 
@@ -189,12 +189,7 @@ class ControlService(
                     limit=push_candidates_fetch_limit,
                     sort=sort,
                 )
-                if _scope_values_match(
-                    group_id=candidate.group_id,
-                    thread_id=candidate.thread_id,
-                    shared_group_id=candidate.shared_group_id,
-                    scope=scope,
-                )
+                if push_candidate_visible_in_scope(candidate, scope)
             )
             graph_jobs = await tx.graph_write_jobs.list_for_project(
                 project_memory_space_id=scope.project_memory_space_id,

@@ -8,7 +8,8 @@ import uuid
 from memwing.application.failure_semantics import classify_failure
 from memwing.core.errors import ScopeResolutionFailure, ValidationFailure
 from memwing.core.models import AuditEvent, MemoryItem, MemoryStatus, SourceEvent
-from memwing.core.scope import EffectiveScope, effective_scope_matches
+from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import source_event_visible_in_scope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import GraphBackendPort
 
@@ -205,12 +206,7 @@ def _validate_command(command: SourceRedactionCommand) -> None:
 
 
 def _source_event_in_scope(event: SourceEvent, scope: EffectiveScope) -> bool:
-    return event.project_memory_space_id == scope.project_memory_space_id and effective_scope_matches(
-        group_id=event.group_id,
-        thread_id=event.thread_id,
-        shared_group_id=event.shared_group_id,
-        scope=scope,
-    )
+    return source_event_visible_in_scope(event, scope)
 
 
 def _redacted_memory_item(item: MemoryItem, source_event_id: str, now: datetime) -> MemoryItem:

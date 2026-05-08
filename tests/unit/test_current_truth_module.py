@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from memwing.application.current_truth import CurrentTruthModule
-from memwing.application.memory_access_read_model import current_truth_to_access_result
+from memwing.application.current_truth_read_model import current_truth_to_access_result
 from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
 from memwing.core.models import (
     MemoryGraphLink,
@@ -186,6 +186,29 @@ def test_current_truth_raw_event_fallback_ignores_unavailable_memory_items() -> 
 
     for item in unavailable_items:
         asyncio.run(scenario(item))
+
+
+def test_current_truth_raw_event_fallback_does_not_bypass_review_gate() -> None:
+    store = InMemoryDataStore()
+
+    async def scenario() -> None:
+        async with store.transaction() as tx:
+            await tx.source_events.insert_if_absent(_source_event())
+            await tx.memory_items.upsert(_memory_item("memory_review", MemoryStatus.NEEDS_REVIEW))
+
+        result = await CurrentTruthModule(store, now=lambda: NOW).recall_current(
+            MemorySearchQuery(
+                query="Skyline",
+                scope=_scope(),
+                limit=10,
+                trace_id="trace_current",
+            )
+        )
+
+        assert result.current_facts == ()
+        assert result.raw_events == ()
+
+    asyncio.run(scenario())
 
 
 def test_current_truth_enriches_graph_results_with_memwing_source_links() -> None:

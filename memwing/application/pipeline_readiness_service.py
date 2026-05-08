@@ -7,19 +7,19 @@ from datetime import UTC, datetime
 import uuid
 
 from memwing.application.pipeline_readiness_jobs import job_count, outbox_readiness
-from memwing.application.pipeline_readiness_status import (
+from memwing.application.outbox_job_catalog import (
+    EVIDENCE_INDEX_SOURCE_EVENT_JOB_TYPE,
     LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
     PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+    aggregate_key_for_scope_job,
+)
+from memwing.application.pipeline_readiness_status import (
     build_derived_readiness,
     profile_terminally_blocked,
     profile_ready,
     warnings_for_readiness,
 )
-from memwing.application.current_truth import is_current_recallable_memory_item
-from memwing.application.page_memory_trigger import page_memory_trigger_key_for_scope
-from memwing.application.remember_event_records import (
-    long_term_filter_trigger_key_for_scope,
-)
+from memwing.application.memory_item_ranking import is_current_recallable_memory_item
 from memwing.core.models import MemoryItem, OutboxJob, PageMemory, SourceEvent
 from memwing.core.pipeline_readiness import (
     JobStatusCount,
@@ -27,7 +27,11 @@ from memwing.core.pipeline_readiness import (
     PipelineReadinessResult,
     SourceEventReadiness,
 )
-from memwing.core.scope import EffectiveScope, effective_scope_matches
+from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import (
+    memory_item_visible_in_scope,
+    source_event_visible_in_scope,
+)
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 
@@ -111,7 +115,7 @@ class PipelineReadinessService:
             )
 
         graph_status = job_count(graph_jobs, now=checked_at)
-        evidence_status = outbox_by_type.get("evidence.index_source_event")
+        evidence_status = outbox_by_type.get(EVIDENCE_INDEX_SOURCE_EVENT_JOB_TYPE)
         indexed_evidence_count = _indexed_evidence_count(
             stored_count=evidence_count,
             source_event_count=source_readiness.available,
@@ -199,15 +203,9 @@ async def _load_available_source_events(
         event = await source_repository.get_source_event(source_event_id)
         if (
             event is not None
-            and event.project_memory_space_id == scope.project_memory_space_id
             and event.purged_at is None
             and event.purge_level == "none"
-            and effective_scope_matches(
-                group_id=event.group_id,
-                thread_id=event.thread_id,
-                shared_group_id=event.shared_group_id,
-                scope=scope,
-            )
+            and source_event_visible_in_scope(event, scope)
         ):
             events[event.id] = event
     return events
@@ -229,12 +227,22 @@ async def _related_outbox_jobs(
     scope_jobs = await outbox_repository.list_for_project_type_and_aggregates(
         project_memory_space_id=scope.project_memory_space_id,
         job_type=PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
-        aggregate_keys=(page_memory_trigger_key_for_scope(scope),),
+        aggregate_keys=(
+            aggregate_key_for_scope_job(
+                scope=scope,
+                job_type=PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+            ),
+        ),
     )
     ltf_jobs = await outbox_repository.list_for_project_type_and_aggregates(
         project_memory_space_id=scope.project_memory_space_id,
         job_type=LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
-        aggregate_keys=(long_term_filter_trigger_key_for_scope(scope),),
+        aggregate_keys=(
+            aggregate_key_for_scope_job(
+                scope=scope,
+                job_type=LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
+            ),
+        ),
     )
     by_id = {job.id: job for job in direct}
     by_id.update({job.id: job for job in scope_jobs})
@@ -252,14 +260,8 @@ async def _memory_items_for_source_events(
     for source_event_id in source_event_ids:
         for item in await repository.list_by_source_event(source_event_id):
             if (
-                item.project_memory_space_id == scope.project_memory_space_id
+                memory_item_visible_in_scope(item, scope)
                 and is_current_recallable_memory_item(item)
-                and effective_scope_matches(
-                    group_id=item.group_id,
-                    thread_id=item.thread_id,
-                    shared_group_id=item.shared_group_id,
-                    scope=scope,
-                )
             ):
                 by_id[item.id] = item
     return tuple(by_id.values())

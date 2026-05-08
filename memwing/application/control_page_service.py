@@ -15,7 +15,6 @@ from memwing.application.control_service_support import (
     _audit_event,
     _not_found,
     _rejected_audit_event,
-    _scope_values_match,
     _uuid,
 )
 from memwing.application.page_memory_rebuild import MANUAL_REBUILD_REASON, PageMemoryRebuildCommand
@@ -23,6 +22,7 @@ from memwing.application.page_memory_service import PageMemoryService
 from memwing.core.errors import ConfigurationFailure
 from memwing.core.models import MemoryPageVersion, PageMemory, SourceEvent
 from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import page_memory_visible_in_scope
 from memwing.ports.event_store import EventStoreTransactionPort, EventStoreUnitOfWorkPort
 
 
@@ -272,12 +272,7 @@ class ControlPageServiceMixin:
 
 
 def _page_in_scope(page: PageMemory, scope: EffectiveScope) -> bool:
-    return page.project_memory_space_id == scope.project_memory_space_id and _scope_values_match(
-        group_id=page.group_id,
-        thread_id=page.thread_id,
-        shared_group_id=page.shared_group_id,
-        scope=scope,
-    )
+    return page_memory_visible_in_scope(page, scope)
 
 
 async def _source_events_for_page(

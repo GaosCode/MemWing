@@ -19,6 +19,7 @@ from memwing.core.models import (
     graph_write_serialization_key,
 )
 from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import source_event_visible_in_scope
 from memwing.application.push_service import decision_card_candidate
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.lifecycle_transition import (
@@ -243,15 +244,7 @@ async def _load_source_events(
 
 
 def _source_event_in_scope(event: SourceEvent, scope: EffectiveScope) -> bool:
-    if event.project_memory_space_id != scope.project_memory_space_id:
-        return False
-    if scope.thread_id is not None and event.thread_id != scope.thread_id:
-        return False
-    if scope.group_ids is not None and event.group_id not in scope.group_ids:
-        return False
-    if scope.shared_group_id is not None and event.shared_group_id != scope.shared_group_id:
-        return False
-    return True
+    return source_event_visible_in_scope(event, scope)
 
 
 def _validate_filter_items(

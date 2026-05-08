@@ -5,8 +5,10 @@ from datetime import UTC, datetime
 from typing import Callable
 import uuid
 
+from memwing.application.outbox_job_catalog import PUSH_CANDIDATE_SEND_JOB_TYPE
 from memwing.core.models import MemoryDisplayType, MemoryItem, MemoryStatus, OutboxJob, PushCandidate
-from memwing.core.scope import EffectiveScope, effective_scope_matches
+from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import memory_item_visible_in_scope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 
@@ -81,12 +83,7 @@ class PushService:
 
 
 def _item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:
-    return item.project_memory_space_id == scope.project_memory_space_id and effective_scope_matches(
-        group_id=item.group_id,
-        thread_id=item.thread_id,
-        shared_group_id=item.shared_group_id,
-        scope=scope,
-    )
+    return memory_item_visible_in_scope(item, scope)
 
 
 def _forgetting_review_candidate(item: MemoryItem, reason: str, now: datetime) -> PushCandidate:
@@ -148,7 +145,7 @@ def push_candidate_send_job(
     if source_event_id is None:
         raise ValueError("push candidate send job requires a source event id")
     delivery_key = delivery_source_event_id or "candidate_source"
-    idempotency_key = f"push_candidate.send:{candidate.id}:{platform}:{delivery_key}"
+    idempotency_key = f"{PUSH_CANDIDATE_SEND_JOB_TYPE}:{candidate.id}:{platform}:{delivery_key}"
     payload_json: dict[str, object] = {"push_candidate_id": candidate.id, "platform": platform}
     if delivery_source_event_id is not None:
         payload_json["delivery_source_event_id"] = delivery_source_event_id
@@ -156,11 +153,11 @@ def push_candidate_send_job(
         id=_uuid("outbox", idempotency_key),
         project_memory_space_id=candidate.project_memory_space_id,
         source_event_id=source_event_id,
-        job_type="push_candidate.send",
+        job_type=PUSH_CANDIDATE_SEND_JOB_TYPE,
         payload_json=payload_json,
         status="pending",
         idempotency_key=idempotency_key,
-        aggregate_key=f"push_candidate.send:{candidate.id}",
+        aggregate_key=f"{PUSH_CANDIDATE_SEND_JOB_TYPE}:{candidate.id}",
         attempts=0,
         max_attempts=3,
         priority=90,

@@ -6,7 +6,8 @@ from typing import Final
 
 from memwing.application.push_service import push_candidate_send_job
 from memwing.core.models import PushCandidate, SourceEvent
-from memwing.core.scope import EffectiveScope, effective_scope_matches
+from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import push_candidate_visible_in_scope
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 
 
@@ -94,12 +95,7 @@ def select_push_candidate(
     scope: EffectiveScope,
 ) -> PushCandidate | None:
     for candidate in candidates:
-        if effective_scope_matches(
-            group_id=candidate.group_id,
-            thread_id=candidate.thread_id,
-            shared_group_id=candidate.shared_group_id,
-            scope=scope,
-        ):
+        if push_candidate_visible_in_scope(candidate, scope):
             return candidate
     return None
 

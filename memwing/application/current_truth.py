@@ -9,8 +9,10 @@ from time import perf_counter
 from typing import TypeVar
 
 from memwing.application.failure_semantics import classify_failure
-from memwing.application.search_relevance import search_relevance_matches, search_relevance_score
-from memwing.core.forgetting_curve import compute_decayed_score, effective_last_touched_at
+from memwing.application.memory_item_ranking import (
+    memory_item_blocks_raw_source_fallback,
+    rank_current_memory_items,
+)
 from memwing.core.memory_search import (
     MemorySearchQuery,
     MemorySearchResult,
@@ -18,18 +20,17 @@ from memwing.core.memory_search import (
 )
 from memwing.core.models import (
     MemoryItem,
-    MemoryStatus,
     PageMemory,
     SourceEvent,
     WorkingMemoryEntry,
 )
 from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import memory_item_visible_in_scope
 from memwing.ports.evidence_index import EvidenceIndexPort
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.graph_backend import GraphBackendPort
 
 
-_CURRENT_RECALL_STATUSES = frozenset((MemoryStatus.ACTIVE,))
 LocalBranchResultT = TypeVar("LocalBranchResultT")
 BranchResultT = TypeVar("BranchResultT")
 
@@ -241,7 +242,7 @@ class CurrentTruthModule:
         except Exception as exc:
             return (), _branch_warning("memory_items", exc)
 
-        ranked_items = _rank_memory_items(
+        ranked_items = rank_current_memory_items(
             query=query.query,
             items=memory_items,
             min_score=query.min_score,
@@ -392,71 +393,16 @@ def _local_result_count(
     return len(items)
 
 
-def _rank_memory_items(
-    *,
-    query: str,
-    items: tuple[MemoryItem, ...],
-    min_score: float,
-    now: datetime,
-) -> list[tuple[MemoryItem, float]]:
-    ranked: list[tuple[MemoryItem, float]] = []
-    for item in items:
-        if not is_current_recallable_memory_item(item):
-            continue
-        score = _memory_item_score(item, now=now)
-        if score < min_score:
-            continue
-        relevance = search_relevance_score(query, _memory_item_search_text(item))
-        if query and not search_relevance_matches(query, _memory_item_search_text(item)):
-            continue
-        ranked.append((item, score + relevance))
-    return sorted(ranked, key=lambda pair: (pair[1], pair[0].updated_at, pair[0].id), reverse=True)
-
-
-def is_current_recallable_memory_item(item: MemoryItem) -> bool:
-    return (
-        item.status in _CURRENT_RECALL_STATUSES
-        and item.removed_at is None
-        and item.hidden_at is None
-        and item.invalidated_at is None
-        and item.valid_to is None
-    )
-
-
 def _memory_item_covers_source_event(item: MemoryItem, query: MemorySearchQuery) -> bool:
     if not _memory_item_in_scope(item, query.scope):
         return False
-    if item.status in (MemoryStatus.HIDDEN, MemoryStatus.INVALID, MemoryStatus.REMOVED):
-        return False
-    if item.removed_at is not None or item.hidden_at is not None:
-        return False
-    if item.invalidated_at is not None or item.valid_to is not None:
+    if not memory_item_blocks_raw_source_fallback(item):
         return False
     return True
 
 
 def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:
-    return (
-        item.project_memory_space_id == scope.project_memory_space_id
-        and (scope.thread_id is None or item.thread_id == scope.thread_id)
-        and (scope.group_ids is None or item.group_id in scope.group_ids)
-        and (scope.shared_group_id is None or item.shared_group_id == scope.shared_group_id)
-    )
-
-
-def _memory_item_score(item: MemoryItem, *, now: datetime) -> float:
-    if item.cached_decayed_score is not None:
-        return item.cached_decayed_score
-    return compute_decayed_score(
-        original_score=item.original_score,
-        effective_last_touched_at=effective_last_touched_at(item),
-        now=now,
-        half_life_days=item.half_life_days,
-    )
-
-
-def _memory_item_search_text(item: MemoryItem) -> str:
-    return " ".join(text for text in (item.title, item.content, item.summary) if text is not None)
+    return memory_item_visible_in_scope(item, scope)
 
 
 def _memory_item_to_result_item(item: MemoryItem, *, score: float) -> MemorySearchResultItem:

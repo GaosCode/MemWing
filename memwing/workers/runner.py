@@ -5,13 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from memwing.application.outbox_job_catalog import job_types_for_worker_lane
 from memwing.workers.derived_outbox_worker import (
-    EVIDENCE_INDEX_JOB_TYPE,
-    LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
-    PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
-    PUSH_CANDIDATE_TRIGGER_JOB_TYPE,
-    PUSH_CANDIDATE_SEND_JOB_TYPE,
-    WORKING_MEMORY_APPEND_JOB_TYPE,
     DerivedOutboxWorker,
     DerivedOutboxWorkerResult,
 )
@@ -190,18 +185,4 @@ class MemWingWorkerRunner:
 
 
 def _outbox_job_types_for_lane(lane: PipelineWorkerLane) -> tuple[str, ...] | None:
-    if lane in (PipelineWorkerLane.ALL, PipelineWorkerLane.OUTBOX):
-        return None
-    if lane == PipelineWorkerLane.GRAPH:
-        return ()
-    if lane == PipelineWorkerLane.EVIDENCE:
-        return (EVIDENCE_INDEX_JOB_TYPE,)
-    if lane == PipelineWorkerLane.WORKING_MEMORY:
-        return (WORKING_MEMORY_APPEND_JOB_TYPE,)
-    if lane == PipelineWorkerLane.PAGE_MEMORY:
-        return (PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,)
-    if lane == PipelineWorkerLane.LONG_TERM_FILTER:
-        return (LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,)
-    if lane == PipelineWorkerLane.PUSH:
-        return (PUSH_CANDIDATE_TRIGGER_JOB_TYPE, PUSH_CANDIDATE_SEND_JOB_TYPE)
-    raise ValueError(f"unsupported pipeline lane: {lane}")
+    return job_types_for_worker_lane(lane.value)

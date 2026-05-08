@@ -99,6 +99,7 @@ def test_remember_event_commits_source_audit_and_generic_outbox_atomically() -> 
         "channel_id": "chat_001",
         "thread_id": "thread_001",
         "message_id": "message_001",
+        "receive_id_type": None,
     }
 
 

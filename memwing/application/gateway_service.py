@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Final
 
+from memwing.application.outbox_job_catalog import source_event_job_types
 from memwing.application.remember_event_command import RememberEventCommand
 from memwing.core.models import SourceEvent
 from memwing.core.runtime import RememberEventResult
@@ -18,12 +18,7 @@ from .remember_event_records import (
 from .scope_resolver import ScopeResolutionError, ScopeResolver
 
 
-DEFAULT_OUTBOX_JOB_TYPES: Final[tuple[str, ...]] = (
-    "evidence.index_source_event",
-    "working_memory.append",
-    "page_memory.maybe_rebuild",
-    "long_term_filter.classify",
-)
+DEFAULT_OUTBOX_JOB_TYPES = source_event_job_types()
 
 
 class RememberEventError(ValueError):

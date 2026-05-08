@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from memwing.application.outbox_job_catalog import job_type_for_derived_layer
 from memwing.core.pipeline_readiness import (
     DerivedLayerReadiness,
     JobStatusCount,
@@ -7,13 +8,6 @@ from memwing.core.pipeline_readiness import (
     PipelineReadinessProfile,
     SourceEventReadiness,
 )
-
-
-EVIDENCE_INDEX_JOB_TYPE = "evidence.index_source_event"
-WORKING_MEMORY_APPEND_JOB_TYPE = "working_memory.append"
-PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE = "page_memory.maybe_rebuild"
-LONG_TERM_FILTER_CLASSIFY_JOB_TYPE = "long_term_filter.classify"
-
 
 def build_derived_readiness(
     *,
@@ -30,18 +24,22 @@ def build_derived_readiness(
     memory_item_count: int,
     graph_status: JobStatusCount,
 ) -> dict[str, DerivedLayerReadiness]:
+    working_memory_job_type = _job_type_for_layer(PipelineLane.WORKING_MEMORY)
+    evidence_job_type = _job_type_for_layer(PipelineLane.EVIDENCE)
+    page_memory_job_type = _job_type_for_layer(PipelineLane.PAGE_MEMORY)
+    memory_items_job_type = _job_type_for_layer(PipelineLane.MEMORY_ITEMS)
     return {
         PipelineLane.WORKING_MEMORY.value: _layer(
             ready=(
                 source_readiness.ready
                 and working_count >= source_readiness.available
-                and _job_type_ready(outbox_by_type, WORKING_MEMORY_APPEND_JOB_TYPE)
+                and _job_type_ready(outbox_by_type, working_memory_job_type)
             ),
             count=working_count,
             reason=_reason_for_event_layer(
                 expected=source_readiness.available,
                 count=working_count,
-                job_status=outbox_by_type.get(WORKING_MEMORY_APPEND_JOB_TYPE),
+                job_status=outbox_by_type.get(working_memory_job_type),
                 empty_reason="working_memory_pending",
             ),
         ),
@@ -49,13 +47,13 @@ def build_derived_readiness(
             enabled=evidence_enabled,
             expected=source_readiness.available,
             count=evidence_count,
-            job_status=outbox_by_type.get(EVIDENCE_INDEX_JOB_TYPE),
+            job_status=outbox_by_type.get(evidence_job_type),
             disabled_reason="evidence_disabled",
             empty_reason="evidence_empty",
         ),
         PipelineLane.PAGE_MEMORY.value: _scope_layer(
             count=page_count,
-            job_status=outbox_by_type.get(PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE),
+            job_status=outbox_by_type.get(page_memory_job_type),
             empty_reason="page_memory_empty",
             matched_source_event_ids=page_matched_source_event_ids,
             unmatched_source_event_ids=page_unmatched_source_event_ids,
@@ -63,7 +61,7 @@ def build_derived_readiness(
         ),
         PipelineLane.MEMORY_ITEMS.value: _scope_layer(
             count=memory_item_count,
-            job_status=outbox_by_type.get(LONG_TERM_FILTER_CLASSIFY_JOB_TYPE),
+            job_status=outbox_by_type.get(memory_items_job_type),
             empty_reason="memory_items_empty",
         ),
         PipelineLane.GRAPH.value: _graph_layer(
@@ -71,6 +69,13 @@ def build_derived_readiness(
             graph_status=graph_status,
         ),
     }
+
+
+def _job_type_for_layer(layer: PipelineLane) -> str:
+    job_type = job_type_for_derived_layer(layer)
+    if job_type is None:
+        raise ValueError(f"pipeline layer does not have an outbox job type: {layer}")
+    return job_type
 
 def warnings_for_readiness(
     *,

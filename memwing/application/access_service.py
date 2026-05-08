@@ -4,18 +4,20 @@ from datetime import UTC, datetime
 from typing import Callable
 
 from memwing.application.current_truth import CurrentTruthModule
+from memwing.application.current_truth_read_model import current_truth_to_access_result
 from memwing.application.decision_card_service import DecisionCardCommand, DecisionCardService
+from memwing.application.memory_item_ranking import (
+    memory_item_score,
+    rank_memory_items,
+    sort_ranked_items,
+)
 from memwing.application.memory_access_audit import record_recall_events, trace_id
 from memwing.application.memory_access_read_model import (
-    current_truth_to_access_result,
     memory_item_in_scope,
-    memory_item_score,
     memory_item_to_result_item,
     paginate_items,
-    rank_memory_items,
     result_fetch_limit,
     search_graph_history,
-    sort_ranked_items,
     source_event_in_scope,
     source_event_to_result_item,
 )

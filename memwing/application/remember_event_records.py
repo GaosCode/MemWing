@@ -7,7 +7,14 @@ import json
 import uuid
 
 from memwing.application.remember_event_command import RememberEventCommand
-from memwing.application.page_memory_trigger import page_memory_target_from_source_event
+from memwing.application.outbox_job_catalog import (
+    LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
+    PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+    aggregate_key_for_scope_job,
+    aggregate_key_for_source_event_job,
+    long_term_filter_aggregate_key,
+    outbox_job_plan_for_source_event,
+)
 from memwing.core.models import AuditEvent, OutboxJob, SourceEvent
 from memwing.application.scope_resolver import ResolvedScope
 from memwing.core.scope import EffectiveScope
@@ -100,6 +107,10 @@ class RememberEventRecordFactory:
         trace_id: str,
         outbox_job_types: tuple[str, ...],
     ) -> RememberEventPlan:
+        outbox_plan = outbox_job_plan_for_source_event(
+            source_event,
+            job_types=outbox_job_types,
+        )
         return RememberEventPlan(
             source_event=source_event,
             audit_events=(
@@ -112,10 +123,11 @@ class RememberEventRecordFactory:
             outbox_jobs=tuple(
                 outbox_job(
                     source_event=source_event,
-                    job_type=job_type,
+                    job_type=creation.job_type,
+                    aggregate_key=creation.aggregate_key,
                     now=source_event.created_at,
                 )
-                for job_type in outbox_job_types
+                for creation in outbox_plan.jobs
             ),
         )
 
@@ -161,7 +173,13 @@ def rejected_audit_event(*, trace_id: str, reason_text: str, now: datetime) -> A
     )
 
 
-def outbox_job(*, source_event: SourceEvent, job_type: str, now: datetime) -> OutboxJob:
+def outbox_job(
+    *,
+    source_event: SourceEvent,
+    job_type: str,
+    now: datetime,
+    aggregate_key: str | None = None,
+) -> OutboxJob:
     idempotency_key = f"{job_type}:{source_event.id}"
     return OutboxJob(
         id=_uuid("outbox", idempotency_key),
@@ -171,7 +189,11 @@ def outbox_job(*, source_event: SourceEvent, job_type: str, now: datetime) -> Ou
         payload_json={"source_event_id": source_event.id},
         status="pending",
         idempotency_key=idempotency_key,
-        aggregate_key=outbox_aggregate_key(source_event=source_event, job_type=job_type),
+        aggregate_key=(
+            aggregate_key
+            if aggregate_key is not None
+            else aggregate_key_for_source_event_job(source_event=source_event, job_type=job_type)
+        ),
         attempts=0,
         max_attempts=3,
         priority=100,
@@ -209,16 +231,7 @@ def _content_preview(content: str) -> str:
 
 
 def outbox_aggregate_key(*, source_event: SourceEvent, job_type: str) -> str:
-    if job_type == "long_term_filter.classify":
-        return long_term_filter_trigger_key(
-            project_memory_space_id=source_event.project_memory_space_id,
-            group_id=source_event.group_id,
-            thread_id=source_event.thread_id,
-            shared_group_id=source_event.shared_group_id,
-        )
-    if job_type == "page_memory.maybe_rebuild":
-        return page_memory_target_from_source_event(source_event).aggregate_key
-    return source_event.id
+    return aggregate_key_for_source_event_job(source_event=source_event, job_type=job_type)
 
 
 def long_term_filter_trigger_key(
@@ -228,28 +241,20 @@ def long_term_filter_trigger_key(
     thread_id: str | None,
     shared_group_id: str | None,
 ) -> str:
-    return ":".join(
-        (
-            "long_term_filter",
-            project_memory_space_id,
-            group_id or "",
-            thread_id or "",
-            shared_group_id or "",
-        )
+    return long_term_filter_aggregate_key(
+        project_memory_space_id=project_memory_space_id,
+        group_id=group_id,
+        thread_id=thread_id,
+        shared_group_id=shared_group_id,
     )
 
 
 def long_term_filter_trigger_key_for_scope(scope: EffectiveScope) -> str:
-    group_id = scope.group_ids[0] if scope.group_ids and len(scope.group_ids) == 1 else None
-    return long_term_filter_trigger_key(
-        project_memory_space_id=scope.project_memory_space_id,
-        group_id=group_id,
-        thread_id=scope.thread_id,
-        shared_group_id=scope.shared_group_id,
+    return aggregate_key_for_scope_job(
+        scope=scope,
+        job_type=LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
     )
 
 
 def page_memory_trigger_key_for_scope(scope: EffectiveScope) -> str:
-    from memwing.application.page_memory_trigger import page_memory_trigger_key_for_scope as key
-
-    return key(scope)
+    return aggregate_key_for_scope_job(scope=scope, job_type=PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE)

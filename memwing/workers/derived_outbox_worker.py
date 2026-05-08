@@ -9,12 +9,17 @@ from memwing.application.long_term_filter_service import (
     LongTermFilterService,
 )
 from memwing.application.control_service import ControlService
+from memwing.application.outbox_job_catalog import (
+    EVIDENCE_INDEX_SOURCE_EVENT_JOB_TYPE,
+    LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
+    PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+    PUSH_CANDIDATE_SEND_JOB_TYPE,
+    PUSH_CANDIDATE_TRIGGER_JOB_TYPE,
+    WORKING_MEMORY_APPEND_JOB_TYPE,
+    aggregate_key_for_scope_job,
+)
 from memwing.application.page_memory_policy import estimate_source_event_tokens
 from memwing.application.push_trigger_service import PushTriggerService
-from memwing.application.remember_event_records import (
-    long_term_filter_trigger_key_for_scope,
-    page_memory_trigger_key_for_scope,
-)
 from memwing.core.models import OutboxJob, SourceEvent, WorkingMemoryEntry
 from memwing.core.scope import EffectiveScope
 from memwing.ports.evidence_index import EvidenceIndexPort
@@ -23,12 +28,7 @@ from memwing.workers.outbox_worker import OutboxWorker, OutboxWorkerResult
 from memwing.workers.page_memory_worker import PageMemoryWorker
 
 
-EVIDENCE_INDEX_JOB_TYPE = "evidence.index_source_event"
-WORKING_MEMORY_APPEND_JOB_TYPE = "working_memory.append"
-PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE = "page_memory.maybe_rebuild"
-LONG_TERM_FILTER_CLASSIFY_JOB_TYPE = "long_term_filter.classify"
-PUSH_CANDIDATE_TRIGGER_JOB_TYPE = "push_candidate.trigger"
-PUSH_CANDIDATE_SEND_JOB_TYPE = "push_candidate.send"
+EVIDENCE_INDEX_JOB_TYPE = EVIDENCE_INDEX_SOURCE_EVENT_JOB_TYPE
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,12 +115,18 @@ class DerivedOutboxWorker:
             (
                 PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
                 self._scope_job_limit,
-                page_memory_trigger_key_for_scope(scope),
+                aggregate_key_for_scope_job(
+                    scope=scope,
+                    job_type=PAGE_MEMORY_MAYBE_REBUILD_JOB_TYPE,
+                ),
             ),
             (
                 LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
                 self._scope_job_limit,
-                long_term_filter_trigger_key_for_scope(scope),
+                aggregate_key_for_scope_job(
+                    scope=scope,
+                    job_type=LONG_TERM_FILTER_CLASSIFY_JOB_TYPE,
+                ),
             ),
         ):
             if selected_job_types is not None and job_type not in selected_job_types:

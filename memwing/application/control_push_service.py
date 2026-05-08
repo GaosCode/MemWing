@@ -17,12 +17,16 @@ from memwing.application.control_service_support import (
     _audit_event,
     _not_found,
     _rejected_audit_event,
-    _scope_values_match,
 )
 from memwing.core.errors import ConfigurationFailure, ValidationFailure
-from memwing.core.models import MemoryItem, PushCandidate
+from memwing.core.models import MemoryItem, PushCandidate, SourceEvent
 from memwing.core.platform import PlatformRef, PushCandidate as PlatformPushCandidate
 from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import (
+    memory_item_visible_in_scope,
+    push_candidate_visible_in_scope,
+    source_event_visible_in_scope,
+)
 from memwing.ports.event_store import EventStoreUnitOfWorkPort
 from memwing.ports.platform_connector import PlatformConnectorPort
 
@@ -108,12 +112,7 @@ class ControlPushServiceMixin:
                 idempotency_key=idempotency_key,
             )
             candidate = await tx.push_candidates.get(candidate_id)
-            if candidate is None or not _scope_values_match(
-                group_id=candidate.group_id,
-                thread_id=candidate.thread_id,
-                shared_group_id=candidate.shared_group_id,
-                scope=scope,
-            ):
+            if candidate is None or not _push_candidate_in_scope(candidate, scope):
                 await tx.audit_events.record(
                     _rejected_audit_event(
                         entity_type="control_push_candidate_send",
@@ -147,11 +146,9 @@ class ControlPushServiceMixin:
             if failure is None:
                 if delivery_source_event_id is not None:
                     delivery_source_event = await tx.source_events.get_source_event(delivery_source_event_id)
-                    if delivery_source_event is None or not _scope_values_match(
-                        group_id=delivery_source_event.group_id,
-                        thread_id=delivery_source_event.thread_id,
-                        shared_group_id=delivery_source_event.shared_group_id,
-                        scope=scope,
+                    if delivery_source_event is None or not _source_event_in_scope(
+                        delivery_source_event,
+                        scope,
                     ):
                         failure = ValidationFailure(
                             "push_candidate_delivery_source_missing",
@@ -269,12 +266,7 @@ class ControlPushServiceMixin:
                 )
             for memory_item_id in selected.memory_item_ids:
                 memory_item = await tx.memory_items.get(memory_item_id)
-                if memory_item is not None and _scope_values_match(
-                    group_id=memory_item.group_id,
-                    thread_id=memory_item.thread_id,
-                    shared_group_id=memory_item.shared_group_id,
-                    scope=scope,
-                ):
+                if memory_item is not None and _memory_item_in_scope(memory_item, scope):
                     memory_items.append(memory_item)
         return _openclaw_push_card(selected, memory_items=tuple(memory_items), trace_id=trace_id)
 
@@ -296,12 +288,7 @@ class ControlPushServiceMixin:
                 idempotency_key=idempotency_key,
             )
             candidate = await tx.push_candidates.get(candidate_id)
-            if candidate is None or not _scope_values_match(
-                group_id=candidate.group_id,
-                thread_id=candidate.thread_id,
-                shared_group_id=candidate.shared_group_id,
-                scope=scope,
-            ):
+            if candidate is None or not _push_candidate_in_scope(candidate, scope):
                 await tx.audit_events.record(
                     _rejected_audit_event(
                         entity_type="control_push_candidate_openclaw_ack",
@@ -357,12 +344,7 @@ class ControlPushServiceMixin:
                 idempotency_key=idempotency_key,
             )
             candidate = await tx.push_candidates.get(candidate_id)
-            if candidate is None or not _scope_values_match(
-                group_id=candidate.group_id,
-                thread_id=candidate.thread_id,
-                shared_group_id=candidate.shared_group_id,
-                scope=scope,
-            ):
+            if candidate is None or not _push_candidate_in_scope(candidate, scope):
                 await tx.audit_events.record(
                     _rejected_audit_event(
                         entity_type="control_push_candidate",
@@ -464,6 +446,18 @@ def _card_text(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _push_candidate_in_scope(candidate: PushCandidate, scope: EffectiveScope) -> bool:
+    return push_candidate_visible_in_scope(candidate, scope)
+
+
+def _source_event_in_scope(source_event: SourceEvent, scope: EffectiveScope) -> bool:
+    return source_event_visible_in_scope(source_event, scope)
+
+
+def _memory_item_in_scope(memory_item: MemoryItem, scope: EffectiveScope) -> bool:
+    return memory_item_visible_in_scope(memory_item, scope)
 
 
 def _platform_ref_from_source_events(source_events: list[object], *, platform: str) -> PlatformRef:

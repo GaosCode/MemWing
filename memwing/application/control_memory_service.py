@@ -20,13 +20,16 @@ from memwing.application.control_service_support import (
     _audit_event,
     _not_found,
     _rejected_audit_event,
-    _scope_values_match,
     _uuid,
 )
 from memwing.application.lifecycle_service import LifecycleTransitionService
 from memwing.core.lifecycle import LifecycleAction
 from memwing.core.models import MemoryItem, MemoryVersion, SourceEvent
 from memwing.core.scope import EffectiveScope
+from memwing.core.scope_visibility import (
+    memory_item_visible_in_scope,
+    source_event_visible_in_scope,
+)
 from memwing.ports.event_store import (
     EventStoreTransactionPort,
     EventStoreUnitOfWorkPort,
@@ -422,21 +425,11 @@ def _memory_version(
 
 
 def _memory_item_in_scope(item: MemoryItem, scope: EffectiveScope) -> bool:
-    return item.project_memory_space_id == scope.project_memory_space_id and _scope_values_match(
-        group_id=item.group_id,
-        thread_id=item.thread_id,
-        shared_group_id=item.shared_group_id,
-        scope=scope,
-    )
+    return memory_item_visible_in_scope(item, scope)
 
 
 def _source_event_in_scope(event: SourceEvent, scope: EffectiveScope) -> bool:
-    return event.project_memory_space_id == scope.project_memory_space_id and _scope_values_match(
-        group_id=event.group_id,
-        thread_id=event.thread_id,
-        shared_group_id=event.shared_group_id,
-        scope=scope,
-    )
+    return source_event_visible_in_scope(event, scope)
 
 
 def _memory_sort_value(item: object, sort: str) -> object:

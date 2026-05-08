@@ -5,22 +5,6 @@ import uuid
 
 from memwing.core.errors import ScopeResolutionFailure
 from memwing.core.models import AuditEvent
-from memwing.core.scope import EffectiveScope, effective_scope_matches
-
-
-def _scope_values_match(
-    *,
-    group_id: str | None,
-    thread_id: str | None,
-    shared_group_id: str | None,
-    scope: EffectiveScope,
-) -> bool:
-    return effective_scope_matches(
-        group_id=group_id,
-        thread_id=thread_id,
-        shared_group_id=shared_group_id,
-        scope=scope,
-    )
 
 
 def _not_found() -> ScopeResolutionFailure:
