@@ -10,18 +10,11 @@ from memwing.core.forgetting_curve import (
     next_threshold_at,
 )
 from memwing.core.models import (
-    GraphWriteJob,
-    MemoryPageVersion,
     MemoryDisplayType,
     MemoryGraphLink,
     MemoryItem,
     MemoryRoute,
     MemoryStatus,
-    OutboxJob,
-    PageMemory,
-    PageMemoryTopic,
-    PushCandidate,
-    PushCandidateType,
     SourceEvent,
 )
 
@@ -95,112 +88,6 @@ class ControlMemoryVersionProjection:
 
 
 @dataclass(frozen=True, slots=True)
-class ControlForgettingReviewItemProjection:
-    id: str
-    memory: ControlMemoryItemProjection
-    threshold: float
-    reason: str
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ControlForgettingReviewProjection:
-    items: tuple[ControlForgettingReviewItemProjection, ...]
-    next_cursor: str | None
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlJobProjection:
-    id: str
-    kind: str
-    status: str
-    attempts: int
-    max_attempts: int
-    next_run_at: datetime
-    last_error: str | None
-    dead_letter_reason: str | None
-    retryable: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPushCandidateProjection:
-    id: str
-    type: PushCandidateType
-    title: str
-    status: str
-    priority: int
-    memory_item_ids: tuple[str, ...]
-    source_event_ids: tuple[str, ...]
-    trigger_reason: str
-    created_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPageTopicProjection:
-    title: str
-    summary: str
-    source_event_ids: tuple[str, ...]
-    linked_memory_item_ids: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPageProjection:
-    id: str
-    project_memory_space_id: str
-    group_id: str | None
-    thread_id: str | None
-    shared_group_id: str | None
-    scope_type: str
-    scope_id: str
-    title: str
-    brief: str
-    topics: tuple[ControlPageTopicProjection, ...]
-    open_questions: tuple[str, ...]
-    next_steps: tuple[str, ...]
-    source_event_ids: tuple[str, ...]
-    linked_memory_item_ids: tuple[str, ...]
-    version: int
-    needs_rebuild: bool
-    graph_backend_raw_retained: bool
-    warning_count: int
-    updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPageListProjection:
-    items: tuple[ControlPageProjection, ...]
-    next_cursor: str | None
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPageDetailProjection:
-    page: ControlPageProjection
-    versions: tuple["ControlPageVersionProjection", ...]
-    audit_refs: tuple[str, ...]
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlPageVersionProjection:
-    id: str
-    page_id: str
-    version: int
-    title: str
-    brief: str
-    topics: tuple[ControlPageTopicProjection, ...]
-    open_questions: tuple[str, ...]
-    next_steps: tuple[str, ...]
-    source_event_ids: tuple[str, ...]
-    linked_memory_item_ids: tuple[str, ...]
-    changed_by: str
-    change_reason: str
-    created_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class ControlSourceEventProjection:
     id: str
     project_memory_space_id: str
@@ -228,115 +115,6 @@ class ControlSourceEventDetailProjection:
     source_event: ControlSourceEventProjection
     memory_item_ids: tuple[str, ...]
     audit_refs: tuple[str, ...]
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlMaintenanceProjection:
-    forgetting_review_count: int
-    pending_push_count: int
-    job_count: int
-    warning_count: int
-    jobs: tuple[ControlJobProjection, ...]
-    push_candidates: tuple[ControlPushCandidateProjection, ...]
-    jobs_next_cursor: str | None
-    push_candidates_next_cursor: str | None
-    next_cursor: str | None
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlSummaryProjection:
-    pending_memory_count: int
-    forgetting_review_count: int
-    pending_push_count: int
-    dead_letter_job_count: int
-    warning_count: int
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlSettingsProjection:
-    project_memory_space_id: str
-    safe_mode_enabled: bool
-    shared_group_id: str | None
-    settings_mutation_supported: bool
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlIntegrationProjection:
-    name: str
-    configured: bool
-    writable: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ControlIntegrationsProjection:
-    items: tuple[ControlIntegrationProjection, ...]
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeThreadProjection:
-    thread_id: str
-    memory_count: int
-    source_event_count: int
-    updated_at: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeGroupProjection:
-    group_id: str
-    safe_mode_enabled: bool
-    shared_group_id: str | None
-    memory_count: int
-    source_event_count: int
-    threads: tuple[ControlScopeThreadProjection, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeDirectoryItemProjection:
-    project_memory_space_id: str
-    name: str
-    kind: str
-    default_safe_mode_enabled: bool
-    memory_count: int
-    source_event_count: int
-    page_count: int
-    updated_at: datetime | None
-    groups: tuple[ControlScopeGroupProjection, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeDirectoryProjection:
-    items: tuple[ControlScopeDirectoryItemProjection, ...]
-    next_cursor: str | None
-    trace_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlResolvedScopeProjection:
-    project_memory_space_id: str
-    group_ids: tuple[str, ...] | None
-    thread_id: str | None
-    shared_group_id: str | None
-    safe_mode_enabled: bool
-    cross_group_allowed: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeProjectProjection:
-    project_memory_space_id: str
-    name: str
-    kind: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControlScopeResolveProjection:
-    requested_scope: object
-    effective_scope: ControlResolvedScopeProjection
-    project: ControlScopeProjectProjection
     trace_id: str
 
 
@@ -411,48 +189,6 @@ def project_graph_link(link: MemoryGraphLink) -> ControlGraphLinkProjection:
     )
 
 
-def project_graph_job(job: GraphWriteJob) -> ControlJobProjection:
-    return ControlJobProjection(
-        id=job.id,
-        kind="graph_write",
-        status=job.status,
-        attempts=job.attempts,
-        max_attempts=job.max_attempts,
-        next_run_at=job.next_run_at,
-        last_error=job.last_error,
-        dead_letter_reason=job.dead_letter_reason,
-        retryable=_job_retryable(job.status, job.attempts, job.max_attempts),
-    )
-
-
-def project_outbox_job(job: OutboxJob) -> ControlJobProjection:
-    return ControlJobProjection(
-        id=job.id,
-        kind="outbox",
-        status=job.status,
-        attempts=job.attempts,
-        max_attempts=job.max_attempts,
-        next_run_at=job.next_run_at,
-        last_error=job.last_error,
-        dead_letter_reason=job.dead_letter_reason,
-        retryable=_job_retryable(job.status, job.attempts, job.max_attempts),
-    )
-
-
-def project_push_candidate(candidate: PushCandidate) -> ControlPushCandidateProjection:
-    return ControlPushCandidateProjection(
-        id=candidate.id,
-        type=candidate.type,
-        title=candidate.title,
-        status=candidate.status,
-        priority=candidate.priority,
-        memory_item_ids=candidate.memory_item_ids,
-        source_event_ids=candidate.source_event_ids,
-        trigger_reason=candidate.trigger_reason,
-        created_at=candidate.created_at,
-    )
-
-
 def project_memory_version(version) -> ControlMemoryVersionProjection:
     return ControlMemoryVersionProjection(
         id=version.id,
@@ -462,64 +198,6 @@ def project_memory_version(version) -> ControlMemoryVersionProjection:
         summary=version.summary,
         status=version.status,
         source_event_ids=version.source_event_ids,
-        changed_by=version.changed_by,
-        change_reason=version.change_reason,
-        created_at=version.created_at,
-    )
-
-
-def project_page(
-    page: PageMemory,
-    *,
-    source_events: tuple[SourceEvent, ...],
-) -> ControlPageProjection:
-    graph_backend_raw_retained = any(event.graph_backend_raw_retained for event in source_events)
-    source_redacted = any(event.purged_at is not None or event.purge_level != "none" for event in source_events)
-    warning_count = int(page.needs_rebuild) + int(source_redacted) + int(graph_backend_raw_retained)
-    return ControlPageProjection(
-        id=page.id,
-        project_memory_space_id=page.project_memory_space_id,
-        group_id=page.group_id,
-        thread_id=page.thread_id,
-        shared_group_id=page.shared_group_id,
-        scope_type=page.scope_type,
-        scope_id=page.scope_id,
-        title=page.title,
-        brief=page.brief,
-        topics=tuple(project_page_topic(topic) for topic in page.topics),
-        open_questions=page.open_questions,
-        next_steps=page.next_steps,
-        source_event_ids=page.source_event_ids,
-        linked_memory_item_ids=page.linked_memory_item_ids,
-        version=page.version,
-        needs_rebuild=page.needs_rebuild,
-        graph_backend_raw_retained=graph_backend_raw_retained,
-        warning_count=warning_count,
-        updated_at=page.updated_at,
-    )
-
-
-def project_page_topic(topic: PageMemoryTopic) -> ControlPageTopicProjection:
-    return ControlPageTopicProjection(
-        title=topic.title,
-        summary=topic.summary,
-        source_event_ids=topic.source_event_ids,
-        linked_memory_item_ids=topic.linked_memory_item_ids,
-    )
-
-
-def project_page_version(version: MemoryPageVersion) -> ControlPageVersionProjection:
-    return ControlPageVersionProjection(
-        id=version.id,
-        page_id=version.page_id,
-        version=version.version,
-        title=version.title,
-        brief=version.brief,
-        topics=tuple(project_page_topic(topic) for topic in version.topics),
-        open_questions=version.open_questions,
-        next_steps=version.next_steps,
-        source_event_ids=version.source_event_ids,
-        linked_memory_item_ids=version.linked_memory_item_ids,
         changed_by=version.changed_by,
         change_reason=version.change_reason,
         created_at=version.created_at,
@@ -657,7 +335,3 @@ def _warning_count(*, source_state: str, curve_state: str) -> int:
     if curve_state == "below_threshold":
         count += 1
     return count
-
-
-def _job_retryable(status: str, attempts: int, max_attempts: int) -> bool:
-    return status in ("pending", "processing") and attempts < max_attempts
