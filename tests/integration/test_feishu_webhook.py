@@ -64,6 +64,7 @@ def test_feishu_webhook_ingress_writes_real_remember_event_records_from_bound_sc
         "channel_id": "oc_group_001",
         "thread_id": "om_root",
         "message_id": "om_001",
+        "receive_id_type": "chat_id",
     }
     assert store.audit_events[0].stage == "remember_event.captured"
     assert {job.job_type for job in store.outbox_jobs} == {
