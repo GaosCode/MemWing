@@ -70,11 +70,6 @@ class PageMemoryService:
                 scope_type=command.scope_type,
                 scope_id=command.scope_id,
             )
-            if current_page is not None and plan.existing_page is None:
-                return PageMemoryRebuildNoOp(
-                    page=current_page,
-                    reason="already_rebuilt",
-                )
             if current_page is not None:
                 if command.reason == NEEDS_REBUILD_REASON and not current_page.needs_rebuild:
                     return PageMemoryRebuildNoOp(page=current_page, reason="already_rebuilt")
