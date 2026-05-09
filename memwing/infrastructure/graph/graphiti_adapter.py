@@ -2,20 +2,30 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from hashlib import sha1
 import logging
 from pathlib import Path
-import re
 import sys
 from time import perf_counter
-import uuid
 from typing import Protocol
 
-from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult, MemorySearchResultItem
-from memwing.core.models import GraphFact, GraphWriteResult
+from memwing.core.memory_search import MemorySearchQuery, MemorySearchResult
+from memwing.core.models import GraphWriteResult
 from memwing.core.scope import EffectiveScope
 from memwing.infrastructure.graph.graphiti_cache_context import graphiti_model_cache_context
+from memwing.infrastructure.graph.graphiti_direct_preseed import _direct_preseed_memory_item
+from memwing.infrastructure.graph.graphiti_result_mapping import (
+    _edge_to_result_item,
+    _graph_write_result_from_graphiti_result,
+)
+from memwing.infrastructure.graph.graphiti_safety import (
+    _blocked_batch_results,
+    _elapsed_ms,
+    _graphiti_group_id,
+    _graph_write_request_order,
+    _raw_episode,
+    _safe_error_message,
+    _stable_graphiti_episode_uuid,
+)
 from memwing.ports.graph_backend import (
     GraphFactPreseedItemResult,
     GraphFactPreseedRequest,
@@ -439,182 +449,6 @@ class GraphitiAdapter:
         )
 
 
-def _edge_to_result_item(edge: object) -> MemorySearchResultItem:
-    edge_id = _required_text_attr(edge, "uuid")
-    fact = _required_text_attr(edge, "fact")
-    return MemorySearchResultItem(
-        id=edge_id,
-        text=fact,
-        score=_optional_float_attr(edge, "score"),
-        source="graph_backend",
-        source_event_ids=tuple(),
-        memory_item_ids=tuple(),
-        valid_from=_optional_datetime_attr(edge, "valid_at"),
-        valid_to=_optional_datetime_attr(edge, "invalid_at"),
-        metadata={"backend": "graphiti", "backend_object_type": "entity_edge"},
-    )
-
-
-def _edge_to_fact(edge: object, source_event_ids: tuple[str, ...]) -> GraphFact:
-    edge_id = _required_text_attr(edge, "uuid")
-    return GraphFact(
-        backend="graphiti",
-        fact_id=edge_id,
-        fact_text=_required_text_attr(edge, "fact"),
-        source_event_ids=source_event_ids,
-        valid_from=_optional_datetime_attr(edge, "valid_at"),
-        valid_to=_optional_datetime_attr(edge, "invalid_at"),
-        invalidated_at=_optional_datetime_attr(edge, "expired_at"),
-        confidence=_edge_confidence(edge),
-        metadata={"backend_object_type": "entity_edge"},
-    )
-
-
-async def _direct_preseed_memory_item(
-    *,
-    driver: object,
-    embedder: object,
-    memory_item: object,
-    source_events: tuple[object, ...],
-) -> GraphWriteResult:
-    vendored_parent = Path(__file__).resolve().parent
-    if str(vendored_parent) not in sys.path:
-        sys.path.insert(0, str(vendored_parent))
-    from graphiti_core.edges import EntityEdge
-    from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
-
-    group_id = _graphiti_group_id(memory_item.project_memory_space_id)
-    reference_time = (
-        memory_item.valid_from
-        or memory_item.event_time
-        or (source_events[0].event_time if source_events else None)
-        or memory_item.created_at
-    )
-    episode_uuid = _stable_direct_episode_uuid(memory_item)
-    fact_uuid = _stable_direct_fact_uuid(memory_item)
-    source_node = EntityNode(
-        uuid=_stable_direct_entity_uuid(memory_item, "source"),
-        name="MemWing benchmark expected memory",
-        group_id=group_id,
-        labels=["BenchmarkExpected"],
-        created_at=memory_item.created_at,
-        summary="Benchmark expected memory preseed source.",
-        attributes={"preseed_mode": "direct_neo4j"},
-    )
-    target_node = EntityNode(
-        uuid=_stable_direct_entity_uuid(memory_item, "target"),
-        name=memory_item.title,
-        group_id=group_id,
-        labels=["BenchmarkMemoryItem"],
-        created_at=memory_item.created_at,
-        summary=memory_item.content,
-        attributes={
-            "preseed_mode": "direct_neo4j",
-            "memory_item_id": memory_item.id,
-        },
-    )
-    source_node.name_embedding, target_node.name_embedding, fact_embedding = (
-        await _create_graphiti_embeddings(
-            embedder,
-            (
-                source_node.name,
-                target_node.name,
-                memory_item.content,
-            ),
-        )
-    )
-    edge = EntityEdge(
-        uuid=fact_uuid,
-        group_id=group_id,
-        source_node_uuid=source_node.uuid,
-        target_node_uuid=target_node.uuid,
-        created_at=memory_item.created_at,
-        name="HAS_EXPECTED_FACT",
-        fact=memory_item.content,
-        fact_embedding=fact_embedding,
-        episodes=[episode_uuid],
-        expired_at=None,
-        valid_at=memory_item.valid_from or memory_item.event_time,
-        invalid_at=memory_item.valid_to,
-        reference_time=reference_time,
-        attributes={
-            "confidence": 1.0,
-            "preseed_mode": "direct_neo4j",
-            "memory_item_id": memory_item.id,
-            "source_event_ids": list(memory_item.source_event_ids),
-        },
-    )
-    episode = EpisodicNode(
-        uuid=episode_uuid,
-        name=memory_item.title,
-        group_id=group_id,
-        source=EpisodeType.message,
-        source_description="MemWing benchmark expected memory direct preseed",
-        content=memory_item.content,
-        valid_at=reference_time,
-        entity_edges=[fact_uuid],
-        created_at=memory_item.created_at,
-        episode_metadata={
-            "preseed_mode": "direct_neo4j",
-            "memory_item_id": memory_item.id,
-            "source_event_ids": list(memory_item.source_event_ids),
-        },
-    )
-    await source_node.save(driver)
-    await target_node.save(driver)
-    await edge.save(driver)
-    await episode.save(driver)
-    graph_fact = GraphFact(
-        backend="graphiti",
-        fact_id=fact_uuid,
-        fact_text=memory_item.content,
-        source_event_ids=memory_item.source_event_ids,
-        valid_from=edge.valid_at,
-        valid_to=edge.invalid_at,
-        invalidated_at=edge.expired_at,
-        confidence=1.0,
-        metadata={
-            "backend_object_type": "entity_edge",
-            "preseed_mode": "direct_neo4j",
-        },
-    )
-    return GraphWriteResult(
-        backend="graphiti",
-        facts=(graph_fact,),
-        invalidated_facts=(),
-        backend_episode_refs=(episode_uuid,),
-        backend_fact_refs=(fact_uuid,),
-    )
-
-
-async def _create_graphiti_embeddings(
-    embedder: object,
-    texts: tuple[str, ...],
-) -> tuple[list[float], ...]:
-    create_batch = getattr(embedder, "create_batch", None)
-    if create_batch is not None:
-        return tuple(await create_batch(list(texts)))
-    create = getattr(embedder, "create")
-    return tuple([float(value) for value in await create(text)] for text in texts)
-
-
-def _graph_write_result_from_graphiti_result(
-    result: object,
-    *,
-    source_event_ids: tuple[str, ...],
-) -> GraphWriteResult:
-    episode_refs = _episode_refs(result)
-    edges = _edges(result)
-    facts = tuple(_edge_to_fact(edge, source_event_ids) for edge in edges)
-    return GraphWriteResult(
-        backend="graphiti",
-        facts=facts,
-        invalidated_facts=tuple(fact for fact in facts if fact.invalidated_at is not None),
-        backend_episode_refs=episode_refs,
-        backend_fact_refs=tuple(fact.fact_id for fact in facts),
-    )
-
-
 def _merge_metrics_snapshot(snapshot: dict[str, int], source: object) -> None:
     metrics = getattr(source, "cache_metrics", None)
     if metrics is None:
@@ -635,166 +469,6 @@ def _metrics_prefix(source: object) -> str:
     if "LLM" in name:
         return "llm"
     return "model_cache"
-
-
-def _blocked_batch_results(
-    requests: tuple[GraphWriteRequest, ...],
-    *,
-    error_type: str,
-    first_reason: str,
-    blocked_reason: str,
-) -> GraphWriteBatchResult:
-    items: list[GraphWriteBatchItemResult] = []
-    for index, request in enumerate(requests):
-        items.append(
-            GraphWriteBatchItemResult(
-                job_id=request.job.id,
-                result=None,
-                error_type=error_type if index == 0 else "GraphitiOrderedBatchBlocked",
-                error_message=None,
-                reason_code=first_reason if index == 0 else blocked_reason,
-                retryable=True,
-            )
-        )
-    return GraphWriteBatchResult(items=tuple(items))
-
-
-def _safe_error_message(exc: Exception) -> str:
-    text = str(exc).strip()
-    if not text:
-        return exc.__class__.__name__
-    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
-    if len(text) > 500:
-        return f"{text[:500]}...[truncated]"
-    return text
-
-
-def _episode_refs(result: object) -> tuple[str, ...]:
-    episode = getattr(result, "episode", None)
-    if episode is None:
-        return tuple()
-    uuid = getattr(episode, "uuid", None)
-    if isinstance(uuid, str) and uuid.strip():
-        return (uuid,)
-    return tuple()
-
-
-def _edges(result: object) -> tuple[object, ...]:
-    edges = getattr(result, "edges", None)
-    if edges is None:
-        return tuple()
-    return tuple(edges)
-
-
-def _graph_write_request_order(request: GraphWriteRequest) -> tuple[datetime, datetime, str]:
-    return (
-        request.memory_item.event_time or request.source_events[0].event_time,
-        request.job.created_at,
-        request.job.id,
-    )
-
-
-def _stable_graphiti_episode_uuid(request: GraphWriteRequest) -> str:
-    key = "|".join(
-        (
-            "graphiti",
-            request.job.project_memory_space_id,
-            request.memory_item.id,
-            str(request.memory_item.lifecycle_revision),
-            ",".join(request.job.source_event_ids),
-        )
-    )
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
-
-
-def _stable_direct_episode_uuid(memory_item: object) -> str:
-    return _stable_direct_uuid("graphiti_direct_episode", memory_item)
-
-
-def _stable_direct_fact_uuid(memory_item: object) -> str:
-    return _stable_direct_uuid("graphiti_direct_fact", memory_item)
-
-
-def _stable_direct_entity_uuid(memory_item: object, role: str) -> str:
-    return _stable_direct_uuid(f"graphiti_direct_entity:{role}", memory_item)
-
-
-def _stable_direct_uuid(namespace: str, memory_item: object) -> str:
-    key = "|".join(
-        (
-            namespace,
-            memory_item.project_memory_space_id,
-            memory_item.id,
-            str(memory_item.lifecycle_revision),
-            ",".join(memory_item.source_event_ids),
-        )
-    )
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
-
-
-def _raw_episode(request: GraphWriteRequest) -> object:
-    vendored_parent = Path(__file__).resolve().parent
-    if str(vendored_parent) not in sys.path:
-        sys.path.insert(0, str(vendored_parent))
-    from graphiti_core.nodes import EpisodeType
-    from graphiti_core.utils.bulk_utils import RawEpisode
-
-    return RawEpisode(
-        name=request.memory_item.title,
-        uuid=_stable_graphiti_episode_uuid(request),
-        content=request.memory_item.content,
-        source_description="MemWing graph write job",
-        source=EpisodeType.message,
-        reference_time=(
-            request.memory_item.event_time
-            or request.source_events[0].event_time
-            or request.memory_item.created_at
-        ),
-    )
-
-
-def _edge_confidence(edge: object) -> float | None:
-    attributes = getattr(edge, "attributes", None)
-    if isinstance(attributes, dict):
-        value = attributes.get("confidence")
-        if isinstance(value, int | float) and not isinstance(value, bool):
-            return float(value)
-    return None
-
-
-def _required_text_attr(value: object, attr: str) -> str:
-    text = getattr(value, attr, None)
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError(f"Graphiti edge requires non-empty {attr}")
-    return text
-
-
-def _optional_float_attr(value: object, attr: str) -> float | None:
-    raw = getattr(value, attr, None)
-    if isinstance(raw, int | float) and not isinstance(raw, bool):
-        return float(raw)
-    return None
-
-
-def _optional_datetime_attr(value: object, attr: str) -> datetime | None:
-    raw = getattr(value, attr, None)
-    if isinstance(raw, datetime):
-        return raw
-    return None
-
-
-def _graphiti_group_id(project_memory_space_id: str) -> str:
-    if re.fullmatch(r"[a-zA-Z0-9_-]+", project_memory_space_id):
-        return project_memory_space_id
-    readable = re.sub(r"[^a-zA-Z0-9_-]+", "_", project_memory_space_id).strip("_")
-    if not readable:
-        readable = "project"
-    digest = sha1(project_memory_space_id.encode("utf-8")).hexdigest()[:12]
-    return f"mw_{readable[:80]}_{digest}"
-
-
-def _elapsed_ms(started: float) -> float:
-    return (perf_counter() - started) * 1000
 
 
 def _load_graphiti_factory() -> GraphitiFactory:
