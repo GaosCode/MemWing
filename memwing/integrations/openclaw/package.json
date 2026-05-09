@@ -1,6 +1,6 @@
 {
   "name": "@memwing/openclaw-plugin",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "MemWing OpenClaw context engine, hooks, tools, and native memory shim skeleton.",
   "main": "dist/index.js",
